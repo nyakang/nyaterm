@@ -122,8 +122,10 @@ must include explicit conversion logic and tests.
   the three business crates must not depend on each other.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
   integration boundary, static icon catalogs/resolvers/rendering, and reusable
-  NyaTerm presentation and interaction widgets. `markdown::lightweight` retains the lightweight Markdown renderer
-  separately from `NyaMarkdown`; `presentation` owns stateless menu rows and panel
+  NyaTerm presentation and interaction widgets. `NyaMarkdown` owns shared Markdown
+  presentation; desktop owns persistent preview text states. Notes and file previews
+  use its HTTPS-only image-source policy; other callers retain their existing policy.
+  `presentation` owns stateless menu rows and panel
   headers. `child_window::shell` and `window_chrome` own reusable child-window
   presentation and placement; desktop injects application and platform policies.
 * `crates/nyaterm-sync`: UI-independent sync protocol and policies. Its

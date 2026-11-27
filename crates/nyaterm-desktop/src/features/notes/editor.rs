@@ -11,6 +11,7 @@ use gpui::{
 };
 use nyaterm_core::{NoteDocument, NotesSnapshot};
 use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_ui::text::{NyaTextFormat, NyaTextState};
 use nyaterm_ui::{
     NyaConfirmDialog, NyaDialogFooter, NyaDialogWindowExt as _, NyaDocumentEditorEvent,
     NyaDocumentEditorState, NyaInput, NyaInputEvent, NyaInputShell, NyaInputState, NyaWindowHandle,
@@ -28,6 +29,9 @@ use crate::features::{
 };
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
+
+#[cfg(test)]
+mod preview_tests;
 
 fn editor_blocks_export(dirty: bool, saving: bool, refreshing: bool, status: SaveStatus) -> bool {
     dirty
@@ -82,6 +86,8 @@ pub(super) struct NoteEditorWindow {
     editor: Entity<NyaDocumentEditorState>,
     title: Entity<NyaInputState>,
     mode: NoteViewMode,
+    markdown_preview: NyaTextState,
+    _preview_subscription: Subscription,
     status: SaveStatus,
     dirty: bool,
     saving: bool,
@@ -119,17 +125,21 @@ impl NoteEditorWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let editor = cx.new(|cx| NyaDocumentEditorState::new(window, cx, note.markdown.clone()));
+        let markdown_preview = NyaTextState::new(NyaTextFormat::Markdown, &note.markdown, cx);
+        let preview_subscription = markdown_preview.observe_layout(cx, |_, cx| cx.notify());
         let title = cx.new(|cx| NyaInputState::new(cx, note.title.clone()).max_chars(Some(120)));
         let editor_subscription = cx.subscribe(
             &editor,
             |this, _, event: &NyaDocumentEditorEvent, cx| match event {
                 NyaDocumentEditorEvent::Changed(value) => {
                     this.note.markdown = value.to_string();
+                    this.sync_markdown_preview(cx);
                     this.mark_dirty(cx);
                 }
                 NyaDocumentEditorEvent::Blurred(value) => {
                     let changed = !value.eq(&this.note.markdown.as_str());
                     this.note.markdown = value.to_string();
+                    this.sync_markdown_preview(cx);
                     if changed {
                         this.mark_dirty_without_debounce();
                     }
@@ -183,6 +193,8 @@ impl NoteEditorWindow {
             editor,
             title,
             mode: NoteViewMode::Split,
+            markdown_preview,
+            _preview_subscription: preview_subscription,
             status: SaveStatus::Saved,
             dirty: false,
             saving: false,
@@ -196,6 +208,12 @@ impl NoteEditorWindow {
             _editor_subscription: editor_subscription,
             _title_subscription: title_subscription,
             _app_subscription: app_subscription,
+        }
+    }
+
+    fn sync_markdown_preview(&self, cx: &mut Context<Self>) {
+        if !self.markdown_preview.matches_source(&self.note.markdown) {
+            self.markdown_preview.set_text(&self.note.markdown, cx);
         }
     }
 
@@ -280,6 +298,7 @@ impl NoteEditorWindow {
                                 editor.dirty = true;
                             }
                         }
+                        editor.sync_markdown_preview(cx);
                         if editor.save_again
                             && !matches!(editor.status, SaveStatus::Conflict | SaveStatus::Deleted)
                         {
@@ -359,6 +378,7 @@ impl NoteEditorWindow {
                         Ok(Some(note)) => {
                             editor.external_refresh_pending = false;
                             editor.note = note.clone();
+                            editor.sync_markdown_preview(cx);
                             editor.dirty = false;
                             editor.status = SaveStatus::Saved;
                             editor
@@ -410,6 +430,7 @@ impl NoteEditorWindow {
                         app.notes.rekey_editor_window(&old_id, note.id.clone());
                         let _ = editor_window.update(cx, |editor, cx| {
                             editor.note = note.clone();
+                            editor.sync_markdown_preview(cx);
                             editor.dirty = false;
                             editor.status = SaveStatus::Saved;
                             editor
@@ -543,7 +564,7 @@ impl Render for NoteEditorWindow {
         });
         let header_close = on_close.clone();
         let editor = self.editor.clone();
-        let markdown = self.note.markdown.clone();
+        let markdown = self.markdown_preview.clone();
         let mode = self.mode;
         let body = nyaterm_notes_gpui::editor::body(&editor, &markdown, mode, palette);
         let owner = cx.weak_entity();

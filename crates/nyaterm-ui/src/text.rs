@@ -13,6 +13,7 @@ use gpui::{
 use gpui_base::text::{CodeBlock, SelectionFormat, TextView, TextViewState, TextViewStyle};
 use gpui_base::{ElementExt as _, TextSelection};
 
+use crate::markdown::NyaMarkdownImagePolicy;
 use crate::theme::ThemePalette;
 
 mod code;
@@ -45,6 +46,7 @@ pub struct NyaTextState {
     copy_valid: Rc<Cell<bool>>,
     code_highlighter: Rc<RefCell<CodeHighlightCache>>,
     code_block_actions: Rc<RefCell<Option<NyaCodeBlockActions>>>,
+    image_policy: Rc<Cell<NyaMarkdownImagePolicy>>,
     retained_selection: Rc<RefCell<Option<selection::RetainedRange>>>,
     applied_selection: Rc<RefCell<Option<selection::AppliedRange>>>,
 }
@@ -67,9 +69,15 @@ impl NyaTextState {
             copy_valid: Rc::new(Cell::new(true)),
             code_highlighter: Rc::new(RefCell::new(CodeHighlightCache::default())),
             code_block_actions: Rc::default(),
+            image_policy: Rc::default(),
             retained_selection: Rc::default(),
             applied_selection: Rc::default(),
         }
+    }
+
+    /// Compares with the requested source, even while parsing is in flight.
+    pub fn matches_source(&self, source: &str) -> bool {
+        document_content(self.format, &self.requested_document.borrow()) == source
     }
 
     pub fn set_text(&self, source: &str, cx: &mut App) {
@@ -236,6 +244,10 @@ impl NyaTextState {
         *self.code_block_actions.borrow_mut() = Some(actions);
     }
 
+    pub(crate) fn set_image_policy(&self, policy: NyaMarkdownImagePolicy) {
+        self.image_policy.set(policy);
+    }
+
     pub(crate) fn set_code_highlights(&self, highlights: NyaCodeHighlights) {
         let mut cache = self.code_highlighter.borrow_mut();
         if Arc::ptr_eq(&cache.highlights, &highlights) || cache.highlights == highlights {
@@ -251,6 +263,7 @@ impl NyaTextState {
             .selectable(true)
             .selection_format(SelectionFormat::Plain)
             .shared_code_block_highlighter(self.code_highlighter.borrow().highlighter.clone());
+        let view = self.image_policy.get().apply(view);
         match self.code_block_actions.borrow().clone() {
             Some(actions) => {
                 view.code_block_actions(move |block, window, cx| actions(block, window, cx))
@@ -340,6 +353,20 @@ impl NyaTextStyle {
                 }),
             true,
         )
+    }
+
+    /// Read-only document previews share typography without inheriting AI actions.
+    pub fn document_preview(palette: ThemePalette) -> Self {
+        let mut style = Self::transcript(palette, false).foreground(palette.text);
+        let mut code = StyleRefinement::default()
+            .p_2()
+            .font_family(crate::presentation::gpui_code_font_family())
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .max_h(px(256.));
+        code.overflow.y = Some(gpui::Overflow::Scroll);
+        style.0 = style.0.with_code_block(code);
+        style
     }
 
     pub fn foreground(mut self, color: u32) -> Self {

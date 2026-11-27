@@ -6,11 +6,11 @@
 //! snapshot of the preview workspace, so the draw path never blocks or mutates:
 //! every control routes back through `self.app.update`.
 //!
-//! The one piece of view-owned state is the read-only text surface for text and
-//! JSON previews. It is a `RemoteTextEditor` in read-only mode (the shared
+//! Text and JSON previews retain a `RemoteTextEditor` in read-only mode (the shared
 //! selectable/copyable surface), kept as an entity across frames and reconciled
 //! to the active tab in render, because GPUI entities must not be constructed in
-//! a render path on every frame. Delimited previews use a virtualized
+//! a render path on every frame. Markdown keeps a separate `NyaTextState`, updated
+//! by app notifications so parsing never starts from render. Delimited previews use a virtualized
 //! `uniform_list` so a large grid is never materialized into thousands of
 //! elements per frame.
 
@@ -27,6 +27,7 @@ use gpui::{
     SharedString, Subscription, UniformListScrollHandle, Window, div, prelude::*, px, rgb,
     uniform_list,
 };
+use nyaterm_ui::text::{NyaTextFormat, NyaTextState};
 use nyaterm_ui::{NyaScrollable, NyaWindowHandle, activate_child_window, nya_root};
 
 use crate::features::transfers::RemoteTextEditor;
@@ -41,6 +42,9 @@ use crate::models::{PreviewContent, TransferPreviewState};
 use crate::theme::ThemePalette;
 use nyaterm_preview::delimited::{DelimitedSort, PreviewDelimited};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct RemoteFilePreviewWindow {
     app: Entity<NyaTermApp>,
     shell_focus: FocusHandle,
@@ -48,22 +52,80 @@ pub(super) struct RemoteFilePreviewWindow {
     /// Read-only selectable text surface, reconciled to the active tab in
     /// render. `None` until the first text/JSON tab is shown.
     text_surface: Option<Entity<RemoteTextEditor>>,
+    markdown_preview: Option<MarkdownPreview>,
     /// Scroll handle for the virtualized delimited grid.
     delimited_scroll: UniformListScrollHandle,
     _app_subscription: Subscription,
 }
 
+struct MarkdownPreview {
+    tab_id: String,
+    text: NyaTextState,
+    _layout_subscription: Subscription,
+}
+
 impl RemoteFilePreviewWindow {
     fn new(app: Entity<NyaTermApp>, chrome: ChildWindowChrome, cx: &mut Context<Self>) -> Self {
-        let app_subscription = cx.observe(&app, |_, _, cx| cx.notify());
-        Self {
+        let app_subscription = cx.observe(&app, |this, _, cx| {
+            this.sync_markdown_preview(cx);
+            cx.notify();
+        });
+        let mut view = Self {
             app,
             shell_focus: cx.focus_handle(),
             chrome,
             text_surface: None,
+            markdown_preview: None,
             delimited_scroll: UniformListScrollHandle::new(),
             _app_subscription: app_subscription,
+        };
+        view.sync_markdown_preview(cx);
+        view
+    }
+
+    fn sync_markdown_preview(&mut self, cx: &mut Context<Self>) {
+        // Clone a source only when it changed. App notifications include unrelated
+        // transfer progress; they must not enqueue another Markdown parse.
+        let update = self
+            .app
+            .read_with(cx, |app, _| match app.transfer.active_preview_tab() {
+                Some(tab) => match &tab.content {
+                    PreviewContent::Markdown(source) => {
+                        if self.markdown_preview.as_ref().is_some_and(|preview| {
+                            preview.tab_id == tab.id && preview.text.matches_source(source)
+                        }) {
+                            None
+                        } else {
+                            Some(Some((tab.id.clone(), source.clone())))
+                        }
+                    }
+                    _ => Some(None),
+                },
+                None => Some(None),
+            });
+        let Some(update) = update else { return };
+        let Some((tab_id, source)) = update else {
+            if let Some(previous) = self.markdown_preview.take() {
+                previous.text.invalidate_selection(cx);
+            }
+            return;
+        };
+        if let Some(preview) = &self.markdown_preview
+            && preview.tab_id == tab_id
+        {
+            preview.text.set_text(&source, cx);
+            return;
         }
+        if let Some(previous) = self.markdown_preview.take() {
+            previous.text.invalidate_selection(cx);
+        }
+        let text = NyaTextState::new(NyaTextFormat::Markdown, &source, cx);
+        let subscription = text.observe_layout(cx, |_, cx| cx.notify());
+        self.markdown_preview = Some(MarkdownPreview {
+            tab_id,
+            text,
+            _layout_subscription: subscription,
+        });
     }
 
     /// Ensure the read-only text surface exists and matches `tab`, returning it.
@@ -310,7 +372,16 @@ impl RemoteFilePreviewWindow {
                 );
                 json_body(palette, surface, parse_error.as_deref())
             }
-            PreviewContent::Markdown(text) => markdown_body(palette, text, active_tab.id.as_str()),
+            PreviewContent::Markdown(_) => {
+                match self
+                    .markdown_preview
+                    .as_ref()
+                    .filter(|preview| preview.tab_id == active_tab.id)
+                {
+                    Some(preview) => markdown_body(palette, &preview.text, &active_tab.id),
+                    None => centered_message(palette, t!("filePreview.loading").into()),
+                }
+            }
             PreviewContent::Delimited(data) => {
                 self.delimited_body(palette, data, active_tab.id.as_str(), cx)
             }

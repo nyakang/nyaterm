@@ -1,4 +1,6 @@
 use gpui::{App, Entity, IntoElement, SharedString, Window, div, prelude::*, px, rgb};
+use nyaterm_ui::markdown::{NyaMarkdown, NyaMarkdownImagePolicy};
+use nyaterm_ui::text::{NyaTextState, NyaTextStyle};
 use nyaterm_ui::{
     NyaDocumentEditor, NyaDocumentEditorState, NyaDropdownMenu, NyaMenuItem, NyaScrollable as _,
     ThemePalette,
@@ -285,7 +287,7 @@ fn action_button(
 
 pub fn body(
     editor: &Entity<NyaDocumentEditorState>,
-    markdown: &str,
+    markdown: &NyaTextState,
     mode: NoteViewMode,
     palette: ThemePalette,
 ) -> gpui::AnyElement {
@@ -309,11 +311,13 @@ pub fn body(
                 .min_h_0()
                 .p_4()
                 .overflow_y_scrollbar()
-                .child(nyaterm_ui::markdown::lightweight::markdown_content_view(
-                    palette,
-                    markdown,
-                    nyaterm_ui::presentation::gpui_code_font_family().into(),
-                )),
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .child(
+                    NyaMarkdown::from_state(markdown)
+                        .style(NyaTextStyle::document_preview(palette))
+                        .image_policy(NyaMarkdownImagePolicy::HttpsOnly),
+                ),
         );
     }
     body.into_any_element()

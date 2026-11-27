@@ -1,4 +1,9 @@
-pub mod lightweight;
+mod images;
+
+#[cfg(test)]
+mod tests;
+
+pub use images::NyaMarkdownImagePolicy;
 
 use std::sync::Arc;
 
@@ -14,6 +19,7 @@ pub struct NyaMarkdown {
     state: Option<NyaTextState>,
     style: Option<NyaTextStyle>,
     code_block_actions: Option<NyaCodeBlockActions>,
+    image_policy: NyaMarkdownImagePolicy,
 }
 
 impl NyaMarkdown {
@@ -24,6 +30,7 @@ impl NyaMarkdown {
             state: None,
             style: None,
             code_block_actions: None,
+            image_policy: NyaMarkdownImagePolicy::Existing,
         }
     }
 
@@ -34,11 +41,18 @@ impl NyaMarkdown {
             state: Some(state.clone()),
             style: None,
             code_block_actions: None,
+            image_policy: NyaMarkdownImagePolicy::Existing,
         }
     }
 
     pub fn style(mut self, style: NyaTextStyle) -> Self {
         self.style = Some(style);
+        self
+    }
+
+    /// Selects resource access for this surface without changing other callers.
+    pub fn image_policy(mut self, policy: NyaMarkdownImagePolicy) -> Self {
+        self.image_policy = policy;
         self
     }
 
@@ -58,12 +72,19 @@ impl NyaMarkdown {
 
 impl RenderOnce for NyaMarkdown {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        if let Some(state) = &self.state {
+            // Retained selection views must use the same resource policy.
+            state.set_image_policy(self.image_policy);
+        }
         // The state carries the actions so the offscreen selection clones in
         // retention paint the same code-block chrome as the live view.
         if let (Some(state), Some(actions)) = (&self.state, &self.code_block_actions) {
             state.set_code_block_actions(actions.clone());
         }
-        if self.state.is_none() && self.style.is_none() {
+        if self.state.is_none()
+            && self.style.is_none()
+            && self.image_policy == NyaMarkdownImagePolicy::Existing
+        {
             let view = gpui_kit::component::text::TextView::markdown(self.id, self.source)
                 .selectable(true)
                 .on_link_click(open_link);
@@ -85,7 +106,9 @@ impl RenderOnce for NyaMarkdown {
             .style
             .unwrap_or_else(|| NyaTextStyle::themed(cx))
             .foreground_color(window.text_style().color);
-        let view = style.apply(view).selectable(true).on_link_click(open_link);
+        let view = self
+            .image_policy
+            .apply(style.apply(view).selectable(true).on_link_click(open_link));
         if let Some(state) = self.state {
             state.present(view, style, window, cx).into_any_element()
         } else {

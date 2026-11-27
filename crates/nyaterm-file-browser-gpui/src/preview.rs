@@ -1,5 +1,7 @@
 use gpui::{IntoElement, SharedString, div, img, prelude::*, px, rgb};
 use nyaterm_preview::delimited::PreviewDelimited;
+use nyaterm_ui::markdown::{NyaMarkdown, NyaMarkdownImagePolicy};
+use nyaterm_ui::text::{NyaTextState, NyaTextStyle};
 use nyaterm_ui::{NyaScrollable, ThemePalette};
 use rust_i18n::t;
 pub const PDF_MIN_ZOOM: f32 = 0.5;
@@ -134,17 +136,23 @@ pub fn json_body(
         .into_any_element()
 }
 
-pub fn markdown_body(palette: ThemePalette, text: &str, scroll_id: &str) -> gpui::AnyElement {
+pub fn markdown_body(
+    palette: ThemePalette,
+    text: &NyaTextState,
+    scroll_id: &str,
+) -> gpui::AnyElement {
     div()
         .id(SharedString::from(format!("preview-md-{scroll_id}")))
         .size_full()
         .overflow_y_scrollbar()
         .p_4()
-        .child(nyaterm_ui::markdown::lightweight::markdown_content_view(
-            palette,
-            text,
-            nyaterm_ui::presentation::gpui_code_font_family().into(),
-        ))
+        .text_size(px(12.))
+        .line_height(px(18.))
+        .child(
+            NyaMarkdown::from_state(text)
+                .style(NyaTextStyle::document_preview(palette))
+                .image_policy(NyaMarkdownImagePolicy::HttpsOnly),
+        )
         .into_any_element()
 }
 
