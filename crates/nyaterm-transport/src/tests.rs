@@ -1036,25 +1036,25 @@ fn x11_registry_replaces_stale_sender_and_rejects_concurrent_owner() {
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     runtime.block_on(async {
         let registry = Arc::new(tokio::sync::Mutex::new(None));
-        let (first_tx, first_rx) = tokio_mpsc::unbounded_channel();
+        let (first_tx, first_rx) = tokio_mpsc::channel(64);
 
         register_x11_sender(&registry, "session-a", first_tx)
             .await
             .expect("first registration");
-        let (same_owner_tx, _same_owner_rx) = tokio_mpsc::unbounded_channel();
+        let (same_owner_tx, _same_owner_rx) = tokio_mpsc::channel(64);
         let error = register_x11_sender(&registry, "session-a", same_owner_tx)
             .await
             .expect_err("same live owner should be rejected");
         assert!(error.to_string().contains("already active"));
 
-        let (second_tx, _second_rx) = tokio_mpsc::unbounded_channel();
+        let (second_tx, _second_rx) = tokio_mpsc::channel(64);
         let error = register_x11_sender(&registry, "session-b", second_tx)
             .await
             .expect_err("second live owner should be rejected");
         assert!(error.to_string().contains("already active"));
 
         drop(first_rx);
-        let (replacement_tx, replacement_rx) = tokio_mpsc::unbounded_channel();
+        let (replacement_tx, replacement_rx) = tokio_mpsc::channel(64);
         register_x11_sender(&registry, "session-b", replacement_tx)
             .await
             .expect("stale sender should be replaced");

@@ -50,6 +50,7 @@ mod background;
 mod mstsc;
 mod retry;
 mod start;
+mod x11;
 
 #[cfg(test)]
 mod serial_prompt_tests;

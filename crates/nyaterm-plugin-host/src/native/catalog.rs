@@ -69,7 +69,12 @@ pub(super) fn select(
         index: String,
         signature: String,
     }
-    let bytes = download(INDEX, MAX_INDEX_BYTES, cancel)?;
+    let index_url = if id == NativeComponentId::X11 {
+        "https://downloads.nyaterm.app/native/v1/x11/index.json"
+    } else {
+        INDEX
+    };
+    let bytes = download(index_url, MAX_INDEX_BYTES, cancel)?;
     let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|_| io_error())?;
     let index = parse(
         envelope.index.as_bytes(),

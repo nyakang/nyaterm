@@ -1241,6 +1241,7 @@ impl NyaTermApp {
                 .for_attempt(build_context.attempt.clone()),
         );
         let request_id_for_worker = request_id.clone();
+        let x11 = self.x11_startup(cx);
         submit_session_start_job(
             &self.blocking_jobs,
             "ssh-session-start",
@@ -1259,6 +1260,7 @@ impl NyaTermApp {
                 }
                 config.deferred_pty = true;
                 config.apply_runtime_policy()?;
+                x11.prepare(&mut config)?;
                 if let Some(geometry) = desired_geometry {
                     config.cols = geometry.cols;
                     config.rows = geometry.rows;
@@ -1271,6 +1273,7 @@ impl NyaTermApp {
                 let session_info = session_manager
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
+                config.x11_connection = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,
@@ -1498,6 +1501,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
             .to_string(),
         x11_forwarding,
         x11_display: context.x11_display.clone(),
+        x11_connection: None,
         encoding,
         ssh_algorithms: connection
             .ssh_algorithms

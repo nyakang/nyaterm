@@ -232,6 +232,12 @@ impl ConnectionStore {
             ),
             android_adb_path: json_string(&value, &["android", "adb_path"], ""),
             x11_display: json_string(&value, &["terminal", "x11_display"], ""),
+            x11_mode: nyaterm_core::x11::X11Mode::parse(&json_string(
+                &value,
+                &["terminal", "x11_mode"],
+                "auto",
+            )),
+            x11_clipboard: json_bool(&value, &["terminal", "x11_clipboard"], false),
             terminal_scrollback_lines: json_u32(&value, &["terminal", "scrollback_lines"], 5000)
                 .clamp(100, 100_000),
             terminal_keep_alive_mode: normalize_keep_alive_mode(&json_string(
@@ -1485,6 +1491,16 @@ impl ConnectionStore {
             &["terminal", "x11_display"],
             settings.x11_display.clone(),
         );
+        set_nested_json_string(
+            &mut value,
+            &["terminal", "x11_mode"],
+            settings.x11_mode.as_str().to_owned(),
+        );
+        set_nested_json_bool(
+            &mut value,
+            &["terminal", "x11_clipboard"],
+            settings.x11_clipboard,
+        );
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
     }
@@ -1498,6 +1514,16 @@ impl ConnectionStore {
             &mut value,
             &["terminal", "x11_display"],
             settings.x11_display.clone(),
+        );
+        set_nested_json_string(
+            &mut value,
+            &["terminal", "x11_mode"],
+            settings.x11_mode.as_str().to_owned(),
+        );
+        set_nested_json_bool(
+            &mut value,
+            &["terminal", "x11_clipboard"],
+            settings.x11_clipboard,
         );
         set_nested_json_value(
             &mut value,

@@ -245,6 +245,8 @@ const DEVICE_LOCAL_APPEARANCE_FIELDS: &[&str] = &[
     "background_image_opacity",
 ];
 
+const DEVICE_LOCAL_X11_FIELDS: &[&str] = &["x11_display", "x11_mode", "x11_clipboard"];
+
 const DEVICE_LOCAL_TRANSFER_FIELDS: &[&str] =
     &["download_path", "default_editor", "recording_path"];
 
@@ -255,6 +257,14 @@ pub fn project_sync_settings(settings: &mut serde_json::Value) {
     root.remove("cloud_sync");
     root.remove("android");
     root.remove("keybindings");
+    if let Some(terminal) = root
+        .get_mut("terminal")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in DEVICE_LOCAL_X11_FIELDS {
+            terminal.remove(*field);
+        }
+    }
     if let Some(ui) = root
         .get_mut("ui")
         .and_then(serde_json::Value::as_object_mut)
@@ -305,6 +315,7 @@ pub fn preserve_device_local_sync_settings(
         ("ui", DEVICE_LOCAL_UI_FIELDS),
         ("appearance", DEVICE_LOCAL_APPEARANCE_FIELDS),
         ("transfer", DEVICE_LOCAL_TRANSFER_FIELDS),
+        ("terminal", DEVICE_LOCAL_X11_FIELDS),
     ] {
         for field in fields {
             if let Some(value) = current.get(section).and_then(|value| value.get(*field)) {

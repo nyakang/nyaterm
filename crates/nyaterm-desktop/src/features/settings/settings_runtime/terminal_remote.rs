@@ -5,6 +5,20 @@ use crate::features::NyaTermApp;
 use super::general_interaction::SettingsSaveKind;
 
 impl NyaTermApp {
+    pub(in crate::features) fn set_x11_mode(
+        &mut self,
+        mode: nyaterm_core::x11::X11Mode,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_x11_mode(mode);
+        self.save_terminal_settings(cx);
+        cx.notify();
+    }
+    pub(in crate::features) fn toggle_x11_clipboard(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_x11_clipboard();
+        self.save_terminal_settings(cx);
+        cx.notify();
+    }
     pub(in crate::features) fn apply_android_adb_path(
         &mut self,
         text: String,

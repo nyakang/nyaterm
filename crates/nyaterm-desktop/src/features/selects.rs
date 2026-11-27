@@ -408,6 +408,9 @@ impl NyaTermApp {
                 nyaterm_core::models::settings::TerminalWrapMode::from_compat_value(value),
                 cx,
             ),
+            "settings.terminal.x11-mode" => {
+                self.set_x11_mode(nyaterm_core::x11::X11Mode::parse(value), cx)
+            }
             "settings.terminal.keep-alive-mode" => match value {
                 "strict" => self.set_terminal_keep_alive_mode("strict", cx),
                 "disabled" => self.set_terminal_keep_alive_mode("disabled", cx),

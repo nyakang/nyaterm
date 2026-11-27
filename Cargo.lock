@@ -7356,6 +7356,7 @@ dependencies = [
  "nyaterm-ui",
  "nyaterm-updater",
  "nyaterm-windows-rdp",
+ "nyaterm-x11",
  "rand 0.10.3",
  "raw-window-handle",
  "redb",
@@ -7511,7 +7512,7 @@ dependencies = [
 [[package]]
 name = "nyaterm-native-protocol"
 version = "1.0.0"
-source = "git+https://github.com/nyakang/nyaterm-plugins?rev=3416b424ee7730fb9076a37049b3ac015d542a5d#3416b424ee7730fb9076a37049b3ac015d542a5d"
+source = "git+https://github.com/nyakang/nyaterm-plugins?rev=dfd5380f9cdcf7c148bb6439d8516afe7d60d20e#dfd5380f9cdcf7c148bb6439d8516afe7d60d20e"
 dependencies = [
  "serde",
  "serde_json",
@@ -7824,6 +7825,18 @@ dependencies = [
  "serde_json",
  "tracing",
  "windows 0.62.2",
+ "zeroize",
+]
+
+[[package]]
+name = "nyaterm-x11"
+version = "2.0.8"
+dependencies = [
+ "libc",
+ "nyaterm-core",
+ "nyaterm-native-protocol",
+ "tempfile",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

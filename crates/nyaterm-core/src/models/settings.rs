@@ -471,6 +471,10 @@ pub struct AppSettingsSummary {
     #[serde(default)]
     pub bold_default_foreground: bool,
     pub x11_display: String,
+    #[serde(default)]
+    pub x11_mode: crate::x11::X11Mode,
+    #[serde(default)]
+    pub x11_clipboard: bool,
     pub terminal_scrollback_lines: u32,
     #[serde(default = "default_terminal_keep_alive_mode")]
     pub terminal_keep_alive_mode: String,
@@ -845,6 +849,8 @@ impl Default for AppSettingsSummary {
             bold_default_foreground: false,
             android_adb_path: String::new(),
             x11_display: String::new(),
+            x11_mode: Default::default(),
+            x11_clipboard: false,
             terminal_scrollback_lines: 5000,
             terminal_keep_alive_mode: default_terminal_keep_alive_mode(),
             terminal_keep_alive_interval: 30,

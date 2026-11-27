@@ -365,6 +365,8 @@
       "terminal_font_weight_bold": "conditional:preference",
       "bold_default_foreground": "local",
       "x11_display": "local",
+      "x11_mode": "local",
+      "x11_clipboard": "local",
       "terminal_scrollback_lines": "local",
       "terminal_keep_alive_mode": "local",
       "terminal_keep_alive_interval": "local",

@@ -267,6 +267,7 @@ impl NyaTermApp {
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),
+            x11_connection: None,
             encoding: self.settings.summary().interaction_default_encoding.clone(),
             ssh_algorithms: None,
             sftp: nyaterm_transport::SftpSettings::default(),

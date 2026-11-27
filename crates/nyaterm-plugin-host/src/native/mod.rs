@@ -325,6 +325,12 @@ fn change(
     snapshots: &RwLock<Vec<NativeSnapshot>>,
     changed: &Arc<dyn Fn() + Send + Sync>,
 ) -> PluginResult<()> {
+    if !id.supported() {
+        return Err(PluginError::new(
+            nyaterm_core::plugins::ErrorCode::Incompatible,
+            "Native component is unavailable on this platform",
+        ));
+    }
     match action {
         NativeAction::Enable(enabled) => {
             let mut preferences = registry.preferences.clone();
@@ -361,7 +367,7 @@ fn change(
             } else {
                 None
             };
-            let mut stage = StagingDirectory::new(&registry.root.join("staging"))?;
+            let mut stage = StagingDirectory::new(&registry.staging_root(id).join("staging"))?;
             let payload = stage.path.join("payload");
             fs::create_dir(&payload).map_err(|_| io_error())?;
             update(snapshots, id, changed, |s| {

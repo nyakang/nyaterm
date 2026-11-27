@@ -251,3 +251,5 @@ pub use translation::{
 pub use updater::NativeUpdateInfo;
 
 mod native_protocol;
+
+pub mod x11;

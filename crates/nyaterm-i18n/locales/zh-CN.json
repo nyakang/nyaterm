@@ -4090,8 +4090,8 @@
     "wordSeparators": "单词分隔符",
     "wordSeparatorsDesc": "双击选中文本时断开单词的字符。",
     "x11Display": "本地 X11 DISPLAY",
-    "x11DisplayDesc": "需要本机已安装并启动 X server。",
-    "x11DisplayHelp": "需要本机已安装并启动 X server。Windows 可使用 VcXsrv/Xming，macOS 可使用 XQuartz，Linux 通常使用 Xorg/Xwayland。",
+    "x11DisplayDesc": "外部 DISPLAY 可选；留空以自动选择。",
+    "x11DisplayHelp": "自动模式下，指定 DISPLAY 会使用外部服务器。Windows x64 可安装受管理组件；macOS 使用已安装的 XQuartz；Linux 复用 Xorg/Xwayland。",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0",
     "unappliedChanges": "有未应用的更改",
     "advanced": "高级设置",
@@ -4835,13 +4835,15 @@
       "spice": "SPICE",
       "rdp": "内置 RDP",
       "vnc": "VNC",
-      "android": "Android"
+      "android": "Android",
+      "x11": "X11 Server"
     },
     "nativeDescriptions": {
       "spice": "QEMU / Proxmox 虚拟机图形桌面协议",
       "rdp": "跨平台独立远程桌面引擎（IronRDP）",
       "vnc": "RFB 图形远程桌面连接与剪贴板同步",
-      "android": "ADB 设备投屏与交互控制（scrcpy）"
+      "android": "ADB 设备投屏与交互控制（scrcpy）",
+      "x11": "SSH 远程图形应用显示支持"
     },
     "capabilities": {
       "network": "访问指定网站",
@@ -5147,5 +5149,29 @@
       "helperCrash": "SPICE helper 意外退出。",
       "timeout": "SPICE 连接超时。"
     }
+  },
+  "x11": {
+    "mode": "本地 X11 服务",
+    "auto": "自动选择",
+    "managed": "NyaTerm 内置服务",
+    "external": "外部 X Server",
+    "sharedDescription": "Windows 内置服务按 SSH 会话隔离；系统和外部服务共享桌面及信任边界。",
+    "clipboard": "内置服务剪贴板",
+    "clipboardDescription": "允许远程应用访问系统剪贴板。默认关闭，仅对新实例生效。",
+    "componentUnavailable": "X11 组件服务不可用。",
+    "installDescription": "此连接需要本地 X Server。是否下载官方 X11 Server 组件？跳过安装后可以选择继续普通 SSH 连接。",
+    "installSkipped": "已跳过 X11 组件安装。",
+    "cancelled": "已取消 X11 连接准备。",
+    "noDisplay": "未找到可用的本地 X Server。请检查 DISPLAY 并启动 Xorg/Xwayland 或外部服务。",
+    "xquartzUnavailable": "请安装或启动 XQuartz 后重试。",
+    "unsupported": "当前平台不支持所选 X11 运行模式。",
+    "authentication": "本地 X Server 认证失败。请检查 DISPLAY 和 Xauthority。",
+    "startup": "无法启动内置 X Server。",
+    "protocol": "X11 组件不兼容，请安装兼容的签名版本。",
+    "installTitle": "安装 X11 Server",
+    "unavailableTitle": "X11 不可用",
+    "installAction": "下载并连接",
+    "continueWithout": "不使用 X11，继续连接",
+    "independentConnection": "此 X11 会话将使用独立的 SSH 连接。"
   }
 }

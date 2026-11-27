@@ -4090,8 +4090,8 @@
     "wordSeparators": "字詞分隔符",
     "wordSeparatorsDesc": "雙擊選取文字時分隔字詞的字元。",
     "x11Display": "本機 X11 DISPLAY",
-    "x11DisplayDesc": "需要本機已安裝並啟動 X server。",
-    "x11DisplayHelp": "需要本機已安裝並啟動 X server。Windows 可使用 VcXsrv/Xming，macOS 可使用 XQuartz，Linux 通常使用 Xorg/Xwayland。",
+    "x11DisplayDesc": "外部 DISPLAY 為選填；留空以自動選擇。",
+    "x11DisplayHelp": "自動模式下，指定 DISPLAY 會使用外部伺服器。Windows x64 可安裝受管理元件；macOS 使用已安裝的 XQuartz；Linux 重用 Xorg/Xwayland。",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0",
     "unappliedChanges": "有未套用的變更",
     "advanced": "進階設定",
@@ -4835,13 +4835,15 @@
       "spice": "SPICE",
       "rdp": "內建 RDP",
       "vnc": "VNC",
-      "android": "Android"
+      "android": "Android",
+      "x11": "X11 Server"
     },
     "nativeDescriptions": {
       "spice": "QEMU / Proxmox 虛擬機圖形桌面協定",
       "rdp": "跨平台獨立遠端桌面引擎（IronRDP）",
       "vnc": "RFB 圖形遠端桌面連線與剪貼簿同步",
-      "android": "ADB 裝置螢幕鏡像與互動控制（scrcpy）"
+      "android": "ADB 裝置螢幕鏡像與互動控制（scrcpy）",
+      "x11": "透過 SSH 顯示遠端圖形應用程式"
     },
     "capabilities": {
       "network": "Access a website",
@@ -5147,5 +5149,29 @@
       "helperCrash": "SPICE 輔助程式意外停止。",
       "timeout": "SPICE 連線逾時。"
     }
+  },
+  "x11": {
+    "mode": "本機 X11 服務",
+    "auto": "自動選擇",
+    "managed": "NyaTerm 內建服務",
+    "external": "外部 X Server",
+    "sharedDescription": "Windows 內建服務依 SSH 工作階段隔離；系統與外部服務共用桌面及信任邊界。",
+    "clipboard": "內建服務剪貼簿",
+    "clipboardDescription": "允許遠端應用程式存取系統剪貼簿。預設關閉，僅對新執行個體生效。",
+    "componentUnavailable": "X11 元件服務無法使用。",
+    "installDescription": "此連線需要本機 X Server。是否下載官方 X11 Server 元件？略過安裝後可選擇繼續一般 SSH 連線。",
+    "installSkipped": "已略過 X11 元件安裝。",
+    "cancelled": "已取消 X11 連線準備。",
+    "noDisplay": "找不到可用的本機 X Server。請檢查 DISPLAY 並啟動 Xorg/Xwayland 或外部服務。",
+    "xquartzUnavailable": "請安裝或啟動 XQuartz 後重試。",
+    "unsupported": "目前平台不支援所選的 X11 執行模式。",
+    "authentication": "本機 X Server 驗證失敗。請檢查 DISPLAY 與 Xauthority。",
+    "startup": "無法啟動內建 X Server。",
+    "protocol": "X11 元件不相容，請安裝相容的簽署版本。",
+    "installTitle": "安裝 X11 Server",
+    "unavailableTitle": "X11 無法使用",
+    "installAction": "下載並連線",
+    "continueWithout": "不使用 X11，繼續連線",
+    "independentConnection": "此 X11 工作階段將使用獨立的 SSH 連線。"
   }
 }

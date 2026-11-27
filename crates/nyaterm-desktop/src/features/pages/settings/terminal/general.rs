@@ -87,6 +87,40 @@ impl SettingsPanel {
                             "settings.number.terminal-keep-alive-interval",
                         ),
                     ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("x11.mode"),
+                        Some(SharedString::from(t!("x11.sharedDescription"))),
+                        self.settings_select_control(
+                            "settings.terminal.x11-mode",
+                            {
+                                let mut modes = vec![
+                                    NyaSelectOption::new("auto", t!("x11.auto")),
+                                    NyaSelectOption::new("external", t!("x11.external")),
+                                ];
+                                if cfg!(all(windows, target_arch = "x86_64")) {
+                                    modes.push(NyaSelectOption::new("managed", t!("x11.managed")));
+                                }
+                                modes
+                            },
+                            self.settings.summary().x11_mode.as_str().to_owned(),
+                            false,
+                            cx,
+                        ),
+                    ))
+                    .when(cfg!(all(windows, target_arch = "x86_64")), |this| {
+                        this.child(settings_form_row(
+                            palette,
+                            t!("x11.clipboard"),
+                            Some(SharedString::from(t!("x11.clipboardDescription"))),
+                            settings_switch(
+                                palette,
+                                "x11-clipboard",
+                                self.settings.summary().x11_clipboard,
+                                cx.listener(|this, _, _, cx| this.toggle_x11_clipboard(cx)),
+                            ),
+                        ))
+                    })
                     .child(
                         div()
                             .flex()

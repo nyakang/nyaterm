@@ -66,6 +66,7 @@ fn test_config() -> SshSessionConfig {
         term: "xterm-256color".to_string(),
         x11_forwarding: false,
         x11_display: String::new(),
+        x11_connection: None,
         encoding: "UTF-8".to_string(),
         ssh_algorithms: None,
         sftp: SftpSettings::default(),

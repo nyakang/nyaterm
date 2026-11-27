@@ -65,7 +65,7 @@ pub(crate) struct ForwardedTcpIpDispatch {
 
 pub(crate) struct X11Registration {
     pub(crate) session_id: String,
-    pub(crate) tx: tokio_mpsc::UnboundedSender<X11ChannelOpen>,
+    pub(crate) tx: tokio_mpsc::Sender<X11ChannelOpen>,
 }
 
 /// How long an auxiliary channel waits for the interactive shell to take the
@@ -284,7 +284,7 @@ impl SshMultiplexHandle {
     pub(crate) async fn register_x11_sender(
         &self,
         session_id: &str,
-        tx: tokio_mpsc::UnboundedSender<X11ChannelOpen>,
+        tx: tokio_mpsc::Sender<X11ChannelOpen>,
     ) -> anyhow::Result<()> {
         if self.is_closed() {
             anyhow::bail!("SSH multiplex handle is closed");
@@ -311,7 +311,7 @@ impl SshMultiplexHandle {
 pub(crate) async fn register_x11_sender(
     registry: &X11Registry,
     session_id: &str,
-    tx: tokio_mpsc::UnboundedSender<X11ChannelOpen>,
+    tx: tokio_mpsc::Sender<X11ChannelOpen>,
 ) -> anyhow::Result<()> {
     let mut registration = registry.lock().await;
     if registration
@@ -487,7 +487,7 @@ pub(crate) fn open_authenticated_ssh_handle_with_forwarded_tx(
 pub(crate) fn open_authenticated_ssh_handle_with_channel_senders(
     config: &SshSessionConfig,
     forwarded_tcpip_tx: Option<tokio_mpsc::UnboundedSender<ForwardedTcpIpChannel>>,
-    x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
+    x11_tx: Option<tokio_mpsc::Sender<X11ChannelOpen>>,
     shell_environment: Arc<ShellEnvironmentCache>,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
     let forwarded_tcpip = forwarded_tcpip_tx.map(|tx| {
@@ -930,7 +930,7 @@ impl client::Handler for SshClientHandler {
         };
         drop(registration);
         if tx
-            .send(X11ChannelOpen {
+            .try_send(X11ChannelOpen {
                 channel,
                 originator_address: originator_address.to_string(),
                 originator_port,

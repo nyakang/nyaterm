@@ -455,6 +455,7 @@ impl NyaTermApp {
         let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
+        let x11 = self.x11_startup(cx);
         submit_session_start_job(
             &self.blocking_jobs,
             "session-start",
@@ -464,6 +465,10 @@ impl NyaTermApp {
             session_start_tx,
             move || {
                 attempt.check()?;
+                if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
+                    config.apply_runtime_policy()?;
+                    x11.prepare(config)?;
+                }
                 let result = if let SessionLaunchConfig::Telnet(config) = &mut launch_config {
                     if let Some((connection, mut context)) = preparation {
                         context.attempt = attempt.clone();
@@ -534,6 +539,9 @@ impl NyaTermApp {
                         launch_config.clone(),
                     )
                 };
+                if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
+                    config.x11_connection = None;
+                }
                 result
                     .map(|success| SessionStartSuccess {
                         launch_config: Some(launch_config),
@@ -640,6 +648,7 @@ impl NyaTermApp {
         let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
+        let x11 = self.x11_startup(cx);
         submit_session_start_job(
             &self.blocking_jobs,
             "ssh-session-start",
@@ -669,12 +678,14 @@ impl NyaTermApp {
                     config.runtime_mode = mode;
                 }
                 config.apply_runtime_policy()?;
+                x11.prepare(&mut config)?;
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
                 let connection = ssh_connections.register(multiplex_key, multiplex);
                 let session_info = session_manager
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
+                config.x11_connection = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,
@@ -745,6 +756,14 @@ impl NyaTermApp {
             config.pixel_width = geometry.pixel_width;
             config.pixel_height = geometry.pixel_height;
         }
+        let (existing_multiplex, existing_multiplex_key) = if config.x11_forwarding {
+            config.x11_connection = None;
+            self.shell
+                .set_status(rust_i18n::t!("x11.independentConnection").to_string());
+            (None, None)
+        } else {
+            (existing_multiplex, existing_multiplex_key)
+        };
         let multiplex_key = existing_multiplex_key
             .filter(|_| existing_multiplex.is_some())
             .unwrap_or_else(|| format!("ssh-session:{}", uuid()));
@@ -780,6 +799,7 @@ impl NyaTermApp {
         let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
+        let x11 = self.x11_startup(cx);
         submit_session_start_job(
             &self.blocking_jobs,
             "ssh-multiplex-session-start",
@@ -789,6 +809,7 @@ impl NyaTermApp {
             session_start_tx,
             move || {
                 config.apply_runtime_policy()?;
+                x11.prepare(&mut config)?;
                 let connection = match existing_multiplex {
                     Some(connection)
                         if !connection.is_closed()
@@ -805,6 +826,7 @@ impl NyaTermApp {
                 let session_info = session_manager
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
+                config.x11_connection = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,

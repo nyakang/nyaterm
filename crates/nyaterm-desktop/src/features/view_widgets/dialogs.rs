@@ -6,8 +6,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, ParentElement as _, Render, Subscription, Window,
-    div,
+    AnyElement, AppContext as _, Context, Entity, IntoElement as _, ParentElement as _, Render,
+    Styled as _, Subscription, Window, div,
 };
 use nyaterm_ui::{
     NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
@@ -93,6 +93,58 @@ impl Render for AppDialogFooter {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn open_x11_install_dialog(
+        &mut self,
+        message: String,
+        on_choice: impl Fn(nyaterm_core::x11::X11PreparationChoice) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use nyaterm_core::x11::X11PreparationChoice;
+        let on_choice = Rc::new(on_choice);
+        let on_close = on_choice.clone();
+        self.open_content_dialog(
+            t!("x11.installTitle").to_string(),
+            460.,
+            move |_, _, _| {
+                let mut buttons = div().flex().flex_col().gap_2();
+                for (id, label, choice) in [
+                    (
+                        "x11-install",
+                        "x11.installAction",
+                        X11PreparationChoice::Install,
+                    ),
+                    (
+                        "x11-skip",
+                        "x11.continueWithout",
+                        X11PreparationChoice::ContinueWithout,
+                    ),
+                    ("x11-cancel", "common.cancel", X11PreparationChoice::Cancel),
+                ] {
+                    let on_choice = on_choice.clone();
+                    buttons = buttons.child(
+                        nyaterm_ui::NyaButton::new(id, t!(label).to_string()).on_click(
+                            move |_, window, cx| {
+                                on_choice(choice);
+                                window.close_nya_dialog(cx);
+                            },
+                        ),
+                    );
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(message.clone())
+                    .child(buttons)
+                    .into_any_element()
+            },
+            move |_, _| on_close(X11PreparationChoice::Cancel),
+            window,
+            cx,
+        );
+    }
+
     pub(in crate::features) fn open_content_dialog(
         &mut self,
         title: String,

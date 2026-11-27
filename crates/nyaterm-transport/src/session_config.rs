@@ -369,6 +369,8 @@ pub struct SshSessionConfig {
     pub term: String,
     pub x11_forwarding: bool,
     pub x11_display: String,
+    /// Ephemeral endpoint and lifetime; never retain in restart configurations.
+    pub x11_connection: Option<nyaterm_core::x11::X11Connection>,
     pub encoding: String,
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
     pub sftp: SftpSettings,
@@ -844,6 +846,7 @@ impl Default for SshSessionConfig {
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),
+            x11_connection: None,
             encoding: "UTF-8".to_string(),
             ssh_algorithms: None,
             sftp: SftpSettings::default(),

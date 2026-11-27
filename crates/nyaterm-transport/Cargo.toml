@@ -29,7 +29,7 @@ thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tokio-socks.workspace = true
 uuid.workspace = true
 zeroize.workspace = true

@@ -113,8 +113,8 @@ pub(crate) struct PendingOpenSshShellSession {
     /// no shared-connection feature can open a channel ahead of the terminal.
     pub(crate) primary_claim: Option<PrimarySessionClaim>,
     pub(crate) x11_config: Option<X11ForwardingConfig>,
-    pub(crate) x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
-    pub(crate) x11_rx: Option<tokio_mpsc::UnboundedReceiver<X11ChannelOpen>>,
+    pub(crate) x11_tx: Option<tokio_mpsc::Sender<X11ChannelOpen>>,
+    pub(crate) x11_rx: Option<tokio_mpsc::Receiver<X11ChannelOpen>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -578,9 +578,8 @@ pub(crate) async fn run_open_ssh_shell_session(
         legacy_ready_marker,
     );
     emit_ssh_startup_events(&event_queue, &session_id, local_notice, early_output).await;
-    if let Some(forwarder) = x11_forwarder {
-        spawn_x11_forwarder(event_queue.clone(), session_id.clone(), forwarder);
-    }
+    let _x11_task = x11_forwarder
+        .map(|forwarder| spawn_x11_forwarder(event_queue.clone(), session_id.clone(), forwarder));
 
     let initial_inject_delay = tokio::time::sleep(Duration::from_millis(500));
     tokio::pin!(initial_inject_delay);
@@ -1049,12 +1048,16 @@ pub(crate) async fn open_pending_ssh_shell(
         "opening SSH transport"
     );
     let x11_config = if config.x11_forwarding {
-        Some(prepare_x11_forwarding(&config.x11_display).await)
+        Some(if let Some(connection) = &config.x11_connection {
+            X11ForwardingConfig::prepared(connection)?
+        } else {
+            prepare_x11_forwarding(&config.x11_display).await
+        })
     } else {
         None
     };
     let (x11_tx, x11_rx) = if x11_config.is_some() {
-        let (tx, rx) = tokio_mpsc::unbounded_channel();
+        let (tx, rx) = tokio_mpsc::channel(64);
         (Some(tx), Some(rx))
     } else {
         (None, None)
@@ -1184,6 +1187,9 @@ pub(crate) async fn open_ssh_shell_from_pending(
             match request {
                 Ok(()) => (Some(X11Forwarder { rx, config }), multiplex.clone(), None),
                 Err(error) => {
+                    if let Some(lifetime) = config.lifetime.as_ref() {
+                        lifetime.shutdown();
+                    }
                     if let Some(multiplex) = multiplex.as_ref() {
                         multiplex.unregister_x11_sender(session_id).await;
                     }

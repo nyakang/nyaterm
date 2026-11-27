@@ -10286,3 +10286,33 @@ fn keyword_match_options_and_theme_backgrounds_survive_storage_and_native_backup
     let restored = ConnectionStore::open(&restored_dir).unwrap();
     assert_eq!(restored.load_keyword_highlights().unwrap(), config);
 }
+
+#[test]
+fn x11_settings_preserve_legacy_display_and_stay_device_local() {
+    use nyaterm_core::portable_snapshot::{
+        preserve_device_local_sync_settings, project_sync_settings,
+    };
+    use nyaterm_core::x11::X11Mode;
+    let dir = unique_temp_dir("x11-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store.save_settings_value(&serde_json::json!({"terminal": {"x11_display": "localhost:7", "future": {"keep": true}}})).unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    assert_eq!(summary.x11_mode, X11Mode::Auto);
+    assert!(!summary.x11_clipboard);
+    assert_eq!(summary.x11_display, "localhost:7");
+    summary.x11_mode = X11Mode::External;
+    summary.x11_clipboard = true;
+    store.save_terminal_settings(&summary).unwrap();
+    let loaded = store.load_app_settings_summary().unwrap();
+    assert_eq!(loaded.x11_mode, X11Mode::External);
+    assert!(loaded.x11_clipboard);
+    let current = store.load_settings_value().unwrap();
+    assert_eq!(current["terminal"]["future"]["keep"], true);
+    let mut sync = current.clone();
+    project_sync_settings(&mut sync);
+    assert!(sync["terminal"].get("x11_display").is_none());
+    assert!(sync["terminal"].get("x11_mode").is_none());
+    assert!(sync["terminal"].get("x11_clipboard").is_none());
+    preserve_device_local_sync_settings(&mut sync, &current);
+    assert_eq!(sync["terminal"], current["terminal"]);
+}

@@ -136,20 +136,18 @@ The command is sent as terminal input after login, so it behaves exactly like ty
 
 ### X11 forwarding
 
-X11 Forwarding allows remote graphical applications to display on your local machine through SSH.
+X11 forwarding displays remote graphical applications through SSH. Enable it in the SSH connection and select a local server under **Settings → Terminal**:
 
-NyaTerm does not include an X server. You need to install and start one:
+- **Windows x64**: Automatic mode can download the official **X11 Server** component (VcXsrv). Each SSH session owns an independent instance, stopped when the session closes. Availability requires an officially signed component release; if unavailable, you can continue with ordinary SSH.
+- **macOS**: Install XQuartz yourself. Automatic mode detects it and starts it when needed; NyaTerm does not install or terminate the system service.
+- **Linux**: Reuses the desktop Xorg/Xwayland through DISPLAY and XAUTHORITY. Missing services produce an actionable error.
+- **External mode**: Manage your own X server. Existing nonempty Local X11 DISPLAY settings retain priority in Automatic mode. Windows ARM64 currently uses external mode.
 
-- Windows: VcXsrv or Xming
-- macOS: XQuartz
-- Linux: Xorg or Xwayland
+Managed Windows instances disable system clipboard integration by default. Enable it in settings for new instances. Separate instances are not OS sandboxes; system and external servers share their desktop and trust boundary. Only enable forwarding for trusted remote hosts. The multiplex-session action creates an independent SSH connection when X11 is enabled.
 
-Remote server requirements:
+The remote server needs `X11Forwarding yes` in `sshd_config` and an installed `xauth`. Do not override the remote DISPLAY assigned by SSH. Managed components enforce authentication and loopback listeners; they never use `-ac`.
 
-- `sshd_config`: `X11Forwarding yes`
-- `xauth` installed
-
-If you need to override the local DISPLAY value, set **Settings → Terminal → Local X11 DISPLAY**. Common values are `localhost:0` on Windows and `:0` on Linux/macOS.
+Manage installation, enablement, removal and manual updates in Plugins. If X11 preparation fails, **Continue without X11** opens ordinary SSH without changing the saved connection setting.
 
 ### SSH algorithm preferences
 

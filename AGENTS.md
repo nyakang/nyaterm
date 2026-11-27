@@ -152,6 +152,12 @@ must include explicit conversion logic and tests.
   component exception. Thread-bound ActiveX/ATL host and staged controller;
   COM runs on the creating UI/STA thread outside all GPUI borrows. No GPUI
   production dependency, no protocol decoder or exposed COM interfaces.
+* `crates/nyaterm-x11`: UI-independent X11 service discovery, authentication
+  probes and native-helper process supervision. Only core and the pinned native
+  protocol are allowed as workspace dependencies. Desktop owns preparation,
+  prompts and settings; transport owns SSH forwarding and holds opaque runtime
+  leases. Windows managed instances are per SSH session; system/external servers
+  are never stopped by the application.
 * `crates/nyaterm-otp`: bundled HOTP/TOTP implementation.
 * `crates/nyaterm-app/assets`: bundled icons and images. Assets under
   `icons/**` are normally tintable and rendered through `svg()` or

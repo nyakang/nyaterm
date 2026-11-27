@@ -414,6 +414,7 @@ impl PluginPanel {
             .native
             .snapshot()
             .into_iter()
+            .filter(|component| component.id.supported())
             .filter(|component| {
                 let display_name = native_display_name(component.id);
                 let description = native_description(component.id);
@@ -578,6 +579,7 @@ impl PluginPanel {
                 NativeComponentId::Rdp => "icons/conn/rdp.svg",
                 NativeComponentId::Vnc => "icons/conn/vnc.svg",
                 NativeComponentId::Android => "color/os/android.svg",
+                NativeComponentId::X11 => "icons/conn/vnc.svg",
             };
             let metadata = if installing {
                 format!(

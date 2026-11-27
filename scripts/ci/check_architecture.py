@@ -97,6 +97,7 @@ def dependency_errors() -> list[str]:
         "nyaterm-i18n",
         "nyaterm-completion-runtime",
         "nyaterm-android",
+        "nyaterm-x11",
         "nyaterm-transport",
         "nyaterm-files",
         "nyaterm-recording",
@@ -125,6 +126,7 @@ def dependency_errors() -> list[str]:
         ("nyaterm-i18n", set()),
         ("nyaterm-completion-runtime", set()),
         ("nyaterm-android", set()),
+        ("nyaterm-x11", set()),
         ("nyaterm-ai-client", set()),
         ("nyaterm-agent-client", set()),
         ("nyaterm-mcp-host", set()),
@@ -159,12 +161,12 @@ def dependency_errors() -> list[str]:
                 and package != "nyaterm-core"
             )
             wrong_adapter_direction = (
-                crate in {"nyaterm-completion-runtime", "nyaterm-android", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
+                crate in {"nyaterm-completion-runtime", "nyaterm-android", "nyaterm-x11", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
-                # The shared Android wire contract lives in the independent
+                # The shared Android/X11 wire contracts lives in the independent
                 # helper repository, not in this application's workspace.
-                and not (crate == "nyaterm-android" and package == "nyaterm-native-protocol")
+                and not (crate in {"nyaterm-android", "nyaterm-x11"} and package == "nyaterm-native-protocol")
             )
             wrong_mcp_direction = (
                 crate == "nyaterm-mcp-host"

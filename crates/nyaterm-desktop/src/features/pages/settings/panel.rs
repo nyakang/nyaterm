@@ -2039,6 +2039,7 @@ forward_app_action!(
     toggle_terminal_reconnect_restore_cwd,
     toggle_terminal_serial_reconnect_send_enter,
     toggle_terminal_zebra_stripes,
+    toggle_x11_clipboard,
     toggle_terminal_zebra_stripes_by_row,
     toggle_terminal_zoom_enabled,
     toggle_file_manager_auto_collapse,

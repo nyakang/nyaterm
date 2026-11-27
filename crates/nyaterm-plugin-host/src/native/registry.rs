@@ -38,10 +38,26 @@ impl Registry {
         registry.recover()?;
         Ok(registry)
     }
+    pub fn staging_root(&self, id: NativeComponentId) -> PathBuf {
+        if id == NativeComponentId::X11 {
+            self.root.join("x11-work")
+        } else {
+            self.root.clone()
+        }
+    }
     fn recover(&self) -> PluginResult<()> {
+        self.recover_at(&self.root)?;
+        let x11 = self.staging_root(NativeComponentId::X11);
+        reject_path_links(&self.root, &x11)?;
+        reject_path_links(&self.root, &x11.join("staging"))?;
+        fs::create_dir_all(x11.join("staging")).map_err(|_| io_error())?;
+        reject_path_links(&self.root, &x11.join("staging"))?;
+        self.recover_at(&x11)
+    }
+    fn recover_at(&self, root: &std::path::Path) -> PluginResult<()> {
         // Opening the redb store owns the process-level registry lock. Only UUID
         // staging directories created by this registry are eligible for cleanup.
-        for entry in fs::read_dir(self.root.join("staging")).map_err(|_| io_error())? {
+        for entry in fs::read_dir(root.join("staging")).map_err(|_| io_error())? {
             let path = entry.map_err(|_| io_error())?.path();
             reject_path_links(&self.root, &path)?;
             if !path.is_dir()

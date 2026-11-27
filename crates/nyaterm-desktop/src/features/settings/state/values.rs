@@ -218,6 +218,12 @@ impl SettingsFeatureState {
     pub(in crate::features) fn set_idle_lock_minutes(&mut self, value: u32) {
         self.summary.idle_lock_minutes = value.clamp(0, 1440);
     }
+    pub(in crate::features) fn set_x11_mode(&mut self, mode: nyaterm_core::x11::X11Mode) {
+        self.summary.x11_mode = mode;
+    }
+    pub(in crate::features) fn toggle_x11_clipboard(&mut self) {
+        self.summary.x11_clipboard = !self.summary.x11_clipboard;
+    }
     pub(in crate::features) fn set_terminal_x11_display(&mut self, text: String) {
         self.summary.x11_display = text;
     }

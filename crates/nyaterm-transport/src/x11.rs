@@ -1,8 +1,7 @@
 //! X11 forwarding: display resolution, xauth cookie rewriting and channel relay.
 //!
-//! Split out of `lib.rs` by domain. Display spec parsing, the cookie rewrite
-//! rules and the per-platform error messages are unchanged; this only moves
-//! the code.
+//! Desktop supplies a prepared local endpoint and its lifetime. Legacy callers
+//! can still resolve external displays here; every channel validates its session cookie.
 
 #[cfg(unix)]
 use std::path::PathBuf;
@@ -12,12 +11,16 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use std::time::Duration;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{SessionEvent, SessionEventQueue};
 
 pub(crate) const MIT_MAGIC_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
 
 pub(crate) const XAUTH_TIMEOUT: Duration = Duration::from_secs(2);
+const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_SETUP_BYTES: usize = 4096;
+const MAX_X11_CHANNELS: usize = 64;
 
 pub(super) struct X11ChannelOpen {
     pub(super) channel: russh::Channel<client::Msg>,
@@ -26,7 +29,7 @@ pub(super) struct X11ChannelOpen {
 }
 
 pub(super) struct X11Forwarder {
-    pub(super) rx: tokio_mpsc::UnboundedReceiver<X11ChannelOpen>,
+    pub(super) rx: tokio_mpsc::Receiver<X11ChannelOpen>,
     pub(super) config: X11ForwardingConfig,
 }
 
@@ -52,13 +55,29 @@ impl X11DisplayTarget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct X11ForwardingConfig {
     pub target: X11DisplayTarget,
     pub fallback_target: Option<X11DisplayTarget>,
     pub fake_cookie: Vec<u8>,
     pub fake_cookie_hex: String,
     pub real_cookie: Option<Vec<u8>>,
+    pub lifetime: Option<std::sync::Arc<dyn nyaterm_core::x11::X11Lifetime>>,
+}
+
+impl std::fmt::Debug for X11ForwardingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("X11ForwardingConfig")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for X11ForwardingConfig {
+    fn drop(&mut self) {
+        self.fake_cookie.zeroize();
+        self.fake_cookie_hex.zeroize();
+        self.real_cookie.zeroize();
+    }
 }
 
 pub fn effective_x11_display(configured: &str) -> String {
@@ -90,6 +109,32 @@ pub async fn prepare_x11_forwarding(configured_display: &str) -> X11ForwardingCo
         fake_cookie,
         fake_cookie_hex,
         real_cookie,
+        lifetime: None,
+    }
+}
+
+impl X11ForwardingConfig {
+    pub(crate) fn prepared(connection: &nyaterm_core::x11::X11Connection) -> anyhow::Result<Self> {
+        use nyaterm_core::x11::X11Endpoint;
+        let target = match &connection.endpoint {
+            X11Endpoint::Tcp { host, port } => X11DisplayTarget::Tcp {
+                host: host.clone(),
+                port: *port,
+            },
+            #[cfg(unix)]
+            X11Endpoint::UnixSocket { path } => X11DisplayTarget::UnixSocket { path: path.clone() },
+            #[cfg(not(unix))]
+            X11Endpoint::UnixSocket { .. } => anyhow::bail!("Unsupported local X11 endpoint"),
+        };
+        let fake_cookie = uuid::Uuid::new_v4().as_bytes().to_vec();
+        Ok(Self {
+            target,
+            fallback_target: None,
+            fake_cookie_hex: encode_hex(&fake_cookie),
+            fake_cookie,
+            real_cookie: connection.cookie.as_ref().map(|cookie| cookie.to_vec()),
+            lifetime: connection.lifetime.clone(),
+        })
     }
 }
 
@@ -291,6 +336,7 @@ async fn read_local_x11_auth_cookie(display: &str) -> Option<Vec<u8>> {
     let mut command = tokio::process::Command::new(xauth);
     command
         .arg("list")
+        .arg(display)
         .env("DISPLAY", display)
         .kill_on_drop(true);
 
@@ -308,74 +354,115 @@ async fn read_local_x11_auth_cookie(display: &str) -> Option<Vec<u8>> {
 
 fn parse_xauth_cookie(output: &str, display: &str) -> Option<Vec<u8>> {
     let display_num = display_number(display);
-    let mut fallback = None;
 
     for line in output.lines() {
-        if !line.contains(MIT_MAGIC_COOKIE) {
-            continue;
-        }
         let parts = line.split_whitespace().collect::<Vec<_>>();
-        if parts.len() < 3 {
+        if parts.len() != 3 || parts[1] != MIT_MAGIC_COOKIE {
             continue;
         }
         let Some(cookie) = decode_hex(parts[2]) else {
             continue;
         };
-        if let Some(n) = display_num
-            && line.contains(&format!(":{n}"))
+        if cookie.len() == 16
+            && (parts[0] == display
+                || (display_num.is_some() && display_num == display_number(parts[0])))
         {
             return Some(cookie);
         }
-        if fallback.is_none() {
-            fallback = Some(cookie);
-        }
     }
 
-    fallback
+    None
 }
 
 pub struct X11AuthRewriter {
-    fake_cookie: Vec<u8>,
-    real_cookie: Option<Vec<u8>>,
-    buffer: Vec<u8>,
+    fake_cookie: Zeroizing<Vec<u8>>,
+    real_cookie: Option<Zeroizing<Vec<u8>>>,
+    buffer: Zeroizing<Vec<u8>>,
     complete: bool,
+    failed: bool,
 }
 
 impl X11AuthRewriter {
     pub fn new(fake_cookie: Vec<u8>, real_cookie: Option<Vec<u8>>) -> Self {
         Self {
-            fake_cookie,
-            real_cookie,
-            buffer: Vec::new(),
+            fake_cookie: Zeroizing::new(fake_cookie),
+            real_cookie: real_cookie.map(Zeroizing::new),
+            buffer: Zeroizing::new(Vec::new()),
             complete: false,
+            failed: false,
         }
     }
 
-    pub fn push(&mut self, data: &[u8]) -> Vec<u8> {
+    pub fn push(&mut self, data: &[u8]) -> std::io::Result<Vec<u8>> {
+        let result = self.push_inner(data);
+        if result.is_err() {
+            self.failed = true;
+            self.buffer.zeroize();
+        }
+        result
+    }
+
+    fn push_inner(&mut self, mut data: &[u8]) -> std::io::Result<Vec<u8>> {
+        if self.failed {
+            return Err(invalid_setup());
+        }
         if self.complete {
-            return data.to_vec();
+            return Ok(data.to_vec());
         }
-
-        self.buffer.extend_from_slice(data);
-        let Some(packet_len) = setup_packet_len(&self.buffer) else {
-            return Vec::new();
+        // Only buffer the setup, never an arbitrarily large first SSH message.
+        let header = (12 - self.buffer.len().min(12)).min(data.len());
+        self.buffer.extend_from_slice(&data[..header]);
+        data = &data[header..];
+        let Some(packet_len) = setup_packet_len(&self.buffer)? else {
+            return Ok(Vec::new());
         };
+        let count = (packet_len - self.buffer.len()).min(data.len());
+        self.buffer.extend_from_slice(&data[..count]);
+        data = &data[count..];
         if self.buffer.len() < packet_len {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-
-        let mut output = std::mem::take(&mut self.buffer);
-        let remainder = output.split_off(packet_len);
-        rewrite_x11_auth_setup_packet(&mut output, &self.fake_cookie, self.real_cookie.as_deref());
-        output.extend_from_slice(&remainder);
+        // First validate the SSH session's fake cookie even for servers that
+        // permit local unauthenticated clients. Never pass failed auth through.
+        if !rewrite_x11_auth_setup_packet(
+            &mut self.buffer,
+            &self.fake_cookie,
+            Some(&self.fake_cookie),
+        ) {
+            return Err(invalid_setup());
+        }
+        let mut output = self.buffer.to_vec();
+        if let Some(cookie) = &self.real_cookie {
+            if !rewrite_x11_auth_setup_packet(&mut output, &self.fake_cookie, Some(cookie)) {
+                return Err(invalid_setup());
+            }
+        } else {
+            output.truncate(12);
+            output[6..10].fill(0);
+        }
+        self.buffer.zeroize();
+        output.extend_from_slice(data);
         self.complete = true;
-        output
+        Ok(output)
     }
 }
 
-fn setup_packet_len(buffer: &[u8]) -> Option<usize> {
+fn invalid_setup() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid X11 authentication setup",
+    )
+}
+
+fn setup_packet_len(buffer: &[u8]) -> std::io::Result<Option<usize>> {
+    if buffer
+        .first()
+        .is_some_and(|order| !matches!(order, b'l' | b'B'))
+    {
+        return Err(invalid_setup());
+    }
     if buffer.len() < 12 {
-        return None;
+        return Ok(None);
     }
     let byte_order = buffer[0];
     let read_u16 = |offset: usize| -> Option<u16> {
@@ -387,9 +474,16 @@ fn setup_packet_len(buffer: &[u8]) -> Option<usize> {
         }
     };
 
-    let auth_protocol_len = read_u16(6)? as usize;
-    let auth_data_len = read_u16(8)? as usize;
-    Some(12 + pad4(auth_protocol_len) + pad4(auth_data_len))
+    if read_u16(2) != Some(11) || read_u16(4) != Some(0) {
+        return Err(invalid_setup());
+    }
+    let auth_protocol_len = read_u16(6).ok_or_else(invalid_setup)? as usize;
+    let auth_data_len = read_u16(8).ok_or_else(invalid_setup)? as usize;
+    let length = 12 + pad4(auth_protocol_len) + pad4(auth_data_len);
+    if length > MAX_SETUP_BYTES {
+        return Err(invalid_setup());
+    }
+    Ok(Some(length))
 }
 
 fn pad4(n: usize) -> usize {
@@ -425,7 +519,7 @@ pub fn rewrite_x11_auth_setup_packet(
     let auth_start = protocol_start + pad4(protocol_len);
     let auth_end = auth_start + auth_len;
 
-    if auth_end > buffer.len() {
+    if auth_end > buffer.len() || protocol_end > buffer.len() {
         return false;
     }
     if &buffer[protocol_start..protocol_end] != MIT_MAGIC_COOKIE.as_bytes() {
@@ -446,16 +540,44 @@ pub(super) fn spawn_x11_forwarder(
     event_queue: SessionEventQueue,
     session_id: String,
     mut forwarder: X11Forwarder,
-) {
-    tokio::spawn(async move {
-        while let Some(open) = forwarder.rx.recv().await {
+) -> tokio_util::task::AbortOnDropHandle<()> {
+    tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        struct RuntimeGuard(Option<std::sync::Arc<dyn nyaterm_core::x11::X11Lifetime>>);
+        impl Drop for RuntimeGuard {
+            fn drop(&mut self) {
+                if let Some(lifetime) = &self.0 {
+                    lifetime.shutdown();
+                }
+            }
+        }
+        let lifetime = RuntimeGuard(forwarder.config.lifetime.clone());
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut health = tokio::time::interval(Duration::from_millis(250));
+        health.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let open = tokio::select! {
+                open = forwarder.rx.recv() => match open { Some(open) => open, None => break },
+                _ = tasks.join_next(), if !tasks.is_empty() => continue,
+                _ = health.tick(), if lifetime.0.is_some() => {
+                    if lifetime.0.as_ref().is_some_and(|lease| !lease.is_alive()) {
+                        event_queue.push(SessionEvent::Notice { session_id: session_id.clone(),
+                            notice: crate::session_notice::SessionNotice::X11ServerUnavailable { display_target: forwarder.config.target.describe() } });
+                        break;
+                    }
+                    continue;
+                },
+            };
+            if tasks.len() >= MAX_X11_CHANNELS {
+                let _ = open.channel.close().await;
+                continue;
+            }
             let target = forwarder.config.target.clone();
             let fallback = forwarder.config.fallback_target.clone();
             let fake_cookie = forwarder.config.fake_cookie.clone();
             let real_cookie = forwarder.config.real_cookie.clone();
             let event_queue = event_queue.clone();
             let session_id = session_id.clone();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 let _ = handle_x11_channel(
                     event_queue,
                     session_id,
@@ -468,7 +590,7 @@ pub(super) fn spawn_x11_forwarder(
                 .await;
             });
         }
-    });
+    }))
 }
 
 async fn handle_x11_channel(
@@ -507,10 +629,21 @@ async fn handle_x11_channel(
     let mut rewriter = X11AuthRewriter::new(fake_cookie, real_cookie);
 
     let remote_to_local = async {
-        while let Some(msg) = remote_read.wait().await {
+        let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
+        loop {
+            let msg = if rewriter.complete {
+                remote_read.wait().await
+            } else {
+                tokio::time::timeout_at(deadline, remote_read.wait())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "X11 setup timed out")
+                    })?
+            };
+            let Some(msg) = msg else { break };
             match msg {
                 ChannelMsg::Data { data } => {
-                    let rewritten = rewriter.push(&data);
+                    let rewritten = Zeroizing::new(rewriter.push(&data)?);
                     if !rewritten.is_empty() {
                         local_write.write_all(&rewritten).await?;
                     }
@@ -632,7 +765,12 @@ mod tests {
     }
 
     fn x11_setup_packet(order: u8, protocol: &[u8], cookie: &[u8]) -> Vec<u8> {
-        let mut packet = vec![order, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut packet = vec![order, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        packet[2..4].copy_from_slice(&if order == b'l' {
+            11u16.to_le_bytes()
+        } else {
+            11u16.to_be_bytes()
+        });
         let protocol_len = protocol.len() as u16;
         let cookie_len = cookie.len() as u16;
         let protocol_bytes = if order == b'l' {
@@ -678,21 +816,21 @@ mod tests {
         let packet = x11_setup_packet(b'l', MIT_MAGIC_COOKIE.as_bytes(), &fake);
         let mut rewriter = X11AuthRewriter::new(fake.to_vec(), Some(real.to_vec()));
 
-        assert!(rewriter.push(&packet[..8]).is_empty());
-        let output = rewriter.push(&packet[8..]);
+        assert!(rewriter.push(&packet[..8]).unwrap().is_empty());
+        let output = rewriter.push(&packet[8..]).unwrap();
         assert_eq!(output.len(), packet.len());
         assert!(output.windows(real.len()).any(|window| window == real));
     }
 
     #[test]
-    fn x11_rewriter_passes_through_mismatched_auth() {
+    fn x11_rewriter_rejects_mismatched_auth() {
         let fake = [1_u8; 16];
         let real = [2_u8; 16];
         let other = [3_u8; 16];
         let packet = x11_setup_packet(b'l', MIT_MAGIC_COOKIE.as_bytes(), &other);
         let mut rewriter = X11AuthRewriter::new(fake.to_vec(), Some(real.to_vec()));
 
-        assert_eq!(rewriter.push(&packet), packet);
+        assert!(rewriter.push(&packet).is_err());
 
         let mut packet = x11_setup_packet(b'l', b"OTHER", &fake);
         assert!(!rewrite_x11_auth_setup_packet(
@@ -713,9 +851,64 @@ host/unix:1  MIT-MAGIC-COOKIE-1  ffeeddccbbaa99887766554433221100
             parse_xauth_cookie(output, ":1").expect("display 1 cookie"),
             decode_hex("ffeeddccbbaa99887766554433221100").expect("hex")
         );
-        assert_eq!(
-            parse_xauth_cookie(output, ":9").expect("fallback cookie"),
-            decode_hex("00112233445566778899aabbccddeeff").expect("hex")
+        assert!(parse_xauth_cookie(output, ":9").is_none());
+    }
+
+    #[test]
+    fn malformed_setup_is_rejected_without_retaining_input() {
+        let mut rewriter = X11AuthRewriter::new(vec![1; 16], Some(vec![2; 16]));
+        assert!(rewriter.push(&[b'?'; 65536]).is_err());
+        assert!(rewriter.buffer.is_empty());
+        assert!(
+            rewriter
+                .push(&x11_setup_packet(
+                    b'l',
+                    MIT_MAGIC_COOKIE.as_bytes(),
+                    &[1; 16]
+                ))
+                .is_err()
         );
+        let mut packet = x11_setup_packet(b'l', MIT_MAGIC_COOKIE.as_bytes(), &[1; 16]);
+        packet[6..8].copy_from_slice(&u16::MAX.to_le_bytes());
+        let mut rewriter = X11AuthRewriter::new(vec![1; 16], Some(vec![2; 16]));
+        assert!(rewriter.push(&packet[..12]).is_err());
+        assert!(rewriter.buffer.is_empty());
+    }
+
+    #[test]
+    fn unauthenticated_local_server_still_requires_session_cookie() {
+        for order in *b"lB" {
+            let mut rewriter = X11AuthRewriter::new(vec![1; 16], None);
+            let mut packet = x11_setup_packet(order, MIT_MAGIC_COOKIE.as_bytes(), &[1; 16]);
+            packet.extend_from_slice(b"subsequent request");
+            let rewritten = rewriter.push(&packet).unwrap();
+            assert_eq!(&rewritten[6..10], &[0; 4]);
+            assert_eq!(&rewritten[12..], b"subsequent request");
+            let mut rewriter = X11AuthRewriter::new(vec![1; 16], None);
+            assert!(
+                rewriter
+                    .push(&x11_setup_packet(
+                        order,
+                        MIT_MAGIC_COOKIE.as_bytes(),
+                        &[3; 16]
+                    ))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn setup_can_be_fragmented_at_every_byte_boundary() {
+        for order in *b"lB" {
+            let packet = x11_setup_packet(order, MIT_MAGIC_COOKIE.as_bytes(), &[1; 16]);
+            for split in 1..packet.len() {
+                let mut rewriter = X11AuthRewriter::new(vec![1; 16], Some(vec![2; 16]));
+                assert!(rewriter.push(&packet[..split]).unwrap().is_empty());
+                assert_eq!(
+                    rewriter.push(&packet[split..]).unwrap(),
+                    x11_setup_packet(order, MIT_MAGIC_COOKIE.as_bytes(), &[2; 16])
+                );
+            }
+        }
     }
 }

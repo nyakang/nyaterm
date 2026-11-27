@@ -25,16 +25,21 @@ pub enum NativeComponentId {
     Rdp,
     Vnc,
     Android,
+    X11,
 }
 
 impl NativeComponentId {
-    pub const ALL: [Self; 4] = [Self::Spice, Self::Rdp, Self::Vnc, Self::Android];
+    pub const ALL: [Self; 5] = [Self::Spice, Self::Rdp, Self::Vnc, Self::Android, Self::X11];
+    pub fn supported(self) -> bool {
+        self != Self::X11 || cfg!(all(windows, target_arch = "x86_64"))
+    }
     pub fn ipc_version(self) -> u32 {
         match self {
             Self::Vnc => nyaterm_native_protocol::protocol::VNC_PROTOCOL_VERSION,
             Self::Rdp => nyaterm_native_protocol::protocol::PROTOCOL_VERSION,
             Self::Spice => nyaterm_native_protocol::spice::protocol::SPICE_PROTOCOL_VERSION.into(),
             Self::Android => nyaterm_native_protocol::android::ipc::PROTOCOL_VERSION,
+            Self::X11 => nyaterm_native_protocol::x11::X11_PROTOCOL_VERSION,
         }
     }
     pub fn slug(self) -> &'static str {
@@ -43,6 +48,7 @@ impl NativeComponentId {
             Self::Rdp => "rdp",
             Self::Vnc => "vnc",
             Self::Android => "android",
+            Self::X11 => "x11",
         }
     }
     pub fn plugin_id(self) -> String {
@@ -54,6 +60,7 @@ impl NativeComponentId {
             Self::Rdp => "RDP Builtin",
             Self::Vnc => "VNC",
             Self::Android => "Android",
+            Self::X11 => "X11 Server",
         }
     }
     pub fn helper(self, target: &str) -> String {
@@ -73,6 +80,7 @@ impl NativeComponentId {
             Self::Rdp => "NYATERM_RDP_HELPER",
             Self::Vnc => "NYATERM_VNC_HELPER",
             Self::Android => "NYATERM_ANDROID_HELPER",
+            Self::X11 => "NYATERM_X11_HELPER",
         }
     }
 }

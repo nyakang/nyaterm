@@ -140,20 +140,18 @@ NyaTerm 会校验跳板机链路，阻止缺失引用和环路引用，避免连
 
 ### X11 转发
 
-X11 转发允许远端 Linux 图形程序通过 SSH 显示到本机。
+X11 转发允许远端 Linux 图形程序通过 SSH 显示到本机。在 SSH 连接配置中启用 X11 转发，并在 **设置 → 终端** 选择本地服务模式：
 
-NyaTerm 不内置 X server，用户需要自行安装并启动：
+- **Windows x64**：自动模式可按需安装官方 **X11 Server** 组件（VcXsrv）。每个 SSH 会话使用独立实例；关闭会话后回收实例。组件需经官方签名发布，未发布或下载失败时可选择继续普通 SSH。
+- **macOS**：自行安装 XQuartz 后，自动模式会检测并在需要时启动它。NyaTerm 不安装 XQuartz，也不会在关闭会话时退出系统服务。
+- **Linux**：使用当前桌面的 DISPLAY 和 XAUTHORITY，复用 Xorg/Xwayland；缺少服务时提示原因。
+- **外部模式**：自行管理 X Server。已有非空的「本地 X11 DISPLAY」配置在自动模式下仍优先使用，不会被覆盖。Windows ARM64 暂使用外部模式。
 
-- Windows: VcXsrv / Xming
-- macOS: XQuartz
-- Linux: Xorg / Xwayland
+内置 Windows 服务默认关闭系统剪贴板集成，可在设置中开启，修改仅对新实例生效。独立实例不等于操作系统沙箱；系统和外部 X Server 共享桌面和信任边界，只应向可信远端开放。启用 X11 时，“复用会话”会建立独立 SSH 连接。
 
-远端服务器需要：
+远端服务器须在 `sshd_config` 开启 `X11Forwarding yes` 并安装 `xauth`。不要手动覆盖远端 SSH 自动设置的 DISPLAY。内置组件保留认证和回环监听，不使用 `-ac`。
 
-- `sshd_config` 开启 `X11Forwarding yes`
-- 安装 `xauth`
-
-如果需要覆盖本机 DISPLAY，可以在 **设置 → 终端 → 本地 X11 DISPLAY** 中填写，例如 Windows 常用 `localhost:0`，Linux/macOS 常用 `:0`。
+组件安装、启用、禁用、卸载及手动更新在插件页面管理。X11 失败后可明确选择“不使用 X11，继续连接”，不会更改已保存连接的设置。
 
 ### SSH 算法偏好
 
