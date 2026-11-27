@@ -845,6 +845,7 @@
     "switchTerminal": "Open Command Palette"
   },
   "common": {
+    "back": "Back",
     "apply": "Apply",
     "operationSucceeded": "Operation completed",
     "nothingToCopy": "Nothing to copy",

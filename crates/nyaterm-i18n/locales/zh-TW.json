@@ -845,6 +845,7 @@
     "switchTerminal": "開啟命令面板"
   },
   "common": {
+    "back": "返回",
     "apply": "套用",
     "operationSucceeded": "操作完成",
     "nothingToCopy": "沒有可複製的內容",

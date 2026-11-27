@@ -518,7 +518,6 @@ impl NyaMenuItem {
                         .flex_1()
                         .min_w_0()
                         .relative()
-                        .gap_1()
                         .ml(px(-(NYA_MENU_ICON_SLOT_WIDTH + NYA_MENU_ITEM_GAP)))
                         .h(px(32.))
                         .items_center()
@@ -629,9 +628,10 @@ impl NyaMenuItem {
                             }
                             div()
                                 .flex()
+                                .flex_1()
+                                .min_w_0()
                                 .items_center()
                                 .justify_center()
-                                .px(px(1.))
                                 .when_some(
                                     on_confirm.filter(|_| !item.disabled),
                                     |this, handler| {

@@ -24,9 +24,10 @@ use gpui::{
 };
 use nyaterm_core::KeywordHighlightRule;
 use nyaterm_ui::{
-    ChildWindowSlot, ColorSelect, IconName, NyaButton, NyaColorPickerEvent, NyaColorPickerState,
-    NyaIcon, NyaInputEvent, NyaInputShell, NyaInputState, NyaList, NyaListState as ListState,
-    NyaScrollable, NyaTooltip, NyaWindowHandle, activate_child_window, nya_root,
+    ChildWindowSlot, ColorSelect, IconName, NyaButton, NyaButtonVariant, NyaColorPickerEvent,
+    NyaColorPickerState, NyaIcon, NyaInputEvent, NyaInputShell, NyaInputState, NyaList,
+    NyaListState as ListState, NyaScrollable, NyaTooltip, NyaWindowHandle, activate_child_window,
+    nya_root,
 };
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
@@ -368,16 +369,6 @@ struct KeywordHighlightWindow {
 }
 
 impl KeywordHighlightWindow {
-    /// Width of one colour select in the popup. Text and background rows use
-    /// the same width so their fields line up.
-    const COLOR_SELECT_WIDTH: f32 = 260.;
-    /// Width of the label column in front of a colour select. It fits the
-    /// longest translated label ("Background color") on a single line.
-    const COLOR_LABEL_WIDTH: f32 = 100.;
-    /// Width of the colour column: label, gap, select, gap and the background
-    /// clear button. The theme preview starts right after it.
-    const COLOR_CONTROL_WIDTH: f32 = 100. + 8. + 260. + 8. + 28.;
-
     fn new(
         app: Entity<NyaTermApp>,
         session_id: String,
@@ -1335,7 +1326,7 @@ impl KeywordHighlightWindow {
                 "#rrggbb".into()
             };
             ColorSelect::new(picker)
-                .w(px(Self::COLOR_SELECT_WIDTH))
+                .w_full()
                 .featured_colors(PopupColorPickerControls::featured_colors(is_dark))
                 .placeholder(placeholder)
                 .accessibility_label(label.clone())
@@ -1343,7 +1334,7 @@ impl KeywordHighlightWindow {
         } else {
             div()
                 .h(px(32.))
-                .w(px(Self::COLOR_SELECT_WIDTH))
+                .w_full()
                 .px_2()
                 .flex()
                 .items_center()
@@ -1360,18 +1351,21 @@ impl KeywordHighlightWindow {
                 })
                 .into_any_element()
         };
-        let mut row = div().flex().items_center().gap_2().child(
-            div()
-                .w(px(Self::COLOR_LABEL_WIDTH))
-                .flex_none()
-                .text_xs()
-                .whitespace_nowrap()
-                .text_color(rgb(palette.text_muted))
-                .child(label),
-        );
+        let mut label_row = div()
+            .h(px(20.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(label),
+            );
         if is_background && !value.trim().is_empty() && !self.saving {
             let rule_id = rule.id.clone();
-            row = row.child(control).child(popup_icon_button(
+            label_row = label_row.child(popup_icon_button(
                 palette,
                 format!("keyword-bg-clear-{}", field.input_key()),
                 IconName::Close,
@@ -1388,20 +1382,42 @@ impl KeywordHighlightWindow {
                     this.color_pickers.set_cached_value(&id, field, "");
                 }),
             ));
-        } else {
-            row = row.child(control);
         }
-        row.into_any_element()
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(label_row)
+            .child(control)
+            .into_any_element()
     }
 
     /// Combined preview of a single theme: the sample text painted with that
     /// theme's text colour over its background colour.
     ///
     /// The preview lives inside the theme block it belongs to, so the light
-    /// palette is previewed by the light row and the dark palette by the dark
-    /// row.
-    fn preview_panel(&self, rule: &KeywordHighlightRule, is_dark: bool) -> AnyElement {
+    /// palette is previewed on a light terminal and the dark palette on a dark
+    /// terminal, even when the editor itself uses the other theme.
+    fn preview_panel(
+        &self,
+        rule: &KeywordHighlightRule,
+        is_dark: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let palette = self.palette;
+        let app = self.app.read(cx);
+        let terminal_background = if app.terminal_theme_is_dark() == is_dark {
+            app.terminal_theme_palette().terminal_bg
+        } else {
+            crate::theme::theme_palette(if is_dark {
+                "github-dark"
+            } else {
+                "github-light"
+            })
+            .terminal_bg
+        };
         let (text_value, bg_value, fallback) = if is_dark {
             (
                 rule.color_dark.as_str(),
@@ -1416,10 +1432,11 @@ impl KeywordHighlightWindow {
             )
         };
         let text = parse_popup_swatch(text_value).unwrap_or(fallback);
-        let bg = parse_popup_swatch(bg_value).unwrap_or(palette.input);
+        let bg = parse_popup_swatch(bg_value).unwrap_or(terminal_background);
         div()
-            .flex_1()
-            .min_w(px(120.))
+            .w_full()
+            .min_w_0()
+            .min_h(px(52.))
             .flex()
             .flex_col()
             .items_center()
@@ -1445,9 +1462,16 @@ impl KeywordHighlightWindow {
                 .into_any_element();
         };
         let palette = self.palette;
-        let mut form = div().id("keyword-details").flex().flex_col().gap_3().p_2();
+        let mut form = div()
+            .id("keyword-details")
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_4();
         form = form.child(
             div()
+                .flex_none()
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -1461,6 +1485,7 @@ impl KeywordHighlightWindow {
         );
         form = form.child(
             div()
+                .flex_none()
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -1474,7 +1499,7 @@ impl KeywordHighlightWindow {
                     let editor = cx.entity().downgrade();
                     NyaInputShell::new("keyword-field-1", &self.inputs[1])
                         .multi_line()
-                        .height(px(120.))
+                        .height(px(104.))
                         .bottom_right(keyword_match_option_toggles(
                             palette,
                             rule.case_sensitive,
@@ -1494,15 +1519,23 @@ impl KeywordHighlightWindow {
                         ))
                 }),
         );
+        let mut palettes = div().flex().flex_shrink_0().items_stretch().gap_3();
         for (title, is_dark) in [
             (t!("settings.keywordHighlightLightPalette"), false),
             (t!("settings.keywordHighlightDarkPalette"), true),
         ] {
-            form = form.child(
+            palettes = palettes.child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
                     .child(
                         div()
                             .text_xs()
@@ -1510,47 +1543,32 @@ impl KeywordHighlightWindow {
                             .text_color(rgb(palette.text_muted))
                             .child(title),
                     )
-                    // The colour rows stack on the left and the preview of the
-                    // very same theme sits beside them, spanning both rows.
-                    .child(
-                        div()
-                            .flex()
-                            .items_stretch()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .w(px(Self::COLOR_CONTROL_WIDTH))
-                                    .flex_none()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(self.color_row(
-                                        rule,
-                                        if is_dark {
-                                            KeywordHighlightEditorField::ColorDark
-                                        } else {
-                                            KeywordHighlightEditorField::ColorLight
-                                        },
-                                        t!("settings.keywordHighlightTextColor").into(),
-                                        is_dark,
-                                        cx,
-                                    ))
-                                    .child(self.color_row(
-                                        rule,
-                                        if is_dark {
-                                            KeywordHighlightEditorField::BgDark
-                                        } else {
-                                            KeywordHighlightEditorField::BgLight
-                                        },
-                                        t!("settings.keywordHighlightBackgroundColor").into(),
-                                        is_dark,
-                                        cx,
-                                    )),
-                            )
-                            .child(self.preview_panel(rule, is_dark)),
-                    ),
+                    .child(self.color_row(
+                        rule,
+                        if is_dark {
+                            KeywordHighlightEditorField::ColorDark
+                        } else {
+                            KeywordHighlightEditorField::ColorLight
+                        },
+                        t!("settings.keywordHighlightTextColor").into(),
+                        is_dark,
+                        cx,
+                    ))
+                    .child(self.color_row(
+                        rule,
+                        if is_dark {
+                            KeywordHighlightEditorField::BgDark
+                        } else {
+                            KeywordHighlightEditorField::BgLight
+                        },
+                        t!("settings.keywordHighlightBackgroundColor").into(),
+                        is_dark,
+                        cx,
+                    ))
+                    .child(self.preview_panel(rule, is_dark, cx)),
             );
         }
+        form = form.child(palettes);
         div()
             .relative()
             .h_full()
@@ -1662,29 +1680,19 @@ impl Render for KeywordHighlightWindow {
         if wide || self.detail {
             body = body.child(div().flex_1().min_w_0().min_h_0().child(self.detail(cx)));
         }
-        // The footer is always visible: it carries the hint about the list
-        // interactions on the left and the action row on the right.
+        // Keep actions visible while the detail form scrolls.
         let actions_disabled = self.saving || !self.dirty() || !self.session_alive;
-        let mut footer_leading = div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .flex_1()
-            .min_w_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(rgb(palette.text_dimmed))
-                    .child(t!(
-                        "terminalCtx.ruleListHint",
-                        shortcuts = t!("terminalCtx.ruleHintShortcuts").to_string(),
-                        drag = t!("terminalCtx.ruleHintDrag").to_string(),
-                    ))
-                    .child(t!("terminalCtx.ruleHintPriority")),
+        let mut footer_leading = div().flex().items_center().gap_3().flex_1().min_w_0();
+        if !wide && self.detail {
+            footer_leading = footer_leading.child(
+                NyaButton::new("keyword-back", t!("common.back"))
+                    .variant(NyaButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.detail = false;
+                        cx.notify();
+                    })),
             );
+        }
         if (self.error.is_some() || self.session_error().is_some()) && !self.saving {
             footer_leading = footer_leading.child(
                 NyaButton::new("keyword-reload", t!("terminalCtx.ruleReload"))
@@ -1713,7 +1721,6 @@ impl Render for KeywordHighlightWindow {
             .flex_none()
             .when_some(unsaved_notice, |d, notice| d.child(notice))
             .child(popup_footer_button(
-                palette,
                 "keyword-cancel",
                 t!("common.cancel"),
                 false,
@@ -1733,7 +1740,6 @@ impl Render for KeywordHighlightWindow {
             // "Apply" writes the rules without closing the editor, so the
             // user can keep editing them right away.
             .child(popup_footer_button(
-                palette,
                 "keyword-apply",
                 t!("common.apply"),
                 false,
@@ -1741,7 +1747,6 @@ impl Render for KeywordHighlightWindow {
                 cx.listener(|this, _, _, cx| this.apply(cx)),
             ))
             .child(popup_footer_button(
-                palette,
                 "keyword-save",
                 t!("common.save"),
                 true,
@@ -1751,6 +1756,9 @@ impl Render for KeywordHighlightWindow {
         let footer = div()
             .flex()
             .gap_2()
+            .pt_3()
+            .border_t_1()
+            .border_color(rgb(palette.border))
             .items_center()
             .justify_between()
             .flex_none()
@@ -1908,54 +1916,24 @@ fn parse_popup_swatch(value: &str) -> Option<u32> {
     u32::from_str_radix(digits, 16).ok()
 }
 
-/// Footer button styled like the settings panel's cancel/confirm pair: an
-/// outlined secondary button and a filled primary button, both 28px tall.
+/// Shared buttons retain keyboard focus and activation in the child window.
 fn popup_footer_button(
-    palette: ThemePalette,
     id: &'static str,
     label: impl Into<SharedString>,
     primary: bool,
     disabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    let button = div()
-        .id(id)
-        .h(px(28.))
-        .min_w(px(64.))
-        .px_4()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .text_size(px(11.));
-    let button = if primary {
-        let fill = if disabled {
-            palette.text_dimmed
+    NyaButton::new(id, label)
+        .variant(if primary {
+            NyaButtonVariant::Primary
         } else {
-            palette.link
-        };
-        button
-            .bg(rgb(fill))
-            .font_weight(gpui::FontWeight(600.))
-            .text_color(rgb(palette.text_on_fill(fill)))
-            .when(!disabled, |this| this.cursor_pointer().on_click(on_click))
-    } else {
-        button
-            .border_1()
-            .border_color(rgb(palette.border))
-            .text_color(if disabled {
-                rgb(palette.text_dimmed)
-            } else {
-                rgb(palette.text)
-            })
-            .when(!disabled, |this| {
-                this.cursor_pointer()
-                    .hover(move |this| this.bg(rgb(palette.hover)))
-                    .on_click(on_click)
-            })
-    };
-    button.child(label)
+            NyaButtonVariant::Secondary
+        })
+        .height(px(32.))
+        .text_size(px(12.))
+        .disabled(disabled)
+        .on_click(on_click)
 }
 
 /// Warning notice shown next to the cancel button when a close attempt would

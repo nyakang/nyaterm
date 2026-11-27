@@ -845,6 +845,7 @@
     "switchTerminal": "コマンドパレットを開く"
   },
   "common": {
+    "back": "戻る",
     "apply": "適用",
     "operationSucceeded": "操作が完了しました",
     "nothingToCopy": "コピーする内容がありません",

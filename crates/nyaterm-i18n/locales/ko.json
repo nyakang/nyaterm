@@ -845,6 +845,7 @@
     "switchTerminal": "명령 팔레트 열기"
   },
   "common": {
+    "back": "뒤로",
     "apply": "적용",
     "operationSucceeded": "작업이 완료되었습니다",
     "nothingToCopy": "복사할 내용이 없습니다",

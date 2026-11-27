@@ -845,6 +845,7 @@
     "switchTerminal": "Ouvrir la palette de commandes"
   },
   "common": {
+    "back": "Retour",
     "apply": "Appliquer",
     "operationSucceeded": "Opération terminée",
     "nothingToCopy": "Aucun contenu à copier",
