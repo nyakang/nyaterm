@@ -5,12 +5,18 @@ use std::process::{Child, Command};
 
 pub(crate) struct AgentChild {
     child: Child,
+    terminated: bool,
     #[cfg(windows)]
     job: windows::Job,
 }
 
 impl AgentChild {
     pub(crate) fn spawn(command: &mut Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            command.process_group(0);
+        }
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt as _;
@@ -22,6 +28,7 @@ impl AgentChild {
         };
         let owner = Self {
             child: command.spawn()?,
+            terminated: false,
             #[cfg(windows)]
             job,
         };
@@ -38,8 +45,18 @@ impl AgentChild {
     }
 
     pub(crate) fn terminate(&mut self) {
+        if self.terminated {
+            return;
+        }
+        self.terminated = true;
         #[cfg(windows)]
         self.job.terminate();
+        #[cfg(unix)]
+        {
+            // The child created its own process group before executing. Kill descendants
+            // before joining pipe readers, including when the group leader already exited.
+            unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) };
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -48,6 +65,39 @@ impl AgentChild {
 impl Drop for AgentChild {
     fn drop(&mut self) {
         self.terminate();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    use super::AgentChild;
+
+    #[test]
+    fn cleanup_closes_descendant_pipes_even_after_the_parent_exits() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & echo ready"])
+            .stdout(Stdio::piped());
+        let mut child = AgentChild::spawn(&mut command).unwrap();
+        let mut reader = BufReader::new(child.child_mut().stdout.take().unwrap());
+        let mut ready = String::new();
+        reader.read_line(&mut ready).unwrap();
+        assert_eq!(ready.trim(), "ready");
+        child.child_mut().wait().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            child.terminate();
+            child.terminate();
+            reader.read_to_end(&mut Vec::new()).unwrap();
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("descendants must not hold pipes open");
+        worker.join().unwrap();
     }
 }
 

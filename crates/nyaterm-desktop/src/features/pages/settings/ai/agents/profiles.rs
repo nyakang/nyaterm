@@ -217,7 +217,7 @@ impl SettingsPanel {
                     .loading(busy)
                     .disabled(
                         status.pending
-                            || !cfg!(windows)
+                            || !nyaterm_agent_client::acp::policy::platform_supported(profile)
                             || !profile.strategy.supported()
                             || editor.errors.contains_key(&id),
                     )

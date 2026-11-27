@@ -79,7 +79,7 @@ pub fn codex_thread_start_request_with_language(
         "approvalPolicy": {
             "granular": {
                 "rules": false,
-                "mcp_elicitations": false,
+                "mcp_elicitations": true,
                 "request_permissions": false,
                 "sandbox_approval": false
             }
@@ -117,6 +117,58 @@ pub fn codex_thread_resume_request_with_language(
         "threadId": thread_id,
         "developerInstructions": codex_developer_instructions_with_language(language)
     } })
+}
+
+/// Rebind a resumed thread to this request's MCP credential and approval policy.
+pub fn codex_thread_resume_request_with_mcp(
+    id: u64,
+    thread_id: &str,
+    model: Option<&str>,
+    mcp: &CodexMcpConfig,
+    language: &str,
+) -> Value {
+    let mut request = codex_thread_start_request_with_language(id, model, false, mcp, language);
+    request["method"] = json!("thread/resume");
+    let params = request["params"]
+        .as_object_mut()
+        .expect("thread parameters");
+    params.remove("ephemeral");
+    params.insert("threadId".into(), json!(thread_id));
+    request
+}
+
+/// Codex's confirmation only permits the request to reach NyaTerm's capability
+/// authorizer. It must never authorize native tools, another server, or a form
+/// asking for user data. NyaTerm still applies Confirm/Observer and session scope.
+pub fn codex_server_request_response(
+    id: u64,
+    method: &str,
+    params: &Value,
+    thread_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> Value {
+    let schema = &params["requestedSchema"];
+    let matches_thread = thread_id.is_some_and(|thread| params["threadId"] == thread);
+    let matches_turn = params["turnId"].is_null()
+        || turn_id.is_none()
+        || turn_id.is_some_and(|turn| params["turnId"] == turn);
+    if method == "mcpServer/elicitation/request"
+        && matches_thread
+        && matches_turn
+        && params["serverName"] == "nyaterm"
+        && params["mode"] == "form"
+        && params["_meta"]["codex_approval_kind"] == "mcp_tool_call"
+        && params["_meta"]["codex_requires_user_input"] != true
+        && schema["type"] == "object"
+        && schema["properties"]
+            .as_object()
+            .is_some_and(|p| p.is_empty())
+        && (schema["required"].is_null()
+            || schema["required"].as_array().is_some_and(|r| r.is_empty()))
+    {
+        return json!({"id": id, "result": {"action": "accept", "content": null, "_meta": null}});
+    }
+    codex_decline_server_request(id, method)
 }
 
 pub fn codex_turn_start_request(
@@ -342,5 +394,81 @@ mod tests {
             assert!(!sanitized.contains(secret));
         }
         assert!(sanitized.contains("code=[REDACTED]&state=ok"));
+    }
+
+    #[test]
+    fn only_current_nyaterm_tool_confirmation_reaches_the_capability_authorizer() {
+        use super::codex_server_request_response;
+        use serde_json::json;
+        let params = json!({"threadId":"thread", "turnId":"turn", "serverName":"nyaterm",
+            "mode":"form", "_meta":{"codex_approval_kind":"mcp_tool_call", "persist":["session","always"]},
+            "requestedSchema":{"type":"object","properties":{}}});
+        let respond = |params: &serde_json::Value| {
+            codex_server_request_response(
+                7,
+                "mcpServer/elicitation/request",
+                params,
+                Some("thread"),
+                Some("turn"),
+            )
+        };
+        assert_eq!(
+            respond(&params)["result"],
+            json!({"action":"accept","content":null,"_meta":null})
+        );
+        for (pointer, value) in [
+            ("/threadId", json!("other")),
+            ("/turnId", json!("old")),
+            ("/serverName", json!("other")),
+            ("/mode", json!("url")),
+            ("/_meta/codex_approval_kind", json!("browser_auth")),
+            (
+                "/requestedSchema/properties",
+                json!({"password":{"type":"string"}}),
+            ),
+        ] {
+            let mut invalid = params.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(
+                respond(&invalid)["result"]["action"],
+                "decline",
+                "{pointer}"
+            );
+        }
+        assert_eq!(
+            codex_server_request_response(7, "mcpServer/elicitation/request", &params, None, None)
+                ["result"]["action"],
+            "decline"
+        );
+        assert_eq!(
+            codex_server_request_response(
+                7,
+                "item/commandExecution/requestApproval",
+                &params,
+                Some("thread"),
+                Some("turn")
+            )["result"]["decision"],
+            "decline"
+        );
+    }
+
+    #[test]
+    fn resumed_threads_refresh_mcp_credentials_and_enable_host_scoped_confirmations() {
+        use super::codex_thread_resume_request_with_mcp;
+        let mcp = CodexMcpConfig {
+            command: "nyaterm-mcp".into(),
+            env: HashMap::from([("NYATERM_MCP_TOKEN".into(), "new-fixture-token".into())]),
+        };
+        let resumed = codex_thread_resume_request_with_mcp(2, "saved", None, &mcp, "en");
+        assert_eq!(resumed["method"], "thread/resume");
+        assert_eq!(resumed["params"]["threadId"], "saved");
+        assert_eq!(
+            resumed["params"]["approvalPolicy"]["granular"]["mcp_elicitations"],
+            true
+        );
+        assert_eq!(
+            resumed["params"]["config"]["mcp_servers"]["nyaterm"]["env"]["NYATERM_MCP_TOKEN"],
+            "new-fixture-token"
+        );
     }
 }

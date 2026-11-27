@@ -164,3 +164,85 @@ pub fn claude_engine(adapter: &Path, cancel: &AtomicBool) -> Result<PathBuf, Age
     }
     Ok(engine)
 }
+
+/// Pin the engine as well as the adapter: their approval and configuration contracts
+/// evolve independently. Do not let the adapter select another Codex from PATH.
+pub fn codex_engine(adapter: &Path, cancel: &AtomicBool) -> Result<PathBuf, AgentError> {
+    let platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let cpu = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let target = if cfg!(windows) {
+        "pc-windows-msvc"
+    } else if cfg!(target_os = "macos") {
+        "apple-darwin"
+    } else {
+        "unknown-linux-musl"
+    };
+    let name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let mut candidates = vec![
+        adapter
+            .parent()
+            .ok_or(AgentError::UnsupportedVersion)?
+            .join(name),
+    ];
+    for ancestor in adapter.ancestors().skip(1).take(9) {
+        let modules = if ancestor.file_name().is_some_and(|n| n == "node_modules") {
+            ancestor.to_path_buf()
+        } else {
+            ancestor.join("node_modules")
+        };
+        for root in [
+            modules.join("@agentclientprotocol/codex-acp/node_modules"),
+            modules,
+        ] {
+            for package in [
+                format!("@openai/codex-{platform}-{arch}"),
+                "@openai/codex".into(),
+            ] {
+                for directory in ["bin", "codex"] {
+                    candidates.push(
+                        root.join(&package)
+                            .join("vendor")
+                            .join(format!("{cpu}-{target}"))
+                            .join(directory)
+                            .join(name),
+                    );
+                    candidates.push(
+                        root.join("@openai/codex/node_modules")
+                            .join(&package)
+                            .join("vendor")
+                            .join(format!("{cpu}-{target}"))
+                            .join(directory)
+                            .join(name),
+                    );
+                }
+            }
+        }
+    }
+    let engine = candidates
+        .into_iter()
+        .find(|p| p.is_file())
+        .ok_or(AgentError::UnsupportedVersion)?;
+    let engine = std::fs::canonicalize(engine).map_err(|_| AgentError::UnsupportedVersion)?;
+    if !crate::acp::policy::matches_version(
+        &version(&engine, cancel)?,
+        crate::acp::policy::CODEX_ENGINE_VERSION,
+    ) {
+        return Err(AgentError::UnsupportedVersion);
+    }
+    Ok(engine)
+}

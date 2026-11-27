@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::acp::AgentError;
 
 pub const CODEX_ADAPTER_VERSION: &str = "2.10.0";
+pub const CODEX_ENGINE_VERSION: &str = "0.171.0";
 pub const CLAUDE_ADAPTER_VERSION: &str = "0.110.0";
 
 pub fn expected_version(profile: &ExternalAgentProfile) -> Result<&'static str, AgentError> {
@@ -21,14 +22,17 @@ pub fn expected_version(profile: &ExternalAgentProfile) -> Result<&'static str, 
 
 /// Admission is separate from discovery: an installed adapter is not a sandbox.
 pub fn admit_execution(profile: &ExternalAgentProfile) -> Result<(), AgentError> {
-    if !cfg!(windows) {
+    if !platform_supported(profile) {
         return Err(AgentError::UnsupportedPlatform);
     }
     match profile.strategy.0.as_str() {
-        "claude" => Ok(()),
-        "codex" => Err(AgentError::PolicyUnavailable),
+        "claude" | "codex" => Ok(()),
         _ => Err(AgentError::UnsupportedStrategy),
     }
+}
+
+pub fn platform_supported(profile: &ExternalAgentProfile) -> bool {
+    cfg!(windows) || (cfg!(target_os = "linux") && profile.strategy.0 == "codex")
 }
 
 pub fn matches_version(actual: &str, expected: &str) -> bool {
@@ -41,12 +45,17 @@ pub(crate) fn clear_unsafe_environment(command: &mut Command) {
     // A profile cannot inherit an alternative executable, Node preload, hooks, or tool policy.
     for (name, _) in std::env::vars_os() {
         let upper = name.to_string_lossy().to_ascii_uppercase();
-        if ["CODEX_", "CLAUDE_", "NODE_", "LD_", "DYLD_", "MCP_"]
+        if ["CODEX_", "CLAUDE_", "NODE_", "BUN_", "LD_", "DYLD_", "MCP_"]
             .iter()
             .any(|prefix| upper.starts_with(prefix))
             || matches!(
                 upper.as_str(),
-                "BASH_ENV" | "ENV" | "INITIAL_AGENT_MODE" | "APP_SERVER_LOGS"
+                "BASH_ENV"
+                    | "ENV"
+                    | "INITIAL_AGENT_MODE"
+                    | "APP_SERVER_LOGS"
+                    | "DEFAULT_AUTH_REQUEST"
+                    | "MODEL_PROVIDER"
             )
         {
             command.env_remove(name);
@@ -81,6 +90,8 @@ pub fn configure(command: &mut Command, profile: &ExternalAgentProfile) -> Resul
             || name.starts_with("CODEX_")
             || name.starts_with("CLAUDE_")
             || name.starts_with("NODE_")
+            || name.starts_with("BUN_")
+            || name.starts_with("MCP_")
             || name.starts_with("LD_")
             || name.starts_with("DYLD_")
             || matches!(
@@ -92,6 +103,8 @@ pub fn configure(command: &mut Command, profile: &ExternalAgentProfile) -> Resul
                     | "ENV"
                     | "INITIAL_AGENT_MODE"
                     | "APP_SERVER_LOGS"
+                    | "DEFAULT_AUTH_REQUEST"
+                    | "MODEL_PROVIDER"
             )
         {
             return Err(AgentError::Configuration(
@@ -118,6 +131,7 @@ pub fn configure(command: &mut Command, profile: &ExternalAgentProfile) -> Resul
             command.env("CODEX_CONFIG", json!({
                 "sandbox_mode": "read-only", "approval_policy": "on-request",
                 "approvals_reviewer": "user", "web_search": "disabled",
+                "tools": {"experimental_request_user_input": {"enabled": false}, "update_plan": {"enabled": false}},
                 "features": {
                     "shell_tool": false, "unified_exec": false, "apply_patch_freeform": false,
                     "js_repl": false, "code_mode": false, "code_mode_host": false,
@@ -176,6 +190,43 @@ pub fn is_nyaterm_permission(tool_call: &Value) -> bool {
         })
 }
 
+/// Codex 2.10.0 permissions are partial tool updates. Bind their IDs to a prior
+/// structured MCP notification, never to the human-readable title or `kind`.
+#[derive(Default)]
+pub(super) struct CodexPermissions {
+    pending: std::collections::HashSet<String>,
+}
+
+impl CodexPermissions {
+    pub(super) fn observe(&mut self, update: &Value) {
+        let Some(id) = update["toolCallId"].as_str() else {
+            return;
+        };
+        if update["sessionUpdate"] == "tool_call" {
+            self.pending.remove(id);
+        }
+        if matches!(update["status"].as_str(), Some("completed" | "failed")) {
+            self.pending.remove(id);
+        } else if update["sessionUpdate"] == "tool_call"
+            && update["_meta"]["is_mcp_tool_call"] == true
+            && update["rawInput"]["server"] == super::codex_policy::SERVER_NAME
+            && update["rawInput"]["tool"]
+                .as_str()
+                .is_some_and(|name| !name.is_empty())
+            && self.pending.len() < 256
+        {
+            self.pending.insert(id.into());
+        }
+    }
+
+    pub(super) fn authorize(&mut self, request: &Value) -> bool {
+        request["_meta"]["is_mcp_tool_approval"] == true
+            && request["toolCall"]["toolCallId"]
+                .as_str()
+                .is_some_and(|id| self.pending.remove(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::acp::policy::{is_nyaterm_permission, matches_version, session_metadata};
@@ -194,6 +245,30 @@ mod tests {
             &json!({"_meta":{"toolName":"mcp__nyaterm__execute"}})
         ));
         assert!(!matches_version("12.10.0", "2.10.0"));
+    }
+
+    #[test]
+    fn codex_permissions_require_a_live_structured_mcp_call_and_are_single_use() {
+        use super::CodexPermissions;
+        let mut permissions = CodexPermissions::default();
+        let request =
+            json!({"_meta":{"is_mcp_tool_approval":true},"toolCall":{"toolCallId":"call"}});
+        assert!(!permissions.authorize(&request));
+        let mut notification = json!({"sessionUpdate":"tool_call","toolCallId":"call","status":"pending",
+            "_meta":{"is_mcp_tool_call":true},"rawInput":{"server":"foreign","tool":"terminal_execute"}});
+        permissions.observe(&notification);
+        assert!(!permissions.authorize(&request));
+        notification["rawInput"]["server"] = json!(super::super::codex_policy::SERVER_NAME);
+        permissions.observe(&notification);
+        assert!(
+            !permissions
+                .authorize(&json!({"toolCall":{"toolCallId":"call","title":"NyaTerm MCP"}}))
+        );
+        assert!(permissions.authorize(&request));
+        assert!(!permissions.authorize(&request));
+        permissions.observe(&notification);
+        permissions.observe(&json!({"toolCallId":"call","status":"completed"}));
+        assert!(!permissions.authorize(&request));
     }
 
     #[test]

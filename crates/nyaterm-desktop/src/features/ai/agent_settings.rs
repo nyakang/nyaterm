@@ -355,7 +355,10 @@ mod tests {
         assert!(!default_selectable(&profile));
         profile.args.clear();
         profile.strategy.0 = "codex".into();
-        assert!(!default_selectable(&profile));
+        assert_eq!(
+            default_selectable(&profile),
+            cfg!(any(windows, target_os = "linux"))
+        );
         profile.strategy.0 = "future".into();
         assert!(!default_selectable(&profile));
     }

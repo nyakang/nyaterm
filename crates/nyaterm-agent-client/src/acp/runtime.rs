@@ -87,7 +87,7 @@ pub fn run(
     on_event: &mut dyn FnMut(AgentEvent) -> Result<(), String>,
     on_cancel: &mut dyn FnMut(),
 ) -> Result<AgentRunResult, AgentError> {
-    if !cfg!(windows) {
+    if !policy::platform_supported(profile) {
         return Err(AgentError::UnsupportedPlatform);
     }
     if cancel.load(Ordering::Acquire) {
@@ -107,6 +107,8 @@ pub fn run(
     }
     let engine = if profile.strategy.0 == "claude" {
         Some(discovery::claude_engine(&executable, cancel)?)
+    } else if profile.strategy.0 == "codex" {
+        Some(discovery::codex_engine(&executable, cancel)?)
     } else {
         None
     };
@@ -150,6 +152,16 @@ fn run_resolved(
                 .map_err(|_| AgentError::Configuration("Invalid Agent workspace"))?
         }
     };
+    let codex_launch = if profile.strategy.0 == "codex" {
+        Some(super::codex_policy::CodexLaunch::prepare(
+            profile,
+            engine.ok_or(AgentError::UnsupportedVersion)?,
+            &cwd,
+            cancel,
+        )?)
+    } else {
+        None
+    };
     let mut command = Command::new(executable);
     command
         .args(&profile.args)
@@ -158,7 +170,9 @@ fn run_resolved(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     policy::configure(&mut command, profile)?;
-    if let Some(engine) = engine {
+    if let Some(launch) = &codex_launch {
+        launch.configure(&mut command);
+    } else if let Some(engine) = engine {
         command.env("CLAUDE_CODE_EXECUTABLE", engine);
     }
     let mut child = ExternalAgentChild::spawn(&mut command).map_err(|_| AgentError::Transport)?;
@@ -224,7 +238,16 @@ fn run_resolved(
     let shared_outcome = outcome.clone();
     let profile = profile.clone();
     let cwd = cwd.to_string_lossy().into_owned();
-    let server = helper.map(|helper| policy::mcp_server(helper, &mcp_environment));
+    let server = helper.map(|helper| {
+        let mut server = policy::mcp_server(helper, &mcp_environment);
+        if profile.strategy.0 == "codex" {
+            server["name"] = json!(super::codex_policy::SERVER_NAME);
+        }
+        server
+    });
+    let codex_permissions = Arc::new(Mutex::new(super::policy::CodexPermissions::default()));
+    let notify_permissions = codex_permissions.clone();
+    let is_codex = profile.strategy.0 == "codex";
     let mut notify_events = event_tx.clone();
     let stopped = Arc::new(AtomicBool::new(false));
     let permission_stopped = stopped.clone();
@@ -237,6 +260,9 @@ fn run_resolved(
                 if belongs {
                     let update = serde_json::to_value(notification.update)
                         .map_err(|_| agent_client_protocol::Error::internal_error())?;
+                    if is_codex {
+                        notify_permissions.lock().unwrap().observe(&update);
+                    }
                     if let Some(event) = update_event(&update) {
                         notify_events
                             .send(event)
@@ -255,7 +281,12 @@ fn run_resolved(
                 let tool = serde_json::to_value(&request.tool_call).unwrap_or(Value::Null);
                 let allow = belongs
                     && !permission_stopped.load(Ordering::Acquire)
-                    && policy::is_nyaterm_permission(&tool);
+                    && if is_codex {
+                        let request_value = serde_json::to_value(&request).unwrap_or(Value::Null);
+                        codex_permissions.lock().unwrap().authorize(&request_value)
+                    } else {
+                        policy::is_nyaterm_permission(&tool)
+                    };
                 let desired = if allow {
                     PermissionOptionKind::AllowOnce
                 } else {
@@ -548,18 +579,23 @@ async fn exchange(
             value,
         )
     };
-    if profile.strategy.0 == "claude" {
+    if matches!(profile.strategy.0.as_str(), "claude" | "codex") {
+        let strict_mode = if profile.strategy.0 == "codex" {
+            "read-only"
+        } else {
+            "default"
+        };
         // The adapter chooses its own initial mode; SDK options.permissionMode is overwritten.
         // Set the negotiated mode explicitly before the first prompt, including resumed sessions.
         if !options
             .pointer("/modes/availableModes")
             .and_then(Value::as_array)
-            .is_some_and(|modes| modes.iter().any(|mode| mode["id"] == "default"))
+            .is_some_and(|modes| modes.iter().any(|mode| mode["id"] == strict_mode))
         {
             return Err(AgentError::Protocol("strict approval mode unavailable"));
         }
         peer.send_request(decode::<SetSessionModeRequest>(
-            json!({"sessionId":session_id,"modeId":"default"}),
+            json!({"sessionId":session_id,"modeId":strict_mode}),
         )?)
         .block_task()
         .await

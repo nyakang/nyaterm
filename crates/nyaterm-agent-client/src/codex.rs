@@ -5,9 +5,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use nyaterm_core::ai::{
-    CodexMcpConfig, CodexServerEvent, build_codex_agent_prompt, codex_decline_server_request,
-    codex_initialize_request, codex_initialized_notification,
-    codex_thread_resume_request_with_language, codex_thread_start_request_with_language,
+    CodexMcpConfig, CodexServerEvent, build_codex_agent_prompt, codex_initialize_request,
+    codex_initialized_notification, codex_server_request_response,
+    codex_thread_resume_request_with_mcp, codex_thread_start_request_with_language,
     codex_turn_interrupt_request, codex_turn_start_request, parse_codex_server_line,
     sanitize_codex_log_line,
 };
@@ -96,7 +96,7 @@ fn run_protocol(
         writer,
         &codex_initialize_request(1, env!("CARGO_PKG_VERSION")),
     )?;
-    wait_response(1, writer, lines, cancel, child)?;
+    wait_response(1, writer, lines, cancel, child, None)?;
     send(writer, &codex_initialized_notification())?;
 
     let model = request
@@ -111,9 +111,15 @@ fn run_protocol(
     let thread_id = if let Some(thread_id) = reusable {
         send(
             writer,
-            &codex_thread_resume_request_with_language(2, thread_id, &request.options.language),
+            &codex_thread_resume_request_with_mcp(
+                2,
+                thread_id,
+                model,
+                &mcp,
+                &request.options.language,
+            ),
         )?;
-        wait_response(2, writer, lines, cancel, child)?;
+        wait_response(2, writer, lines, cancel, child, None)?;
         thread_id.to_string()
     } else {
         send(
@@ -126,7 +132,7 @@ fn run_protocol(
                 &request.options.language,
             ),
         )?;
-        let result = wait_response(2, writer, lines, cancel, child)?;
+        let result = wait_response(2, writer, lines, cancel, child, None)?;
         result
             .get("thread")
             .and_then(|thread| thread.get("id"))
@@ -141,7 +147,7 @@ fn run_protocol(
         writer,
         &codex_turn_start_request(3, &thread_id, &prompt, model),
     )?;
-    let turn = wait_response(3, writer, lines, cancel, child)?;
+    let turn = wait_response(3, writer, lines, cancel, child, Some(&thread_id))?;
     let turn_id = turn
         .get("turn")
         .and_then(|turn| turn.get("id"))
@@ -176,8 +182,17 @@ fn run_protocol(
             }
         };
         match parse_codex_server_line(&line)? {
-            CodexServerEvent::ServerRequest { id, method, .. } => {
-                send(writer, &codex_decline_server_request(id, &method))?;
+            CodexServerEvent::ServerRequest { id, method, params } => {
+                send(
+                    writer,
+                    &codex_server_request_response(
+                        id,
+                        &method,
+                        &params,
+                        Some(&thread_id),
+                        Some(&turn_id),
+                    ),
+                )?;
             }
             CodexServerEvent::TextDelta {
                 turn_id: event_turn,
@@ -227,6 +242,7 @@ fn wait_response(
     lines: &mpsc::Receiver<Result<String, String>>,
     cancel: &AtomicBool,
     child: &mut Child,
+    thread_id: Option<&str>,
 ) -> Result<Value, String> {
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -250,8 +266,11 @@ fn wait_response(
         };
         match parse_codex_server_line(&line)? {
             CodexServerEvent::Response { id, result } if id == expected_id => return result,
-            CodexServerEvent::ServerRequest { id, method, .. } => {
-                send(writer, &codex_decline_server_request(id, &method))?;
+            CodexServerEvent::ServerRequest { id, method, params } => {
+                send(
+                    writer,
+                    &codex_server_request_response(id, &method, &params, thread_id, None),
+                )?;
             }
             CodexServerEvent::Error(error) => return Err(error),
             _ => {}
@@ -302,6 +321,47 @@ mod tests {
             r#"{"commands":[{"command":"uptime"}]}"#
         ));
         assert!(!looks_like_command_plan("system is healthy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_confirmations_before_turn_ack_and_during_turn_reach_nyaterm_on_resume() {
+        let (_directory, script) = fake_codex_script(false);
+        std::fs::write(&script, r##"#!/bin/sh
+read -r request
+echo '{"id":1,"result":{}}'
+read -r notification
+read -r request
+case "$request" in *'"mcp_elicitations":true'*) ;; *) exit 1;; esac
+case "$request" in *'"NYATERM_MCP_TOKEN":"fixture-token"'*) ;; *) exit 1;; esac
+echo '{"id":2,"result":{"thread":{"id":"thread-fixture"}}}'
+read -r request
+echo '{"id":41,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-fixture","turnId":"turn-fixture","serverName":"nyaterm","mode":"form","_meta":{"codex_approval_kind":"mcp_tool_call"},"requestedSchema":{"type":"object","properties":{}}}}'
+read -r response
+case "$response" in *'"action":"accept"'*) ;; *) exit 1;; esac
+echo '{"id":3,"result":{"turn":{"id":"turn-fixture"}}}'
+echo '{"id":42,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-fixture","turnId":"turn-fixture","serverName":"nyaterm","mode":"form","_meta":{"codex_approval_kind":"mcp_tool_call"},"requestedSchema":{"type":"object","properties":{}}}}'
+read -r response
+case "$response" in *'"action":"accept"'*) ;; *) exit 1;; esac
+echo '{"id":43,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-fixture","turnId":"turn-fixture"}}'
+read -r response
+case "$response" in *'"decision":"decline"'*) ;; *) exit 1;; esac
+echo '{"method":"turn/completed","params":{"turn":{"id":"turn-fixture","status":"completed","items":[{"type":"agentMessage","text":"capability host reached"}]}}}'
+"##).unwrap();
+        let (settings, request) = fixture_request(&script);
+        for existing in [None, Some("thread-fixture")] {
+            let result = run_codex_app_server(
+                &settings,
+                &request,
+                existing,
+                &mut |_, _| {},
+                &AtomicBool::new(false),
+                fixture_mcp_environment(),
+                &script,
+            )
+            .unwrap();
+            assert_eq!(result.text, "capability host reached");
+        }
     }
 
     #[test]

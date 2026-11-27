@@ -17,7 +17,8 @@ fn main() {
                 json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"nyaterm-acceptance","version":"1"}})
             }
             "tools/list" => {
-                json!({"tools":[{"name":"acceptance_ping","description":"Return the fixed acceptance marker; no side effects","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}]})
+                // Force Codex's approval path even though this local fixture has no effects.
+                json!({"tools":[{"name":"acceptance_ping","description":"Return the fixed acceptance marker; no side effects","annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}]})
             }
             "tools/call" => {
                 json!({"content":[{"type":"text","text":format!("NYATERM_MCP_ACCEPTANCE_OK:{}",std::env::var("ACCEPTANCE_REQUEST_ID").unwrap_or_default())}]})

@@ -7,10 +7,10 @@ This change introduces the ACP v1 backend, instance-based Agent configuration an
 | Strategy | Adapter | Engine | Execution admission |
 | --- | --- | --- | --- |
 | Claude | claude-agent-acp 0.110.0 | Claude Code 2.1.330 (SDK 0.3.330) | Windows strict MCP-only policy; exact adapter and engine checks |
-| Codex | codex-acp 2.10.0 | Not admitted | Inspection only: inherited MCP configuration is merged by the adapter |
+| Codex | @agentclientprotocol/codex-acp 2.10.0 | Codex 0.171.0 | Windows/Linux; inherited MCP servers disabled, native tools and startup hooks excluded |
 | Unknown/custom | Saved verbatim | Unknown | Disabled |
 
-ACP startup on Linux/macOS is currently gated: the existing child guard only reaps a full process tree on Windows. Unix process-group cleanup and platform acceptance must be implemented before enabling it there.
+Codex ACP is enabled on Windows and Linux. Unix children now start in an owned process group; cleanup kills that group before joining pipe readers. Claude on Linux and all adapters on macOS remain gated pending platform acceptance.
 
 Users install adapters themselves. Nothing in the product downloads an engine. The acceptance installation under `target/acp-validation` is a local test fixture, not a runtime dependency. Extra startup arguments are retained in configuration but refused by the admitted strategies. Npm and bundled Claude engine layouts are recognized; unrecognized layouts/versions fail closed instead of using an arbitrary CLI from PATH.
 
@@ -21,7 +21,7 @@ Users install adapters themselves. Nothing in the product downloads an engine. T
 - Desktop: profile editing, worker scheduling, generation validation, MCP credentials/approvals, transcript persistence and presentation. The internal NyaTerm agent keeps its own runtime.
 - Store: encrypted environment values using the existing credential/master-key formats and portable backup/sync path. No database table or key was renamed. ACP launch profiles are device-local in the current field-level cloud-sync schema (as the old Codex/Claude settings were); portable backup and legacy raw snapshot paths retain their encrypted values.
 
-The old `codex`, `claude_code`, `account`, and `probe` clients are retained until the full acceptance gate passes. Desktop chat dispatch uses ACP for external agents; it never silently falls back to a private protocol when ACP fails. In particular, existing Codex users must be told that ACP execution is currently blocked. This is a migration candidate, **not a complete replacement release**.
+The old `codex`, `claude_code`, `account`, and `probe` clients are retained until the full acceptance gate passes. Desktop chat dispatch uses ACP for external agents; it never silently falls back to a private protocol when ACP fails. Codex now has a version-pinned execution path; the remaining migration and platform gates below still apply before removing the private-protocol clients.
 
 ## Policy details
 
@@ -31,7 +31,13 @@ MCP servers and settings are sent through SDK initialization over stdin (`mcpSer
 
 ACP permission handling accepts only structured NyaTerm MCP identities for the active session and only `allow_once`. Actual capability/terminal approval remains in the NyaTerm MCP host. File and terminal ACP client capabilities are not advertised. Cancel/timeout revoke the request credential before sending cancellation and reaping the child tree. A periodic timer continues cancellation checks under a stream of notifications.
 
-Codex cannot be admitted by adapter version alone: session configuration merges local MCP servers, and feature switches do not establish an exclusive NyaTerm tool boundary. `policy::admit_execution` deliberately rejects it before launching a prompt. A reviewed upstream mechanism or adapter change must eliminate that inheritance and pass the tests below before changing this gate. Do not weaken the gate to make a smoke test green.
+Codex admission pins both adapter 2.10.0 and engine 0.171.0. Before each launch, a bounded app-server `config/read` resolves the effective configuration and its layers, including untrusted project layers that ACP will make trusted. Every inherited MCP server is explicitly disabled through Codex's per-server `enabled` setting. The request's helper and credentials use the reserved `nyaterm_embedded` identity; a pre-existing definition of that identity fails admission rather than merging its transport or environment. Settings, authentication files and existing CLI MCP entries are not rewritten.
+
+A private, temporary launcher applies native-tool, plugin, hook and notification restrictions before app-server initialization, as well as at session setup. It contains only the verified engine path and static restrictions. Read-only mode is explicitly selected on both new and resumed sessions. Configuration is resolved again on each launch; this adapter policy is not an OS sandbox against another process concurrently modifying the user's configuration.
+
+Codex permission requests reference partial tool updates. The client records pending calls only from structured notifications identifying `nyaterm_embedded`, requires the adapter's `is_mcp_tool_approval` marker, and consumes the matching ID once. Only `allow_once` is selected. Native approvals, unknown IDs, completed calls and foreign sessions are rejected. This permits the call to reach the NyaTerm MCP host, whose Confirm/Observer/session-scope policy remains authoritative; it does not grant terminal execution itself. Codex's three resource-list/read tools remain available but can only address the enabled NyaTerm server.
+
+The retained private app-server client also accepts only current-thread NyaTerm MCP tool confirmations with an empty form schema. Resuming refreshes the MCP credential and approval policy, fixing #1318 for backports to the pre-ACP integration.
 
 ## Compatibility
 
@@ -55,7 +61,7 @@ python -X utf8 scripts/tests/acp_adapter_acceptance.py claude PATH_TO_CLAUDE_AGE
 python -X utf8 scripts/tests/acp_adapter_acceptance.py claude PATH_TO_CLAUDE_AGENT_ACP --native
 ```
 
-The real-adapter test uses a loopback synthetic model and a harmless MCP executable. It inspects the actual model tool catalog, requests the tool, restores the session in a new adapter process, and checks that the second invocation uses the new request's MCP environment. Both variants seed conflicting project MCP and startup-hook configuration and assert neither starts. The `--native` variant deliberately returns a Bash call from the synthetic model and verifies the engine rejects it without executing the marker command. It does not call a paid model or use user credentials. The Codex invocation intentionally fails admission.
+The real-adapter test uses a loopback synthetic model and a harmless MCP executable. It inspects the actual model tool catalog, requests the tool, restores the session in a new adapter process, and checks that the second invocation uses the new request's MCP environment. Both variants seed conflicting project MCP and startup-hook configuration and assert neither starts. The `--native` variant deliberately returns a Bash call from the synthetic model and verifies the engine rejects it without executing the marker command. It does not call a paid model or use user credentials. The Codex-specific acceptance probe below covers the restored execution path.
 
 Unit/fixture coverage includes profile migration and deletion, unknown fields, masked secret identity, encrypted environment backup/sync, corruption rejection, instance-bound history, stale account results, replay suppression, foreign-session notifications, native permission denial, cancellation, timeout, EOF, refusals, oversized frames and consumer failure.
 
@@ -78,4 +84,14 @@ On Windows, run the workspace tests with `$env:RUST_MIN_STACK = '8388608'` in th
 
 The workspace test invocation completed all unit/integration suites, then its desktop doctest dependency lookup failed while a second Cargo build updated the shared target directory. All workspace doctests subsequently passed when rerun serially. Run Cargo validation commands sequentially. The final credential fix was revalidated in the affected core, desktop and store packages; the fixture-prefix correction changed no production behavior.
 
-Before deleting legacy clients or making this a complete replacement release, require: Codex MCP exclusivity; actual engine compatibility; the equivalent adversarial Codex probes; old-session behavior; model selection; real authentication flows; cancellation with real child descendants; desktop integration tests and visual verification; Linux/macOS coverage. The local Windows synthetic-model tests are evidence for the paths exercised, not an OS sandbox guarantee.
+Before deleting legacy clients or making this a complete replacement release, require: old-session behavior; model selection; real authentication flows; desktop integration tests and visual verification; the remaining platform coverage. The local Windows synthetic-model tests are evidence for the paths exercised, not an OS sandbox guarantee.
+
+### Codex approval regression validation
+
+```sh
+cargo build -p nyaterm-agent-client --examples
+python scripts/tests/codex_acp_acceptance.py /path/to/codex-acp
+python scripts/tests/codex_acp_acceptance.py /path/to/codex-acp --native
+```
+
+The probe uses an isolated configuration, loopback Responses API and synthetic MCP tool. It verifies a real tool call, fresh credentials on a fresh-process resume, rejection of a forced native command, and that inherited public/project MCP servers and a startup hook do not execute. It checks that source configuration files are unchanged. `CARGO_TARGET_DIR` selects examples built outside the workspace target directory. The validated npm adapter resolves its own Codex 0.171.0 dependency; another global Codex version is not substituted. Windows end-to-end UI verification remains required.

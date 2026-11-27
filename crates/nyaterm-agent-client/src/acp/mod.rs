@@ -1,4 +1,5 @@
 //! ACP v1 transport. Desktop owns jobs, terminal authorization, and credential lifetime.
+mod codex_policy;
 pub mod discovery;
 pub mod policy;
 mod runtime;
@@ -14,13 +15,13 @@ pub enum AgentError {
     #[error("This adapter or engine version has not passed the strict execution policy")]
     UnsupportedVersion,
     #[error(
-        "ACP process-tree cleanup has only been validated on Windows; this platform is not enabled yet"
+        "This Agent is not enabled on this platform; Codex supports Windows and Linux, Claude supports Windows"
     )]
     UnsupportedPlatform,
     #[error("This Agent strategy has not passed the strict execution policy")]
     UnsupportedStrategy,
     #[error(
-        "Codex ACP is not enabled for strict terminal execution: inherited MCP configuration has not passed acceptance; existing history is preserved"
+        "Codex configuration cannot be isolated for NyaTerm MCP execution; existing history is preserved"
     )]
     PolicyUnavailable,
     #[error("Agent startup or transport failed")]
