@@ -2,6 +2,9 @@
 //! the application only owns its lifetime and applies validated changes.
 mod draft;
 mod list;
+mod session_draft;
+
+use self::session_draft::{MatchInput, SessionValidation};
 
 use self::draft::RuleDraftIndex;
 use self::list::{DropPosition, KeywordListDelegate};
@@ -16,8 +19,8 @@ use crate::models::KeywordMatchOption;
 use crate::theme::ThemePalette;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FocusHandle, Hsla, IntoElement,
-    KeyDownEvent, Render, ScrollHandle, SharedString, Subscription, Window, div, prelude::*, px,
-    rgb, rgba,
+    KeyDownEvent, Render, ScrollHandle, SharedString, Subscription, Task, Window, div, prelude::*,
+    px, rgb, rgba,
 };
 use nyaterm_core::KeywordHighlightRule;
 use nyaterm_ui::{
@@ -28,6 +31,7 @@ use nyaterm_ui::{
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 #[derive(Default)]
 pub(super) struct KeywordHighlightPopupState {
@@ -318,16 +322,30 @@ fn open_editor(app: Entity<NyaTermApp>, session_id: String, prefill: String, cx:
     });
 }
 
+#[derive(Clone, PartialEq)]
+struct ListSnapshotIdentity {
+    revision: u64,
+    selected: Option<String>,
+    saving: bool,
+    session_alive: bool,
+    palette: ThemePalette,
+}
+
 struct KeywordHighlightWindow {
     app: Entity<NyaTermApp>,
     session_id: String,
-    /// Snapshot of the global catalogue when the editor opened. The session
-    /// rules are applied right away, so they need no draft baseline.
+    /// Global baseline used for conflict-aware persistence. Session edits are
+    /// separately validated before publication to the terminal.
     base_global: Vec<KeywordHighlightRule>,
     /// Draft of the global catalogue.
     global: Vec<KeywordHighlightRule>,
-    /// Live session rules; every change is written to the session at once.
+    /// Session draft; only validated matching inputs reach the terminal.
     session: Vec<KeywordHighlightRule>,
+    session_validation: SessionValidation,
+    session_tasks: HashMap<String, Task<()>>,
+    pending_save: Option<bool>,
+    list_revision: u64,
+    list_synced: Option<ListSnapshotIdentity>,
     list: Option<Entity<ListState<KeywordListDelegate>>>,
     selected: Option<String>,
     indexes: [RuleDraftIndex; 2],
@@ -416,6 +434,11 @@ impl KeywordHighlightWindow {
             {
                 this.palette = palette;
                 this.session_alive = alive;
+                if !alive {
+                    this.session_tasks.clear();
+                    this.pending_save = None;
+                    this.saving = false;
+                }
                 this.appearance = appearance;
                 cx.notify();
             }
@@ -434,7 +457,12 @@ impl KeywordHighlightWindow {
             session_id,
             base_global: global.clone(),
             global,
+            session_validation: SessionValidation::from_applied(&session),
             session,
+            session_tasks: HashMap::new(),
+            pending_save: None,
+            list_revision: 0,
+            list_synced: None,
             list,
             selected: None,
             indexes: Default::default(),
@@ -495,6 +523,7 @@ impl KeywordHighlightWindow {
     }
 
     fn rules_mut(&mut self, scope: RuleScope) -> &mut Vec<KeywordHighlightRule> {
+        self.list_revision = self.list_revision.wrapping_add(1);
         match scope {
             RuleScope::Session => &mut self.session,
             RuleScope::Global => &mut self.global,
@@ -526,14 +555,26 @@ impl KeywordHighlightWindow {
             .find(|rule| rule.id == *id)
     }
 
-    /// Only the global catalogue keeps a draft; the session rules are applied
-    /// as soon as they change.
+    /// Global edits and session inputs still awaiting acceptance need a close guard.
+    /// Valid session edits have already been applied and are not rolled back.
     fn dirty(&self) -> bool {
-        self.indexes[1].dirty() || order_changed(&self.base_global, &self.global)
+        self.indexes[1].dirty()
+            || order_changed(&self.base_global, &self.global)
+            || self.session_validation.has_unapplied()
     }
 
     fn dirty_ids(&self) -> HashSet<String> {
-        self.indexes[1].changed_ids().iter().cloned().collect()
+        self.indexes[1]
+            .changed_ids()
+            .iter()
+            .cloned()
+            .chain(
+                self.session
+                    .iter()
+                    .filter(|rule| !self.session_validation.valid(&rule.id))
+                    .map(|rule| rule.id.clone()),
+            )
+            .collect()
     }
 
     fn seed_inputs(&mut self, cx: &mut Context<Self>) {
@@ -556,6 +597,17 @@ impl KeywordHighlightWindow {
         let Some(list) = self.list.clone() else {
             return;
         };
+        let identity = ListSnapshotIdentity {
+            revision: self.list_revision,
+            selected: self.selected.clone(),
+            saving: self.saving,
+            session_alive: self.session_alive,
+            palette: self.palette,
+        };
+        if self.list_synced.as_ref() == Some(&identity) {
+            return;
+        }
+        self.list_synced = Some(identity);
         let session = self.session.clone();
         let global = self.global.clone();
         let dirty = self.dirty_ids();
@@ -677,51 +729,94 @@ impl KeywordHighlightWindow {
         }
     }
 
-    /// Write the session rules to the session, rejecting invalid patterns.
-    fn commit_session(&mut self, cx: &mut Context<Self>) {
-        let mut invalid = None;
-        for rule in &self.session {
-            if let Some(error) =
-                nyaterm_terminal_gpui::keywords::validation::validate_keyword_highlight_patterns(
-                    &rule.patterns,
-                    rule.case_sensitive,
-                    rule.whole_word,
-                    rule.use_regex,
-                )
-                .into_iter()
-                .next()
-            {
-                invalid = Some((rule.name.clone(), error));
-                break;
-            }
-        }
-        if let Some((name, error)) = invalid {
-            self.error = Some(
+    fn session_error(&self) -> Option<String> {
+        self.session_validation
+            .error(&self.session)
+            .map(|(rule, error)| {
                 t!(
                     "terminalCtx.invalidRulePattern",
-                    name = name,
+                    name = rule.name,
                     line = error.line,
                     error = error.message
                 )
-                .to_string(),
-            );
-            // Drop the rejected edit and keep the last applied state.
-            self.session = self
-                .app
-                .read(cx)
-                .session_keyword_rules(&self.session_id)
-                .unwrap_or_default()
-                .to_vec();
-            self.indexes[0].rebuild(&[], &self.session);
-            cx.notify();
+                .to_string()
+            })
+    }
+
+    fn start_session_validation(
+        &mut self,
+        id: String,
+        generation: u64,
+        input: MatchInput,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        let task_id = id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let error = cx.background_spawn(async move { input.validate() }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.closed
+                    || !this.session_alive
+                    || !this.session_validation.finish(&id, generation, error)
+                {
+                    return;
+                }
+                this.commit_session(cx);
+                if !this.session_validation.has_pending()
+                    && let Some(close_after) = this.pending_save.take()
+                {
+                    this.saving = false;
+                    this.seed_inputs(cx);
+                    this.persist_global(close_after, cx);
+                }
+                cx.notify();
+            });
+        });
+        self.session_tasks.insert(task_id, task);
+    }
+
+    /// Keep invalid input in the editor and publish only accepted rules.
+    /// Validation is per matching input, independent of names, colours and order.
+    fn commit_session(&mut self, cx: &mut Context<Self>) {
+        if self.closed || !self.session_alive {
             return;
         }
-        self.error = None;
-        let owner = self.session_id.clone();
-        let rules = self.session.clone();
-        self.app.update(cx, |app, cx| {
-            app.set_session_keyword_rules(&owner, rules, cx);
-        });
+        let jobs = self.session_validation.reconcile(&self.session);
+        let ids: HashSet<_> = self.session.iter().map(|rule| rule.id.as_str()).collect();
+        self.session_tasks.retain(|id, _| ids.contains(id.as_str()));
+        for (id, generation, input) in jobs {
+            self.start_session_validation(id, generation, input, Duration::from_millis(200), cx);
+        }
+        let applied = self
+            .app
+            .read(cx)
+            .session_keyword_rules(&self.session_id)
+            .unwrap_or_default();
+        let applied_by_id: HashMap<_, _> = applied
+            .iter()
+            .map(|rule| (rule.id.as_str(), rule))
+            .collect();
+        let rules: Vec<_> = self
+            .session
+            .iter()
+            .filter_map(|rule| {
+                if self.session_validation.valid(&rule.id) {
+                    Some(rule.clone())
+                } else {
+                    applied_by_id
+                        .get(rule.id.as_str())
+                        .map(|rule| (*rule).clone())
+                }
+            })
+            .collect();
+        if rules != applied {
+            let owner = self.session_id.clone();
+            self.app.update(cx, |app, cx| {
+                app.set_session_keyword_rules(&owner, rules, cx);
+            });
+        }
+        self.list_revision = self.list_revision.wrapping_add(1);
     }
 
     fn add_rule(&mut self, scope: RuleScope, cx: &mut Context<Self>) {
@@ -843,7 +938,8 @@ impl KeywordHighlightWindow {
         cx.notify();
     }
 
-    /// Move a rule to another slot, possibly into the other group.
+    /// Move a rule inside its group. Global drafts and live session rules must
+    /// never participate in a partially committed cross-group move.
     ///
     /// `to_id` is the rule the moved rule is placed next to. `None` means the
     /// target group has no rule to anchor to, so the rule is appended to it.
@@ -859,7 +955,10 @@ impl KeywordHighlightWindow {
         if self.saving {
             return;
         }
-        if from_scope == to_scope && Some(&from_id) == to_id.as_ref() {
+        if from_scope != to_scope {
+            return;
+        }
+        if Some(&from_id) == to_id.as_ref() {
             return;
         }
         let source = self
@@ -903,6 +1002,7 @@ impl KeywordHighlightWindow {
             return;
         }
         self.session.clear();
+        self.list_revision = self.list_revision.wrapping_add(1);
         self.selected = None;
         self.detail = false;
         self.commit_session(cx);
@@ -920,6 +1020,9 @@ impl KeywordHighlightWindow {
             .get(&self.session_id)
             .map(|view| view.keyword_highlights.rules().to_vec())
             .unwrap_or_default();
+        self.session_tasks.clear();
+        self.session_validation = SessionValidation::from_applied(&self.session);
+        self.list_revision = self.list_revision.wrapping_add(1);
         self.base_global = self.global.clone();
         self.error = None;
         self.indexes[0].rebuild(&[], &self.session);
@@ -956,6 +1059,8 @@ impl KeywordHighlightWindow {
 
     fn close(&mut self, cx: &mut Context<Self>) {
         self.closed = true;
+        self.session_tasks.clear();
+        self.pending_save = None;
         self.app.update(cx, |app, cx| {
             app.terminal.keyword_popup = KeywordHighlightPopupState::default();
             cx.notify();
@@ -980,6 +1085,24 @@ impl KeywordHighlightWindow {
     /// accepted the change.
     fn persist_global(&mut self, close_after: bool, cx: &mut Context<Self>) {
         if self.saving || self.closed {
+            return;
+        }
+        if let Some((rule, _)) = self.session_validation.error(&self.session) {
+            self.selected = Some(rule.id.clone());
+            self.detail = true;
+            self.focus_pattern = true;
+            self.seed_inputs(cx);
+            cx.notify();
+            return;
+        }
+        if self.session_validation.has_pending() {
+            self.pending_save = Some(close_after);
+            self.saving = true;
+            self.seed_inputs(cx);
+            for (id, generation, input) in self.session_validation.pending() {
+                self.start_session_validation(id, generation, input, Duration::ZERO, cx);
+            }
+            cx.notify();
             return;
         }
         let before: HashMap<_, _> = self
@@ -1109,7 +1232,7 @@ impl KeywordHighlightWindow {
         self.seed_inputs(cx);
         cx.notify();
         if !changed {
-            self.saving = false;
+            self.adopt_applied_rules(config.rules.clone(), cx);
             if close_after {
                 self.close(cx);
             }
@@ -1151,7 +1274,7 @@ impl KeywordHighlightWindow {
                                     // The applied rules are the new baseline, so
                                     // the draft markers and the unsaved notice
                                     // disappear while the editor stays open.
-                                    editor.adopt_applied_rules(config.rules.clone());
+                                    editor.adopt_applied_rules(config.rules.clone(), cx);
                                 }
                                 cx.notify();
                             });
@@ -1177,13 +1300,16 @@ impl KeywordHighlightWindow {
     /// "Apply" writes the draft to the store and keeps the editor open. The
     /// rules that are now on disk are no longer a draft, so the per-rule
     /// markers and the unsaved notice have to disappear.
-    fn adopt_applied_rules(&mut self, applied: Vec<KeywordHighlightRule>) {
+    fn adopt_applied_rules(&mut self, applied: Vec<KeywordHighlightRule>, cx: &mut Context<Self>) {
         self.global = applied.clone();
         self.base_global = applied;
         self.indexes[1].rebuild(&self.base_global, &self.global);
         self.error = None;
         self.confirm_close = false;
         self.saving = false;
+        self.list_revision = self.list_revision.wrapping_add(1);
+        self.seed_inputs(cx);
+        cx.notify();
     }
 
     fn color_row(
@@ -1559,7 +1685,7 @@ impl Render for KeywordHighlightWindow {
                     ))
                     .child(t!("terminalCtx.ruleHintPriority")),
             );
-        if self.error.is_some() && !self.saving {
+        if (self.error.is_some() || self.session_error().is_some()) && !self.saving {
             footer_leading = footer_leading.child(
                 NyaButton::new("keyword-reload", t!("terminalCtx.ruleReload"))
                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
@@ -1656,18 +1782,21 @@ impl Render for KeywordHighlightWindow {
                     .when(!self.session_alive, |d| {
                         d.child(t!("terminalCtx.ruleSessionClosed"))
                     })
-                    .when_some(self.error.clone(), |d, error| {
-                        d.child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .max_h(px(96.))
-                                .flex_shrink_0()
-                                .overflow_y_scrollbar()
-                                .text_color(rgb(palette.danger))
-                                .child(error),
-                        )
-                    })
+                    .when_some(
+                        self.session_error().or_else(|| self.error.clone()),
+                        |d, error| {
+                            d.child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_h(px(96.))
+                                    .flex_shrink_0()
+                                    .overflow_y_scrollbar()
+                                    .text_color(rgb(palette.danger))
+                                    .child(error),
+                            )
+                        },
+                    )
                     .child(body)
                     .child(footer),
             )
@@ -1932,7 +2061,7 @@ mod tests {
         session_id: &str,
         prefill: &str,
     ) -> gpui::Entity<KeywordHighlightWindow> {
-        cx.new(|cx| {
+        let editor = cx.new(|cx| {
             KeywordHighlightWindow::new(
                 app,
                 session_id.into(),
@@ -1941,7 +2070,16 @@ mod tests {
                 None,
                 cx,
             )
-        })
+        });
+        settle_session(cx);
+        editor
+    }
+
+    fn settle_session(cx: &mut TestAppContext) {
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(200));
+        cx.run_until_parked();
     }
 
     #[test]
@@ -2017,6 +2155,7 @@ mod tests {
             editor.set_rule_enabled(RuleScope::Session, &id, false, cx);
         });
 
+        settle_session(&mut cx);
         app.read_with(&cx, |app, _| {
             let rules = app.session_keyword_rules("local").unwrap();
             assert_eq!(rules.len(), 1);
@@ -2025,15 +2164,14 @@ mod tests {
             assert!(!rules[0].enabled);
         });
         editor.read_with(&cx, |editor, _| {
-            // Session rules never produce a draft, so the footer stays hidden.
+            // Once validation accepts a session edit, there is no pending draft.
             assert!(!editor.dirty());
         });
     }
 
-    /// An invalid session pattern is rejected right away and the last applied
-    /// state survives.
+    /// Invalid input remains editable while the last applied state survives.
     #[test]
-    fn invalid_session_pattern_is_rejected_immediately() {
+    fn invalid_session_pattern_stays_in_draft_without_replacing_applied_rules() {
         preload_catalog();
         let dir = TestConfigDir::new("nyaterm-highlight-session-invalid");
         let mut cx = TestAppContext::single();
@@ -2045,10 +2183,14 @@ mod tests {
             editor.edit_field(1, "[".into(), cx);
         });
 
+        settle_session(&mut cx);
+        editor.update(&mut cx, |editor, cx| {
+            editor.edit_field(0, "renamed".into(), cx)
+        });
         editor.read_with(&cx, |editor, _| {
-            assert!(editor.error.is_some());
-            // The rejected edit was rolled back to the last valid state.
-            assert_eq!(editor.session[0].patterns, vec!["ERROR"]);
+            assert!(editor.session_error().is_some());
+            assert_eq!(editor.session[0].patterns, vec!["["]);
+            assert!(editor.dirty());
         });
         app.read_with(&cx, |app, _| {
             let rules = app.session_keyword_rules("local").unwrap();
@@ -2150,6 +2292,7 @@ mod tests {
             editor.set_rule_enabled(RuleScope::Session, &id, true, cx);
         });
 
+        settle_session(&mut cx);
         app.read_with(&cx, |app, _| {
             let rules = app.session_keyword_rules("local").unwrap();
             assert_eq!(rules.len(), 1);
@@ -2198,7 +2341,7 @@ mod tests {
             editor.edit_field(1, "alpha\nbeta".into(), cx);
             assert!(editor.dirty(), "the edited rule is a draft");
             // The store accepted the rules, so they become the new baseline.
-            editor.adopt_applied_rules(editor.global.clone());
+            editor.adopt_applied_rules(editor.global.clone(), cx);
         });
 
         editor.read_with(&cx, |editor, _| {
@@ -2229,8 +2372,14 @@ mod tests {
             cx.run_until_parked();
         }
 
-        editor.read_with(&cx, |editor, _| {
+        editor.read_with(&cx, |editor, cx| {
             assert!(!editor.closed, "applying must not close the editor");
+            assert!(
+                editor
+                    .inputs
+                    .iter()
+                    .all(|input| !input.read(cx).is_disabled())
+            );
             assert!(!editor.dirty(), "the applied rules are no longer a draft");
         });
         app.read_with(&cx, |app, _| {
@@ -2245,97 +2394,152 @@ mod tests {
         });
     }
 
-    /// Dragging a rule into the other group moves it: the rule leaves the
-    /// source group and shows up in the target group.
     #[test]
-    fn dragging_a_rule_across_groups_moves_it() {
+    fn apply_with_no_effective_change_adopts_current_baseline_and_enables_inputs() {
         preload_catalog();
-        let dir = TestConfigDir::new("nyaterm-highlight-drag-move");
+        let dir = TestConfigDir::new("nyaterm-highlight-noop-apply");
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
-        let mut global = new_popup_rule();
-        global.id = "global-a".into();
-        global.name = "global rule".into();
+        let mut rule = new_popup_rule();
+        rule.patterns = vec!["ERROR".into()];
         app.update(&mut cx, |app, _| {
-            app.settings
-                .replace_keyword_highlight_rules(vec![global.clone()])
+            app.settings.replace_keyword_highlight_rules(vec![rule])
         });
-        let editor = editor_for(&mut cx, app.clone(), "local", "ERROR");
-
+        let editor = editor_for(&mut cx, app.clone(), "local", "");
         editor.update(&mut cx, |editor, cx| {
-            let target = editor.session[0].id.clone();
-            editor.move_rule(
-                RuleScope::Global,
-                "global-a".into(),
-                RuleScope::Session,
-                Some(target),
-                super::list::DropPosition::After,
-                cx,
+            editor.select_rule(editor.global[0].id.clone(), cx);
+            editor.edit_field(0, "same concurrent edit".into(), cx);
+            app.update(cx, |app, _| {
+                app.settings
+                    .replace_keyword_highlight_rules(editor.global.clone())
+            });
+            editor.apply(cx);
+        });
+        for _ in 0..8 {
+            cx.run_until_parked();
+        }
+        editor.read_with(&cx, |editor, cx| {
+            assert!(!editor.dirty());
+            assert!(!editor.saving);
+            assert!(!editor.closed);
+            assert!(
+                editor
+                    .inputs
+                    .iter()
+                    .all(|input| !input.read(cx).is_disabled())
             );
-        });
-
-        editor.read_with(&cx, |editor, _| {
-            assert!(editor.global.is_empty());
-            assert_eq!(editor.session.len(), 2);
-            assert_eq!(editor.session[1].id, "global-a");
-            // The rule left the global draft, so the draft records the removal.
-            assert!(editor.dirty());
-        });
-        app.read_with(&cx, |app, _| {
-            // The moved rule reaches the session right away.
-            let rules = app.session_keyword_rules("local").unwrap();
-            assert_eq!(rules.len(), 2);
-            assert_eq!(rules[1].id, "global-a");
         });
     }
 
-    /// An empty group has no rule to anchor to, so the drop carries no anchor
-    /// and the rule joins the group as its first entry.
     #[test]
-    fn dragging_a_rule_into_an_empty_group_moves_it_there() {
+    fn cross_group_moves_leave_both_draft_and_applied_rules_unchanged() {
         preload_catalog();
-        let dir = TestConfigDir::new("nyaterm-highlight-drag-empty");
+        for prefill in ["", "ERROR"] {
+            let dir = TestConfigDir::new("nyaterm-highlight-reject-cross-group");
+            let mut cx = TestAppContext::single();
+            let _cleanup = TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+            let mut global = new_popup_rule();
+            global.id = "global-a".into();
+            app.update(&mut cx, |app, _| {
+                app.settings
+                    .replace_keyword_highlight_rules(vec![global.clone()])
+            });
+            let editor = editor_for(&mut cx, app.clone(), "local", prefill);
+            editor.update(&mut cx, |editor, cx| {
+                let before = editor.session.clone();
+                editor.move_rule(
+                    RuleScope::Global,
+                    global.id.clone(),
+                    RuleScope::Session,
+                    before.first().map(|rule| rule.id.clone()),
+                    super::list::DropPosition::After,
+                    cx,
+                );
+                if let Some(rule) = before.first() {
+                    editor.move_rule(
+                        RuleScope::Session,
+                        rule.id.clone(),
+                        RuleScope::Global,
+                        Some(global.id.clone()),
+                        super::list::DropPosition::Before,
+                        cx,
+                    );
+                }
+                assert_eq!(editor.global, vec![global]);
+                assert_eq!(editor.session, before);
+                assert!(!editor.dirty());
+                assert_eq!(
+                    editor
+                        .app
+                        .read(cx)
+                        .session_keyword_rules("local")
+                        .unwrap_or_default(),
+                    before
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn invalid_draft_blocks_save_and_requires_discard_confirmation() {
+        preload_catalog();
+        let dir = TestConfigDir::new("nyaterm-highlight-invalid-close");
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
-        let mut global = new_popup_rule();
-        global.id = "global-a".into();
-        global.name = "global rule".into();
-        app.update(&mut cx, |app, _| {
-            app.settings
-                .replace_keyword_highlight_rules(vec![global.clone()])
-        });
-        // No selection, so the session group stays empty.
-        let editor = editor_for(&mut cx, app.clone(), "local", "");
-        editor.read_with(&cx, |editor, _| {
-            assert!(editor.session.is_empty());
-        });
-
+        let editor = editor_for(&mut cx, app.clone(), "local", "ERROR");
         editor.update(&mut cx, |editor, cx| {
-            editor.move_rule(
-                RuleScope::Global,
-                "global-a".into(),
-                RuleScope::Session,
-                None,
-                super::list::DropPosition::After,
-                cx,
-            );
+            editor.edit_field(1, "[".into(), cx);
+            editor.save(cx);
         });
+        settle_session(&mut cx);
+        editor.update(&mut cx, |editor, cx| {
+            assert!(!editor.closed);
+            assert!(!editor.saving);
+            assert!(!editor.inputs[1].read(cx).is_disabled());
+            assert!(!editor.request_close(cx));
+            assert!(editor.confirm_close);
+            editor.close(cx);
+        });
+        settle_session(&mut cx);
+        app.read_with(&cx, |app, _| {
+            assert_eq!(
+                app.session_keyword_rules("local").unwrap()[0].patterns,
+                vec!["ERROR"]
+            )
+        });
+    }
 
-        editor.read_with(&cx, |editor, _| {
-            assert!(editor.global.is_empty());
-            assert_eq!(editor.session.len(), 1);
-            assert_eq!(editor.session[0].id, "global-a");
-            // The rule left the global draft, so the draft records the removal.
-            assert!(editor.dirty());
+    #[test]
+    fn rapid_session_edits_publish_only_the_latest_valid_input() {
+        preload_catalog();
+        let dir = TestConfigDir::new("nyaterm-highlight-debounce");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+        let editor = editor_for(&mut cx, app.clone(), "local", "ERROR");
+        editor.update(&mut cx, |editor, cx| {
+            editor.edit_field(1, "[".into(), cx);
+            editor.edit_field(1, "WARN".into(), cx);
+            assert!(editor.session_validation.has_pending());
+            assert_eq!(editor.session_tasks.len(), 1);
         });
         app.read_with(&cx, |app, _| {
-            // The moved rule reaches the empty session right away.
-            let rules = app.session_keyword_rules("local").unwrap();
-            assert_eq!(rules.len(), 1);
-            assert_eq!(rules[0].id, "global-a");
+            assert_eq!(
+                app.session_keyword_rules("local").unwrap()[0].patterns,
+                vec!["ERROR"]
+            )
         });
+        settle_session(&mut cx);
+        app.read_with(&cx, |app, _| {
+            assert_eq!(
+                app.session_keyword_rules("local").unwrap()[0].patterns,
+                vec!["WARN"]
+            )
+        });
+        editor.read_with(&cx, |editor, _| assert!(!editor.dirty()));
     }
 
     /// The list of an empty group resolves to a drop target without an anchor.

@@ -2,8 +2,7 @@
 //!
 //! The popup shows the session rules and the global catalogue in a single
 //! gpui-kit list: two sections, the component's own search box, native
-//! selection and drag-and-drop reordering. Dragging a rule onto the other
-//! group moves it there.
+//! selection and drag-and-drop reordering within each group.
 
 use std::collections::HashSet;
 
@@ -379,13 +378,16 @@ impl KeywordListDelegate {
         palette: ThemePalette,
         controls_enabled: bool,
     ) {
+        let rules_changed = self.session != session || self.global != global;
         self.session = session;
         self.global = global;
         self.dirty = dirty;
         self.selected = selected;
         self.palette = palette;
         self.controls_enabled = controls_enabled;
-        self.refilter();
+        if rules_changed {
+            self.refilter();
+        }
     }
 
     fn refilter(&mut self) {
@@ -780,7 +782,10 @@ impl KeywordListDelegate {
                         let dragging = event.drag(cx);
                         (dragging.scope, dragging.id.clone())
                     };
-                    let position = if bounds.contains(&event.event.position) {
+                    let position = if state.delegate().controls_enabled
+                        && event.drag(cx).scope == scope
+                        && bounds.contains(&event.event.position)
+                    {
                         let position = if event.event.position.y < bounds.center().y {
                             DropPosition::Before
                         } else {
@@ -808,6 +813,9 @@ impl KeywordListDelegate {
                 }),
             )
             .on_drop(cx.listener(move |state, drag: &KeywordDrag, _, cx| {
+                if !state.delegate().controls_enabled || drag.scope != scope {
+                    return;
+                }
                 let target = state.delegate().pending_drop(ix);
                 let Some((target_id, position)) = target else {
                     return;
@@ -860,7 +868,10 @@ impl KeywordListDelegate {
                     let bounds = event.bounds;
                     // The group holds no rule, so every position inside the
                     // placeholder means the same thing: the rule joins the group.
-                    let position = if bounds.contains(&event.event.position) {
+                    let position = if state.delegate().controls_enabled
+                        && event.drag(cx).scope == scope
+                        && bounds.contains(&event.event.position)
+                    {
                         Some(DropPosition::After)
                     } else {
                         None
@@ -871,6 +882,9 @@ impl KeywordListDelegate {
                 }),
             )
             .on_drop(cx.listener(move |state, drag: &KeywordDrag, _, cx| {
+                if !state.delegate().controls_enabled || drag.scope != scope {
+                    return;
+                }
                 let target = state.delegate().pending_drop(ix);
                 let Some((target_id, position)) = target else {
                     return;
