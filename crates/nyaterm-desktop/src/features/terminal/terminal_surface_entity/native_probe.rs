@@ -97,7 +97,10 @@ fn keyword_highlight_native_probe() {
             surface.keyword_rules = Arc::new(nyaterm_core::keyword_highlight_presets::merge_keyword_highlight_rules_for_paint_with_ansi(&[], &std::collections::HashMap::new(), theme != "github-light", palette.terminal_ansi));
             Arc::make_mut(&mut surface.keyword_rules).extend((0..rule_count).map(|i| nyaterm_core::ResolvedKeywordHighlightRule {
                 id: format!("probe-{i}"), name: format!("Probe {i}"),
-                patterns: vec![format!(r"\bprobe_{i}_[0-9]+\b")], color: "#ff0000".into(), enabled: true,
+                patterns: vec![format!(r"\bprobe_{i}_[0-9]+\b")], color: "#ff0000".into(), background: None, enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             }));
             surface
         })).collect();

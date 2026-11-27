@@ -1,4 +1,8 @@
 use super::helpers::{available_translation_providers, search_engine_url};
+use super::quick_highlight::{
+    CUSTOM_HIGHLIGHT_SWATCH_INDEX, VISIBLE_QUICK_COLOR_COUNT, quick_color, quick_color_tooltip,
+};
+use crate::features::terminal::state::TerminalContextWord;
 use crate::features::{NyaTermApp, session::SerialUploadProtocol};
 use crate::models::{AiPreparedRequest, NavItem, SettingsTab};
 use gpui::Context;
@@ -9,8 +13,36 @@ use nyaterm_ui::NyaMenuItem;
 use nyaterm_ui::icons::known_search_engine_icon;
 use rust_i18n::t;
 
+/// Parse a `#rrggbb` swatch into the packed RGB value the menu renderer uses.
+fn swatch_rgb(hex: &str) -> u32 {
+    let digits = hex.trim().trim_start_matches('#');
+    u32::from_str_radix(digits, 16).unwrap_or(0xffffff)
+}
+
 impl NyaTermApp {
-    pub(in crate::features) fn prepare_terminal_context_menu(&mut self, cx: &mut Context<Self>) {
+    /// Drop the transient word resolved from the previous right-click. Called
+    /// before every terminal right-click so a mouse-report or non-menu action
+    /// cannot leave stale highlight text behind.
+    pub(in crate::features) fn clear_terminal_context_word(&mut self) {
+        self.terminal.menus.context_word = None;
+    }
+
+    pub(in crate::features) fn prepare_terminal_context_menu(
+        &mut self,
+        session_id: &str,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_terminal_context_word();
+        if !self.terminal_has_selection_for_session(session_id)
+            && let Some(text) =
+                self.terminal_word_text_at_pointer_for_session(session_id, position, cx)
+        {
+            self.terminal.menus.context_word = Some(TerminalContextWord {
+                session_id: session_id.to_string(),
+                text,
+            });
+        }
         self.terminal.menus.action_link_menu = None;
         self.terminal.menus.action_link_tooltip = None;
         self.terminal.assist.commands.popup = None;
@@ -38,13 +70,48 @@ impl NyaTermApp {
             .then(|| self.selected_terminal_text())
             .flatten()
             .unwrap_or_default();
-        self.terminal_context_menu_items(session_id, selected, cx)
+        // The right-click word is a highlight-only fallback. A real selection
+        // always wins, including a pending one whose text has not arrived yet.
+        let highlight_text =
+            if self.terminal_has_selection_for_session(&session_id) || !selected.is_empty() {
+                selected.clone()
+            } else {
+                self.terminal
+                    .menus
+                    .context_word
+                    .as_ref()
+                    .filter(|word| word.session_id == session_id)
+                    .map(|word| word.text.clone())
+                    .unwrap_or_default()
+            };
+        self.terminal_context_menu_items_with_highlight_text(
+            session_id,
+            selected,
+            highlight_text,
+            cx,
+        )
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn terminal_context_menu_items(
         &mut self,
         session_id: String,
         selected: String,
+        cx: &mut Context<Self>,
+    ) -> Vec<NyaMenuItem> {
+        self.terminal_context_menu_items_with_highlight_text(
+            session_id,
+            selected.clone(),
+            selected,
+            cx,
+        )
+    }
+
+    pub(in crate::features) fn terminal_context_menu_items_with_highlight_text(
+        &mut self,
+        session_id: String,
+        selected: String,
+        highlight_text: String,
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
         let owns_selection = self.terminal_has_selection_for_session(&session_id);
@@ -261,11 +328,79 @@ impl NyaTermApp {
             NyaMenuItem::submenu(t!("terminalCtx.recordingLogs"), recording_items)
                 .icon("icons/session/record.svg"),
             NyaMenuItem::separator(),
+        ]);
+
+        // Quick session colors work on the highlight text: a real selection,
+        // or the word resolved from the right-click position when no selection
+        // exists. The bar sits directly above the full highlight editor action.
+        if has_selection || !highlight_text.is_empty() {
+            let checked = self.selected_quick_highlight_color(&session_id, &highlight_text);
+            let highlight_unavailable = highlight_text.is_empty();
+            let mut swatches = Vec::new();
+
+            // A custom-colored rule gets a checked gray indicator in the first
+            // slot. It is not a paintable quick color: clicking it removes the
+            // rule instead of applying gray to the selection.
+            if self
+                .selected_custom_highlight_rule(&session_id, &highlight_text)
+                .is_some()
+            {
+                let color = quick_color(CUSTOM_HIGHLIGHT_SWATCH_INDEX)
+                    .expect("custom color slot stays in the preset table");
+                let swatch_session = session_id.clone();
+                let swatch_text = highlight_text.clone();
+                swatches.push(
+                    NyaMenuItem::action(quick_color_tooltip(CUSTOM_HIGHLIGHT_SWATCH_INDEX, true))
+                        .icon_color(swatch_rgb(color.background))
+                        .swatch_text_color(swatch_rgb(color.light))
+                        .checked(true)
+                        .disabled(highlight_unavailable)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remove_quick_highlight_color(&swatch_session, &swatch_text, cx);
+                        })),
+                );
+            }
+
+            for index in 0..VISIBLE_QUICK_COLOR_COUNT {
+                let color = quick_color(index).expect("index from visible quick color range");
+                let swatch_session = session_id.clone();
+                let swatch_text = highlight_text.clone();
+                let swatch_checked = checked == Some(index);
+                swatches.push(
+                    NyaMenuItem::action(quick_color_tooltip(index, swatch_checked))
+                        .icon_color(swatch_rgb(color.background))
+                        .swatch_text_color(swatch_rgb(color.light))
+                        .checked(swatch_checked)
+                        .disabled(highlight_unavailable)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            // Clicking the applied color toggles it off;
+                            // any other color recolors the same rule.
+                            if swatch_checked {
+                                this.remove_quick_highlight_color(
+                                    &swatch_session,
+                                    &swatch_text,
+                                    cx,
+                                );
+                            } else {
+                                this.apply_quick_highlight_color(
+                                    &swatch_session,
+                                    &swatch_text,
+                                    index,
+                                    cx,
+                                );
+                            }
+                        })),
+                );
+            }
+            items.push(NyaMenuItem::color_swatch_bar(swatches));
+        }
+
+        items.extend([
             NyaMenuItem::action(t!("terminalCtx.keywordHighlight"))
                 .icon("icons/menu/palette.svg")
                 .on_click(cx.listener({
                     let popup_session_id = select_all_session_id.clone();
-                    let popup_selected = selected.clone();
+                    let popup_selected = highlight_text.clone();
                     move |this, _, _, cx| {
                         this.open_keyword_highlight_popup(
                             popup_session_id.clone(),
@@ -520,7 +655,7 @@ mod tests {
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
     use crate::features::translation::TranslationFeatureState;
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::{AppContext as _, TestAppContext, px};
     use nyaterm_core::test_support::TestTempDir;
     use nyaterm_core::{
         AiAction, AiContext, AiCustomActionConfig, AiSettings, AppRuntime, RuntimeMode,
@@ -623,6 +758,7 @@ mod tests {
                 "",
                 "Recording Logs",
                 "",
+                "",
                 "Keyword Highlight...",
                 "Toggle local mode",
                 "",
@@ -648,6 +784,32 @@ mod tests {
         );
         assert!(!labels(&selected).contains(&"Open Link"));
         assert!(!labels(&selected).contains(&"More Actions..."));
+
+        // The selection menu carries the nine paintable quick colors; the
+        // reserved custom indicator stays hidden until a custom rule matches.
+        let bar = selected
+            .iter()
+            .find_map(NyaMenuItem::test_color_swatch_items)
+            .expect("quick color swatch bar");
+        assert_eq!(bar.len(), 9);
+        assert_eq!(bar[0].test_label(), "Add Red marker");
+        assert_eq!(bar[8].test_label(), "Add Magenta marker");
+        assert!(bar.iter().all(|swatch| swatch.test_icon_color().is_some()));
+        // Each dot is filled with its background color and reveals the
+        // matching text color as the "+" on hover.
+        assert_eq!(bar[0].test_icon_color(), Some(0xb3_26_1e));
+        assert_eq!(bar[0].test_swatch_text_color(), Some(0xff_f0_ee));
+        assert_eq!(bar[8].test_icon_color(), Some(0xa3_22_74));
+        assert_eq!(bar[8].test_swatch_text_color(), Some(0xff_e6_f5));
+        assert!(
+            bar.iter()
+                .all(|swatch| swatch.test_swatch_text_color().is_some())
+        );
+        assert!(
+            empty
+                .iter()
+                .all(|item| item.test_color_swatch_items().is_none())
+        );
 
         let search = item(&selected, "Search Web")
             .children()
@@ -686,6 +848,370 @@ mod tests {
                 (Some("icons/settings.svg".to_string()), None),
             ]
         );
+    }
+
+    #[test]
+    fn clicking_one_swatch_adds_exactly_one_rule() {
+        use crate::features::test_support::session_focus_test_window;
+        use gpui::ClickEvent;
+
+        let root = TestTempDir::new("nyaterm-swatch-click");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        // Build a menu with a real selection and grab the first swatch handler.
+        let handler = cx.update_entity(&app, |app, cx| {
+            let items = app.terminal_context_menu_items("local".into(), "ERROR".into(), cx);
+            let bar = items
+                .iter()
+                .find_map(NyaMenuItem::test_color_swatch_items)
+                .expect("swatch bar");
+            bar[0].test_on_click().cloned().expect("swatch click")
+        });
+
+        // Invoke it twice: the swatch renderer registers both an inner
+        // Button on_click and an outer on_action(Confirm) with the same
+        // handler, so a single physical click may dispatch it more than once.
+        let vcx = session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            handler(&ClickEvent::default(), window, cx);
+            handler(&ClickEvent::default(), window, cx);
+        });
+
+        app.read_with(&cx, |app, _| {
+            let rules = app.session_keyword_rules("local").unwrap();
+            assert_eq!(
+                rules.len(),
+                1,
+                "clicking one swatch must never stack two rules, got {rules:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn clicking_checked_swatch_removes_its_rule() {
+        use crate::features::test_support::session_focus_test_window;
+        use gpui::ClickEvent;
+
+        let root = TestTempDir::new("nyaterm-swatch-remove");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        // Apply color 0 to the selection first, then rebuild the menu so the
+        // first swatch is in its checked ("−") state.
+        cx.update_entity(&app, |app, cx| {
+            app.apply_quick_highlight_color("local", "ERROR", 0, cx);
+        });
+        let (handler, is_checked) = cx.update_entity(&app, |app, cx| {
+            let items = app.terminal_context_menu_items("local".into(), "ERROR".into(), cx);
+            let bar = items
+                .iter()
+                .find_map(NyaMenuItem::test_color_swatch_items)
+                .expect("swatch bar");
+            let first = &bar[0];
+            (
+                first.test_on_click().cloned().expect("swatch click"),
+                first.test_checked(),
+            )
+        });
+        assert!(
+            is_checked,
+            "first swatch should be checked after applying it"
+        );
+
+        // Invoke twice to prove the remove path is idempotent under the
+        // renderer's double dispatch.
+        let vcx = session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            handler(&ClickEvent::default(), window, cx);
+            handler(&ClickEvent::default(), window, cx);
+        });
+
+        app.read_with(&cx, |app, _| {
+            assert!(
+                app.session_keyword_rules("local").unwrap().is_empty(),
+                "clicking an applied swatch should remove its rule"
+            );
+        });
+    }
+
+    #[test]
+    fn custom_color_rule_shows_checked_indicator_first_and_removes_it() {
+        use crate::features::test_support::session_focus_test_window;
+        use gpui::ClickEvent;
+        use nyaterm_core::KeywordHighlightRule;
+
+        let root = TestTempDir::new("nyaterm-swatch-custom");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        cx.update_entity(&app, |app, cx| {
+            app.set_session_keyword_rules(
+                "local",
+                vec![KeywordHighlightRule {
+                    id: "kh-custom".into(),
+                    name: "ERROR".into(),
+                    patterns: vec![regex::escape("ERROR")],
+                    color_dark: "#123456".into(),
+                    color_light: "#654321".into(),
+                    bg_color_dark: String::new(),
+                    bg_color_light: String::new(),
+                    enabled: true,
+                    case_sensitive: false,
+                    whole_word: false,
+                    use_regex: true,
+                }],
+                cx,
+            );
+        });
+
+        let (label, checked, color, handler) = cx.update_entity(&app, |app, cx| {
+            let items = app.terminal_context_menu_items("local".into(), "ERROR".into(), cx);
+            let bar = items
+                .iter()
+                .find_map(NyaMenuItem::test_color_swatch_items)
+                .expect("swatch bar");
+            assert_eq!(bar.len(), 10, "custom indicator plus nine quick colors");
+            let first = &bar[0];
+            (
+                first.test_label().to_string(),
+                first.test_checked(),
+                first.test_icon_color(),
+                first.test_on_click().cloned().expect("swatch click"),
+            )
+        });
+        assert_eq!(label, "Remove Custom color marker");
+        assert!(checked, "custom indicator must show as checked");
+        assert_eq!(color, Some(0x4c_55_60));
+
+        let vcx = session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            handler(&ClickEvent::default(), window, cx);
+            handler(&ClickEvent::default(), window, cx);
+        });
+        app.read_with(&cx, |app, _| {
+            assert!(
+                app.session_keyword_rules("local").unwrap().is_empty(),
+                "clicking the custom indicator removes its rule"
+            );
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            let items = app.terminal_context_menu_items("local".into(), "other".into(), cx);
+            let bar = items
+                .iter()
+                .find_map(NyaMenuItem::test_color_swatch_items)
+                .expect("swatch bar");
+            assert_eq!(bar.len(), 9, "unrelated text has no custom indicator");
+        });
+    }
+
+    #[test]
+    fn right_click_word_only_feeds_highlight_entries() {
+        use crate::features::terminal::state::TerminalContextWord;
+        use crate::features::test_support::session_focus_test_window;
+        use gpui::ClickEvent;
+
+        let root = TestTempDir::new("nyaterm-right-click-word");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        let word_position = cx.update_entity(&app, |app, cx| {
+            app.terminal.layout.surface_bounds = Some(gpui::Bounds {
+                origin: gpui::Point::default(),
+                size: gpui::Size {
+                    width: px(800.),
+                    height: px(600.),
+                },
+            });
+            app.terminal
+                .seed_session_view("local".into(), "target word".into(), "UTF-8");
+            let geometry = app
+                .terminal_hit_test_geometry_for_session(Some("local"), cx)
+                .expect("terminal geometry");
+            gpui::Point {
+                x: px(f32::from(geometry.bounds.origin.x)
+                    + geometry.padding_left
+                    + geometry.gutter
+                    + geometry.cell_w * 0.5),
+                y: px(f32::from(geometry.bounds.origin.y)
+                    + geometry.padding_top
+                    + geometry.visual_y_offset
+                    + geometry.cell_h * 0.5),
+            }
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.terminal_word_text_at_pointer_for_session("local", word_position, cx)
+                    .as_deref(),
+                Some("target")
+            );
+            app.prepare_terminal_context_menu("local", word_position, cx);
+            assert_eq!(
+                app.terminal
+                    .menus
+                    .context_word
+                    .as_ref()
+                    .map(|word| word.text.as_str()),
+                Some("target")
+            );
+        });
+
+        let (items, handler) = cx.update_entity(&app, |app, cx| {
+            let items = app.terminal_context_menu_items_for_session("local".into(), cx);
+            let bar = items
+                .iter()
+                .find_map(NyaMenuItem::test_color_swatch_items)
+                .expect("right-click word should reveal the swatch bar");
+            let handler = bar[0].test_on_click().cloned().expect("swatch click");
+            (items, handler)
+        });
+
+        // The word is highlight-only: no real selection was created.
+        assert!(!labels(&items).contains(&"Copy"));
+        assert!(!labels(&items).contains(&"Save as Quick Command"));
+        app.read_with(&cx, |app, _| {
+            assert!(app.terminal.selection.selection.is_none());
+        });
+
+        let vcx = session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            handler(&ClickEvent::default(), window, cx);
+        });
+        app.read_with(&cx, |app, _| {
+            let rules = app.session_keyword_rules("local").unwrap();
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].patterns, vec![regex::escape("target")]);
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            app.clear_terminal_context_word();
+            let cleared = app.terminal_context_menu_items_for_session("local".into(), cx);
+            assert!(
+                cleared
+                    .iter()
+                    .all(|item| item.test_color_swatch_items().is_none())
+            );
+            // A word resolved for another session must not leak into this menu.
+            app.terminal.menus.context_word = Some(TerminalContextWord {
+                session_id: "other".into(),
+                text: "foreign".into(),
+            });
+            let other = app.terminal_context_menu_items_for_session("local".into(), cx);
+            assert!(
+                other
+                    .iter()
+                    .all(|item| item.test_color_swatch_items().is_none())
+            );
+        });
+    }
+
+    #[test]
+    fn right_click_inside_word_returns_the_full_word_like_double_click() {
+        let root = TestTempDir::new("nyaterm-right-click-word-middle");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        // "100 deny ip any any any any": click the `e` in `deny`. Double-click
+        // selects `deny`; the right-click fallback must not return only `eny`.
+        let inside_deny = cx.update_entity(&app, |app, cx| {
+            app.terminal.layout.surface_bounds = Some(gpui::Bounds {
+                origin: gpui::Point::default(),
+                size: gpui::Size {
+                    width: px(800.),
+                    height: px(600.),
+                },
+            });
+            app.terminal.seed_session_view(
+                "local".into(),
+                "100 deny ip any any any any".into(),
+                "UTF-8",
+            );
+            let geometry = app
+                .terminal_hit_test_geometry_for_session(Some("local"), cx)
+                .expect("terminal geometry");
+            gpui::Point {
+                x: px(f32::from(geometry.bounds.origin.x)
+                    + geometry.padding_left
+                    + geometry.gutter
+                    + geometry.cell_w * 5.5),
+                y: px(f32::from(geometry.bounds.origin.y)
+                    + geometry.padding_top
+                    + geometry.visual_y_offset
+                    + geometry.cell_h * 0.5),
+            }
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.terminal_word_text_at_pointer_for_session("local", inside_deny, cx)
+                    .as_deref(),
+                Some("deny")
+            );
+            app.prepare_terminal_context_menu("local", inside_deny, cx);
+            assert_eq!(
+                app.terminal
+                    .menus
+                    .context_word
+                    .as_ref()
+                    .map(|word| word.text.as_str()),
+                Some("deny")
+            );
+        });
+    }
+
+    #[test]
+    fn right_click_on_blank_output_does_not_create_highlight_text() {
+        let root = TestTempDir::new("nyaterm-right-click-blank");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+
+        let blank_position = cx.update_entity(&app, |app, cx| {
+            app.terminal.layout.surface_bounds = Some(gpui::Bounds {
+                origin: gpui::Point::default(),
+                size: gpui::Size {
+                    width: px(800.),
+                    height: px(600.),
+                },
+            });
+            app.terminal
+                .seed_session_view("local".into(), "word\r\n            ".into(), "UTF-8");
+            let geometry = app
+                .terminal_hit_test_geometry_for_session(Some("local"), cx)
+                .expect("terminal geometry");
+            gpui::Point {
+                x: px(f32::from(geometry.bounds.origin.x)
+                    + geometry.padding_left
+                    + geometry.gutter
+                    + geometry.cell_w * 0.5),
+                y: px(f32::from(geometry.bounds.origin.y)
+                    + geometry.padding_top
+                    + geometry.visual_y_offset
+                    + geometry.cell_h * 1.5),
+            }
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.terminal_word_text_at_pointer_for_session("local", blank_position, cx),
+                None
+            );
+            app.prepare_terminal_context_menu("local", blank_position, cx);
+            assert!(app.terminal.menus.context_word.is_none());
+            let items = app.terminal_context_menu_items_for_session("local".into(), cx);
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.test_color_swatch_items().is_none())
+            );
+        });
     }
 
     #[test]

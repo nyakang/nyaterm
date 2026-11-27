@@ -13,7 +13,8 @@ use super::ai::AiFullAccessSetting;
 use super::terminal::{FULL_SHELL_PAINT_COUNT, terminal_surface_paint_count};
 use super::view_widgets::{
     full_window_input_layer, full_window_overlay_layer, modal_overlay_layer, modal_scrim_is_drawn,
-    passive_overlay_layer, regional_overlay_layer, selectable_overlay_layer,
+    modal_scrim_owns_input, passive_overlay_layer, regional_overlay_layer,
+    selectable_overlay_layer,
 };
 use crate::features::perf::{GpuiPerfContext, record_gpui_perf_sample};
 use crate::features::runtime_jobs::ActivitySide;
@@ -1090,11 +1091,26 @@ impl NyaTermApp {
             // painted above the lock screen would swallow the pointer input the
             // lock screen needs.
             //
-            // Passive: the platform already blocks input to a modal owner. A modal
-            // layer would make the native-child overlay claim the whole client
-            // area with an owned input popup raised above the dialog itself.
+            // Windows disables the owner HWND and X11/Wayland both set a modal
+            // hint and have GPUI drop input to a blocked parent, so there the
+            // scrim is a passive visual cue: an active layer would also let a
+            // native-child overlay claim the whole client area with an owned
+            // input popup raised above the dialog itself.
+            //
+            // macOS is the exception. Our fork's AppKit modal session is pumped
+            // from a timer while `[NSApp run]` owns the event loop, so GPUI's own
+            // view handlers still dispatch clicks to the owner. There the scrim
+            // must be a real input boundary or the dimmed main window stays
+            // clickable behind the child (see `modal_scrim_owns_input`).
             .when(modal_scrim_is_drawn() && overlay.modal_child_open, |this| {
-                this.child(passive_overlay_layer(self.modal_owner_scrim()))
+                if modal_scrim_owns_input() {
+                    this.child(full_window_overlay_layer(
+                        "modal-owner-scrim-input-layer",
+                        self.modal_owner_scrim(),
+                    ))
+                } else {
+                    this.child(passive_overlay_layer(self.modal_owner_scrim()))
+                }
             })
             .when(overlay.locked, |this| {
                 // The lock screen owns its input boundary so Windows caption
@@ -1261,9 +1277,9 @@ impl NyaTermApp {
 
     /// Dims the main window while a modal child window owns a draft.
     ///
-    /// Deliberately inert: the child window is a `WindowKind::Dialog`, so the
-    /// platform has already stopped input from reaching this window, and a scrim
-    /// that handled clicks would be claiming a job it never gets asked to do.
+    /// The layer that mounts this decides whether it also owns pointer input:
+    /// passive where the platform blocks the owner, active on macOS where the
+    /// timer-pumped AppKit modal session cannot stop GPUI's own event dispatch.
     fn modal_owner_scrim(&self) -> impl IntoElement {
         div()
             .id("modal-owner-scrim")

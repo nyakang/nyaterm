@@ -10249,3 +10249,34 @@ fn external_editor_auto_upload_defaults_off_and_survives_reopening() {
             .transfer_external_editor_auto_upload
     );
 }
+
+#[test]
+fn keyword_match_options_and_theme_backgrounds_survive_storage_and_native_backup() {
+    let source_dir = unique_temp_dir("keyword-options-source");
+    let restored_dir = unique_temp_dir("keyword-options-restored");
+    let backup_dir = unique_temp_dir("keyword-options-backup");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    let backup_path = backup_dir.join("keywords.nya");
+    let config = {
+        let store = ConnectionStore::open(&source_dir).unwrap();
+        let mut config = store.load_keyword_highlights().unwrap();
+        config.rules = vec![nyaterm_core::KeywordHighlightRule {
+            id: "custom".into(),
+            name: "Custom".into(),
+            patterns: vec!["[literal]".into()],
+            bg_color_dark: "#123456".into(),
+            bg_color_light: "#abcdef".into(),
+            case_sensitive: true,
+            whole_word: true,
+            use_regex: false,
+            ..Default::default()
+        }];
+        store.save_keyword_highlights(&config).unwrap();
+        assert_eq!(store.load_keyword_highlights().unwrap(), config);
+        config
+    };
+    ConnectionStore::export_config_database(&source_dir, None, &backup_path).unwrap();
+    ConnectionStore::import_config_database(&restored_dir, None, &backup_path).unwrap();
+    let restored = ConnectionStore::open(&restored_dir).unwrap();
+    assert_eq!(restored.load_keyword_highlights().unwrap(), config);
+}

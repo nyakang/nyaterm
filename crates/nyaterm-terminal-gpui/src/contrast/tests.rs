@@ -155,12 +155,14 @@ fn keyword_colors_are_corrected_after_both_keyword_style_paths() {
     let rules = [CompiledKeywordRule {
         regex: regex::Regex::new("ERROR").unwrap(),
         color: palette.terminal_bg,
+        background: None,
         priority: 0,
     }];
     let ranges = [TerminalKeywordRange {
         start_col: 0,
         end_col: 5,
         color: palette.terminal_bg,
+        background: None,
     }];
     let paths = [
         ansi_to_highlight_spans_compiled(&ansi, palette, &rules, false),

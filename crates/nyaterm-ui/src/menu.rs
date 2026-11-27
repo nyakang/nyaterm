@@ -156,6 +156,7 @@ impl NyaMenuAnchor {
 enum NyaMenuItemKind {
     Action,
     ActionBar(Vec<NyaMenuItem>),
+    ColorSwatchBar(Vec<NyaMenuItem>),
     Label,
     Separator,
     Submenu(Vec<NyaMenuItem>),
@@ -167,6 +168,8 @@ pub struct NyaMenuItem {
     label: SharedString,
     icon_path: Option<SharedString>,
     icon_color: Option<u32>,
+    /// Foreground color shown when hovering a color-swatch dot (the "+").
+    swatch_text_color: Option<u32>,
     shortcut: Option<SharedString>,
     status: Option<(SharedString, u32)>,
     disabled: bool,
@@ -186,6 +189,7 @@ impl NyaMenuItem {
             label: label.into(),
             icon_path: None,
             icon_color: None,
+            swatch_text_color: None,
             shortcut: None,
             status: None,
             disabled: false,
@@ -215,6 +219,17 @@ impl NyaMenuItem {
         }
     }
 
+    /// A horizontal row of color swatches inside a context menu. Each swatch
+    /// carries its own fill color (`icon_color`), checked mark, tooltip and
+    /// click handler. Used for quick color pickers such as terminal selection
+    /// highlighting.
+    pub fn color_swatch_bar(items: Vec<Self>) -> Self {
+        Self {
+            kind: NyaMenuItemKind::ColorSwatchBar(items),
+            ..Self::action("")
+        }
+    }
+
     pub fn separator() -> Self {
         Self {
             kind: NyaMenuItemKind::Separator,
@@ -236,6 +251,13 @@ impl NyaMenuItem {
 
     pub fn icon_color(mut self, color: u32) -> Self {
         self.icon_color = Some(color);
+        self
+    }
+
+    /// Foreground color for the "+" glyph revealed when a swatch dot is
+    /// hovered. Only meaningful on items inside a color swatch bar.
+    pub fn swatch_text_color(mut self, color: u32) -> Self {
+        self.swatch_text_color = Some(color);
         self
     }
 
@@ -318,13 +340,24 @@ impl NyaMenuItem {
     }
 
     fn is_action_bar(&self) -> bool {
-        matches!(self.kind, NyaMenuItemKind::ActionBar(_))
+        matches!(
+            self.kind,
+            NyaMenuItemKind::ActionBar(_) | NyaMenuItemKind::ColorSwatchBar(_)
+        )
     }
 
     #[doc(hidden)]
     pub fn test_action_bar_items(&self) -> Option<&[NyaMenuItem]> {
         match &self.kind {
             NyaMenuItemKind::ActionBar(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn test_color_swatch_items(&self) -> Option<&[NyaMenuItem]> {
+        match &self.kind {
+            NyaMenuItemKind::ColorSwatchBar(items) => Some(items),
             _ => None,
         }
     }
@@ -339,6 +372,21 @@ impl NyaMenuItem {
     #[doc(hidden)]
     pub fn test_icon_color(&self) -> Option<u32> {
         self.icon_color
+    }
+
+    #[doc(hidden)]
+    pub fn test_swatch_text_color(&self) -> Option<u32> {
+        self.swatch_text_color
+    }
+
+    #[doc(hidden)]
+    pub fn test_checked(&self) -> bool {
+        self.checked
+    }
+
+    #[doc(hidden)]
+    pub fn test_on_click(&self) -> Option<&MenuClickHandler> {
+        self.on_click.as_ref()
     }
 
     #[doc(hidden)]
@@ -447,6 +495,143 @@ impl NyaMenuItem {
                                             .bg(cx.theme().border),
                                     )
                                 })
+                                .when_some(
+                                    on_confirm.filter(|_| !item.disabled),
+                                    |this, handler| {
+                                        this.on_action(move |_: &Confirm, window, cx| {
+                                            cx.stop_propagation();
+                                            window.dispatch_action(Box::new(Cancel), cx);
+                                            handler(&ClickEvent::default(), window, cx);
+                                        })
+                                    },
+                                )
+                                .child(button)
+                        }))
+                }))
+            }
+            NyaMenuItemKind::ColorSwatchBar(items) => {
+                let items = items.clone();
+                let menu_id = cx.entity().entity_id();
+                menu.item(PopupMenuItem::element(move |_, cx| {
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .relative()
+                        .gap_1()
+                        .ml(px(-(NYA_MENU_ICON_SLOT_WIDTH + NYA_MENU_ITEM_GAP)))
+                        .h(px(32.))
+                        .items_center()
+                        // Cover the parent menu item's row hover so only each swatch highlights.
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(-8.))
+                                .right(px(-8.))
+                                .bg(cx.theme().popover),
+                        )
+                        .children(items.iter().enumerate().map(|(index, item)| {
+                            let on_click = item.on_click.clone();
+                            let on_confirm = on_click.clone();
+                            let color = item.icon_color.unwrap_or(0xffffff);
+                            let text_color = item.swatch_text_color;
+                            let checked = item.checked;
+                            let label = item.label.clone();
+                            // One hover group per dot so revealing one "+" never
+                            // affects its neighbors.
+                            let swatch_group: SharedString =
+                                format!("menu-{menu_id}-swatch-{index}").into();
+                            let mut button = Button::new(format!("menu-{menu_id}-swatch-{index}"))
+                                .text()
+                                .group(swatch_group.clone())
+                                .accessibility_label(label.clone())
+                                .tooltip(label)
+                                .disabled(item.disabled)
+                                .child(
+                                    div()
+                                        .relative()
+                                        .size(px(16.))
+                                        .rounded_full()
+                                        .bg(rgb(color))
+                                        // Flex the dot itself so the symbol centers on
+                                        // the true middle. An extra absolute/inset_0
+                                        // flex layer centered its child unreliably.
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        // Applied color: show a check by default;
+                                        // hovering swaps it for the Minus icon to
+                                        // signal that clicking removes the rule.
+                                        .when(checked, |dot| {
+                                            dot.when_some(text_color, |dot, text_color| {
+                                                dot.child(
+                                                    div()
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .group_hover(&swatch_group, |style| {
+                                                            style.opacity(0.)
+                                                        })
+                                                        .child(
+                                                            Icon::new(IconName::Check)
+                                                                .with_size(px(14.))
+                                                                .text_color(rgb(text_color)),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .opacity(0.)
+                                                        .group_hover(&swatch_group, |style| {
+                                                            style.opacity(1.)
+                                                        })
+                                                        .child(
+                                                            Icon::new(IconName::Minus)
+                                                                .with_size(px(14.))
+                                                                .text_color(rgb(text_color)),
+                                                        ),
+                                                )
+                                            })
+                                        })
+                                        // Unapplied color: hovering reveals the
+                                        // Plus icon that signals clicking applies it.
+                                        .when(!checked, |dot| {
+                                            dot.when_some(text_color, |dot, text_color| {
+                                                dot.child(
+                                                    div()
+                                                        .opacity(0.)
+                                                        .group_hover(swatch_group, |style| {
+                                                            style.opacity(1.)
+                                                        })
+                                                        .child(
+                                                            Icon::new(IconName::Plus)
+                                                                .with_size(px(14.))
+                                                                .text_color(rgb(text_color)),
+                                                        ),
+                                                )
+                                            })
+                                        }),
+                                );
+                            if let Some(on_click) = on_click {
+                                button = button.on_click(move |event, window, cx| {
+                                    cx.stop_propagation();
+                                    window.dispatch_action(Box::new(Cancel), cx);
+                                    on_click(event, window, cx);
+                                });
+                            }
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .px(px(1.))
                                 .when_some(
                                     on_confirm.filter(|_| !item.disabled),
                                     |this, handler| {
@@ -1176,6 +1361,40 @@ mod tests {
         assert!(items[2].disabled);
         assert!(items[4].danger);
         assert!(bar.is_action_bar());
+    }
+
+    #[test]
+    fn color_swatch_bar_preserves_each_swatch_state() {
+        let bar = NyaMenuItem::color_swatch_bar(vec![
+            NyaMenuItem::action("#f44747")
+                .icon_color(0xf4_47_47)
+                .swatch_text_color(0xff_f0_ee),
+            NyaMenuItem::action("#32cd32")
+                .icon_color(0x32cd32)
+                .swatch_text_color(0xdf_fe_e4)
+                .checked(true),
+            NyaMenuItem::action("#6796e6")
+                .icon_color(0x67_96_e6)
+                .disabled(true),
+        ]);
+        let items = bar.test_color_swatch_items().expect("color swatch bar");
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_ref())
+                .collect::<Vec<_>>(),
+            ["#f44747", "#32cd32", "#6796e6"]
+        );
+        assert_eq!(items[0].test_icon_color(), Some(0xf4_47_47));
+        assert_eq!(items[0].test_swatch_text_color(), Some(0xff_f0_ee));
+        assert_eq!(items[1].test_swatch_text_color(), Some(0xdf_fe_e4));
+        assert_eq!(items[2].test_swatch_text_color(), None);
+        assert!(!items[0].checked);
+        assert!(items[1].checked);
+        assert!(items[2].disabled);
+        assert!(bar.is_action_bar());
+        assert!(bar.test_action_bar_items().is_none());
     }
 
     #[test]

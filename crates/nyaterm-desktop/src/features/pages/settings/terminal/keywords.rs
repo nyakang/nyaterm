@@ -1,25 +1,231 @@
 use rust_i18n::t;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg,
+    AnyElement, App, ClickEvent, Context, Entity, FontWeight, IntoElement, KeyDownEvent,
+    SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::view_widgets::keyword_match_option_toggles;
 use crate::models::KeywordHighlightEditorField;
+use crate::models::KeywordMatchOption;
 use crate::theme::ThemePalette;
 use nyaterm_core::keyword_highlight_presets::{
     builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized, builtin_keyword_rule_label,
+    keyword_highlight_color_palette,
 };
-use nyaterm_ui::NyaSwitch;
 use nyaterm_ui::NyaTooltip;
+use nyaterm_ui::{ColorSelect, NyaColorPickerEvent, NyaColorPickerState, NyaSwitch};
 
 use super::super::{
     settings_form_row, settings_form_section, settings_switch, settings_switch_with_enabled,
 };
 use super::helpers::parse_keyword_swatch;
 
+/// Colour-select controls for the custom-rule editor. Keyed by
+/// `{rule_id}:{field}` so a control is stable across presentation refreshes.
+#[derive(Default)]
+pub(in crate::features::pages::settings) struct KeywordColorPickerControls {
+    fields: std::collections::HashMap<String, (Entity<NyaColorPickerState>, Subscription, String)>,
+}
+
+impl KeywordColorPickerControls {
+    fn control_key(rule_id: &str, field: KeywordHighlightEditorField) -> String {
+        format!("{}:{}", rule_id, field.input_key())
+    }
+
+    fn color_of(
+        rule: &nyaterm_core::KeywordHighlightRule,
+        field: KeywordHighlightEditorField,
+    ) -> &str {
+        match field {
+            KeywordHighlightEditorField::ColorDark => &rule.color_dark,
+            KeywordHighlightEditorField::ColorLight => &rule.color_light,
+            KeywordHighlightEditorField::BgDark => &rule.bg_color_dark,
+            KeywordHighlightEditorField::BgLight => &rule.bg_color_light,
+            _ => "",
+        }
+    }
+
+    fn featured_colors(is_dark: bool) -> Vec<gpui::Hsla> {
+        keyword_highlight_color_palette(is_dark)
+            .iter()
+            .filter_map(|value| nyaterm_core::themes::parse_color(value))
+            .map(|bytes| gpui::Hsla::from(rgba(u32::from_be_bytes(bytes))))
+            .collect()
+    }
+
+    /// Create/update/discard picker states to match the current rules.
+    pub(in crate::features::pages::settings) fn sync(
+        &mut self,
+        rules: &[nyaterm_core::KeywordHighlightRule],
+        window: &mut Window,
+        cx: &mut Context<SettingsPanel>,
+    ) {
+        const FIELDS: [KeywordHighlightEditorField; 4] = [
+            KeywordHighlightEditorField::ColorDark,
+            KeywordHighlightEditorField::BgDark,
+            KeywordHighlightEditorField::ColorLight,
+            KeywordHighlightEditorField::BgLight,
+        ];
+        let mut live = std::collections::HashSet::new();
+        for rule in rules {
+            for field in FIELDS {
+                let key = Self::control_key(&rule.id, field);
+                live.insert(key.clone());
+                let value = Self::color_of(rule, field).to_string();
+                if let Some((picker, _, previous)) = self.fields.get_mut(&key) {
+                    if *previous != value {
+                        Self::apply_value(picker, &value, window, cx);
+                        *previous = value;
+                    }
+                    continue;
+                }
+                let picker = cx.new(|cx| {
+                    let mut state = NyaColorPickerState::new(window, cx);
+                    if let Some(bytes) = nyaterm_core::themes::parse_color(&value) {
+                        state = state.default_value(rgba(u32::from_be_bytes(bytes)));
+                    }
+                    state
+                });
+                let rule_id = rule.id.clone();
+                let subscription = cx.subscribe(&picker, move |panel, _, event, cx| {
+                    let NyaColorPickerEvent::Change(color) = event;
+                    let value = match color {
+                        Some(color) => {
+                            let c = gpui::Rgba::from(*color);
+                            let channel = |v: f32| (v * 255.).round().clamp(0., 255.) as u8;
+                            format!(
+                                "#{:02x}{:02x}{:02x}",
+                                channel(c.r),
+                                channel(c.g),
+                                channel(c.b)
+                            )
+                        }
+                        None => String::new(),
+                    };
+                    panel.with_app(cx, |app, cx| {
+                        app.set_keyword_highlight_rule_color_field(
+                            rule_id.clone(),
+                            field,
+                            value.as_str(),
+                            cx,
+                        );
+                    });
+                });
+                self.fields.insert(key, (picker, subscription, value));
+            }
+        }
+        let stale: Vec<String> = self
+            .fields
+            .keys()
+            .filter(|key| !live.contains(*key))
+            .cloned()
+            .collect();
+        for key in stale {
+            self.fields.remove(&key);
+        }
+    }
+
+    fn apply_value(
+        picker: &Entity<NyaColorPickerState>,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<SettingsPanel>,
+    ) {
+        picker.update(cx, |picker, cx| {
+            if let Some(bytes) = nyaterm_core::themes::parse_color(value) {
+                picker.set_value(rgba(u32::from_be_bytes(bytes)), window, cx);
+            } else {
+                picker.clear_value(window, cx);
+            }
+        });
+    }
+
+    pub(in crate::features::pages::settings) fn get(
+        &self,
+        rule_id: &str,
+        field: KeywordHighlightEditorField,
+    ) -> Option<&Entity<NyaColorPickerState>> {
+        self.fields
+            .get(&Self::control_key(rule_id, field))
+            .map(|(picker, _, _)| picker)
+    }
+}
+
 impl SettingsPanel {
+    /// Render a `ColorSelect` for a rule colour field, or a static swatch when
+    /// the rule is collapsed or highlighting is disabled.
+    fn keyword_color_select(
+        &self,
+        rule_id: &str,
+        field: KeywordHighlightEditorField,
+        value: &str,
+        interactive: bool,
+        is_dark: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.theme_palette();
+        if interactive && let Some(picker) = self.keyword_color_pickers.get(rule_id, field) {
+            let is_background = matches!(
+                field,
+                KeywordHighlightEditorField::BgDark | KeywordHighlightEditorField::BgLight
+            );
+            let label: SharedString = if is_background {
+                t!("settings.keywordHighlightBackgroundColor").into()
+            } else {
+                t!("settings.keywordHighlightTextColor").into()
+            };
+            let placeholder: SharedString = if is_background {
+                t!("settings.keywordHighlightNoBackground").into()
+            } else {
+                "#rrggbb".into()
+            };
+            // Both text and background rows use the same fixed width so the
+            // two selects line up. The background row spends 28px (clear
+            // button) + 8px (gap) of the 260px control slot on the button.
+            let color_select = ColorSelect::new(picker)
+                .w(px(224.))
+                .featured_colors(KeywordColorPickerControls::featured_colors(is_dark))
+                .placeholder(placeholder)
+                .accessibility_label(label);
+            if !is_background {
+                return color_select.into_any_element();
+            }
+            // Background rows get a leading clear button so the user can return
+            // to "no background" (inherit terminal). `clear_value()` does not
+            // emit a change event, so there is no write-back loop.
+            let mut control = div().flex().items_center().gap_2();
+            if !value.trim().is_empty() {
+                let clear_rule_id = rule_id.to_string();
+                control = control.child(keyword_highlight_icon_button(
+                    palette,
+                    format!("settings-keyword-bg-clear-{}", field.input_key()),
+                    "icons/close.svg",
+                    t!("settings.keywordHighlightClearBackground"),
+                    true,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.with_app(cx, |app, cx| {
+                            app.set_keyword_highlight_rule_color_field(
+                                clear_rule_id.clone(),
+                                field,
+                                "",
+                                cx,
+                            );
+                        });
+                        if let Some(picker) = this.keyword_color_pickers.get(&clear_rule_id, field)
+                        {
+                            picker.update(cx, |picker, cx| picker.clear_value(window, cx));
+                        }
+                    }),
+                ));
+            }
+            return control.child(color_select).into_any_element();
+        }
+        keyword_highlight_static_input(palette, value, false, true, 96.).into_any_element()
+    }
+
     pub(in crate::features) fn keyword_highlights_settings_section(
         &mut self,
         cx: &mut Context<Self>,
@@ -228,10 +434,39 @@ impl SettingsPanel {
                                     )
                                 };
                                 let patterns_control = if is_open && keyword_highlighting_enabled {
-                                    let input = self.existing_text_input_box(Self::keyword_highlight_text_input_id(
+                                    let toggle_rule_id = rule.id.clone();
+                                    let panel = cx.entity().downgrade();
+                                    let input = self.existing_text_input_box_with(
+                                        Self::keyword_highlight_text_input_id(
                                             &rule.id,
                                             KeywordHighlightEditorField::Patterns,
-                                        ), true);
+                                        ),
+                                        true,
+                                        |shell| {
+                                            shell.bottom_right(keyword_match_option_toggles(
+                                                palette,
+                                                rule.case_sensitive,
+                                                rule.whole_word,
+                                                rule.use_regex,
+                                                std::rc::Rc::new(
+                                                    move |option: KeywordMatchOption,
+                                                          _window: &mut Window,
+                                                          cx: &mut App| {
+                                                        let toggle_rule_id = toggle_rule_id.clone();
+                                                        panel
+                                                            .update(cx, |panel, cx| {
+                                                                panel.toggle_keyword_highlight_rule_match_option(
+                                                                    toggle_rule_id,
+                                                                    option,
+                                                                    cx,
+                                                                );
+                                                            })
+                                                            .ok();
+                                                    },
+                                                ),
+                                            ))
+                                        },
+                                    );
                                     div()
                                         .id(SharedString::from(format!(
                                             "settings-keyword-rule-patterns-{}",
@@ -260,77 +495,38 @@ impl SettingsPanel {
                                         0.,
                                     )
                                 };
-                                let dark_control = if is_open && keyword_highlighting_enabled {
-                                    let input = self.existing_text_input_box(Self::keyword_highlight_text_input_id(
-                                            &rule.id,
-                                            KeywordHighlightEditorField::ColorDark,
-                                        ), false);
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "settings-keyword-rule-dark-{}",
-                                            rule.id
-                                        )))
-                                        .w(px(96.))
-                                        .font_family(crate::features::shell::gpui_code_font_family())
-                                        .on_click(cx.listener({
-                                            let rule_id = rule_id.clone();
-                                            move |this, _, window, cx| {
-                                                this.focus_keyword_highlight_field(
-                                                    rule_id.clone(),
-                                                    KeywordHighlightEditorField::ColorDark,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }))
-                                        .child(input)
-                                        .into_any_element()
-                                } else {
-                                    keyword_highlight_static_input(
-                                        palette,
-                                        &rule.color_dark,
-                                        false,
-                                        true,
-                                        96.,
-                                    )
-                                };
-                                let light_control = if is_open && keyword_highlighting_enabled {
-                                    let input = self.existing_text_input_box(Self::keyword_highlight_text_input_id(
-                                            &rule.id,
-                                            KeywordHighlightEditorField::ColorLight,
-                                        ), false);
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "settings-keyword-rule-light-{}",
-                                            rule.id
-                                        )))
-                                        .w(px(96.))
-                                        .font_family(crate::features::shell::gpui_code_font_family())
-                                        .on_click(cx.listener({
-                                            let rule_id = rule_id.clone();
-                                            move |this, _, window, cx| {
-                                                this.focus_keyword_highlight_field(
-                                                    rule_id.clone(),
-                                                    KeywordHighlightEditorField::ColorLight,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }))
-                                        .child(input)
-                                        .into_any_element()
-                                } else {
-                                    keyword_highlight_static_input(
-                                        palette,
-                                        &rule.color_light,
-                                        false,
-                                        true,
-                                        96.,
-                                    )
-                                };
-                                let palette_dark = nyaterm_core::keyword_highlight_color_palette(true);
-                                let palette_light =
-                                    nyaterm_core::keyword_highlight_color_palette(false);
+                                let dark_text_control = self.keyword_color_select(
+                                    &rule.id,
+                                    KeywordHighlightEditorField::ColorDark,
+                                    &rule.color_dark,
+                                    is_open && keyword_highlighting_enabled,
+                                    is_dark,
+                                    cx,
+                                );
+                                let dark_bg_control = self.keyword_color_select(
+                                    &rule.id,
+                                    KeywordHighlightEditorField::BgDark,
+                                    &rule.bg_color_dark,
+                                    is_open && keyword_highlighting_enabled,
+                                    is_dark,
+                                    cx,
+                                );
+                                let light_text_control = self.keyword_color_select(
+                                    &rule.id,
+                                    KeywordHighlightEditorField::ColorLight,
+                                    &rule.color_light,
+                                    is_open && keyword_highlighting_enabled,
+                                    is_dark,
+                                    cx,
+                                );
+                                let light_bg_control = self.keyword_color_select(
+                                    &rule.id,
+                                    KeywordHighlightEditorField::BgLight,
+                                    &rule.bg_color_light,
+                                    is_open && keyword_highlighting_enabled,
+                                    is_dark,
+                                    cx,
+                                );
 
                                 div()
                                     .id(SharedString::from(format!(
@@ -506,156 +702,94 @@ impl SettingsPanel {
                                                         .flex()
                                                         .flex_col()
                                                         .gap_2()
-                                                        .child(settings_form_row(
-                                                            palette,
-                                                            t!(
-                                                                "settings.keywordHighlightDarkPalette",
-                                                            ),
-                                                            None,
-                                                            div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_2()
-                                                                .child(
-                                                                    div()
-                                                                        .size(px(20.))
-                                                                        .rounded_md()
-                                                                        .bg(rgb(
-                                                                            parse_keyword_swatch(
-                                                                                &rule.color_dark,
-                                                                            )
-                                                                            .unwrap_or(0x79c0ff),
-                                                                        ))
-                                                                        .border_1()
-                                                                        .border_color(rgb(
-                                                                            palette.border,
-                                                                        )),
-                                                                )
-                                                                .child(dark_control),
-                                                        ))
                                                         .child(
                                                             div()
-                                                                .flex()
-                                                                .flex_wrap()
-                                                                .gap_1()
-                                                                .children(palette_dark.iter().map(
-                                                                    |swatch| {
-                                                                        let color = parse_keyword_swatch(swatch)
-                                                                            .unwrap_or(0x79c0ff);
-                                                                        let rid = rule_id.clone();
-                                                                        let value = (*swatch).to_string();
-                                                                        div()
-                                                                            .id(SharedString::from(
-                                                                                format!(
-                                                                                    "settings-keyword-swatch-dark-{}-{swatch}",
-                                                                                    rule.id
-                                                                                ),
-                                                                            ))
-                                                                            .size(px(16.))
-                                                                            .rounded_sm()
-                                                                            .bg(rgb(color))
-                                                                            .border_1()
-                                                                            .border_color(rgb(
-                                                                                palette.border,
-                                                                            ))
-                                                                            .when(
-                                                                                keyword_highlighting_enabled,
-                                                                                |this| {
-                                                                                    this.cursor_pointer().on_click(cx.listener(
-                                                                                        move |this, _, _, cx| {
-                                                                                            this.set_keyword_highlight_rule_color(
-                                                                                                rid.clone(),
-                                                                                                true,
-                                                                                                &value,
-                                                                                                cx,
-                                                                                            );
-                                                                                        },
-                                                                                    ))
-                                                                                },
-                                                                            )
-                                                                    },
+                                                                .text_size(px(11.))
+                                                                .font_weight(FontWeight(600.))
+                                                                .text_color(rgb(palette.text_muted))
+                                                                .child(t!(
+                                                                    "settings.keywordHighlightDarkPalette",
                                                                 )),
                                                         )
                                                         .child(settings_form_row(
                                                             palette,
-                                                            t!(
-                                                                "settings.keywordHighlightLightPalette",
-                                                            ),
+                                                            t!("settings.keywordHighlightTextColor"),
                                                             None,
+                                                            dark_text_control,
+                                                        ))
+                                                        .child(settings_form_row(
+                                                            palette,
+                                                            t!("settings.keywordHighlightBackgroundColor"),
+                                                            None,
+                                                            dark_bg_control,
+                                                        ))
+                                                        .child(
                                                             div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_2()
-                                                                .child(
-                                                                    div()
-                                                                        .size(px(20.))
-                                                                        .rounded_md()
-                                                                        .bg(rgb(
-                                                                            parse_keyword_swatch(
-                                                                                &rule.color_light,
-                                                                            )
-                                                                            .unwrap_or(0x0969da),
-                                                                        ))
-                                                                        .border_1()
-                                                                        .border_color(rgb(
-                                                                            palette.border,
-                                                                        )),
-                                                                )
-                                                                .child(light_control),
+                                                                .text_size(px(11.))
+                                                                .font_weight(FontWeight(600.))
+                                                                .text_color(rgb(palette.text_muted))
+                                                                .mt_2()
+                                                                .child(t!(
+                                                                    "settings.keywordHighlightLightPalette",
+                                                                )),
+                                                        )
+                                                        .child(settings_form_row(
+                                                            palette,
+                                                            t!("settings.keywordHighlightTextColor"),
+                                                            None,
+                                                            light_text_control,
+                                                        ))
+                                                        .child(settings_form_row(
+                                                            palette,
+                                                            t!("settings.keywordHighlightBackgroundColor"),
+                                                            None,
+                                                            light_bg_control,
                                                         ))
                                                         .child(
                                                             div()
                                                                 .flex()
-                                                                .flex_wrap()
+                                                                .flex_col()
                                                                 .gap_1()
-                                                                .children(
-                                                                    palette_light.iter().map(
-                                                                        |swatch| {
-                                                                            let color =
-                                                                                parse_keyword_swatch(
-                                                                                    swatch,
-                                                                                )
-                                                                                .unwrap_or(
-                                                                                    0x0969da,
-                                                                                );
-                                                                            let rid =
-                                                                                rule_id.clone();
-                                                                            let value =
-                                                                                (*swatch)
-                                                                                    .to_string();
-                                                                            div()
-                                                                                .id(SharedString::from(
-                                                                                    format!(
-                                                                                        "settings-keyword-swatch-light-{}-{swatch}",
-                                                                                        rule.id
-                                                                                    ),
-                                                                                ))
-                                                                                .size(px(16.))
-                                                                                .rounded_sm()
-                                                                                .bg(rgb(color))
-                                                                                .border_1()
-                                                                                .border_color(rgb(
-                                                                                    palette.border,
-                                                                                ))
-                                                                                .when(
-                                                                                    keyword_highlighting_enabled,
-                                                                                    |this| {
-                                                                                        this.cursor_pointer().on_click(
-                                                                                            cx.listener(
-                                                                                                move |this, _, _, cx| {
-                                                                                                    this.set_keyword_highlight_rule_color(
-                                                                                                        rid.clone(),
-                                                                                                        false,
-                                                                                                        &value,
-                                                                                                        cx,
-                                                                                                    );
-                                                                                                },
-                                                                                            ),
-                                                                                        )
-                                                                                    },
-                                                                                )
-                                                                        },
-                                                                    ),
+                                                                .mt_2()
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(11.))
+                                                                        .text_color(rgb(palette.text_muted))
+                                                                        .child(t!("settings.keywordHighlightPreview")),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .h(px(30.))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded_md()
+                                                                        .border_1()
+                                                                        .border_color(rgb(palette.border))
+                                                                        .bg(rgb(
+                                                                            if is_dark {
+                                                                                parse_keyword_swatch(&rule.bg_color_dark)
+                                                                            } else {
+                                                                                parse_keyword_swatch(&rule.bg_color_light)
+                                                                            }
+                                                                            .unwrap_or(palette.input),
+                                                                        ))
+                                                                        .text_color(rgb(
+                                                                            parse_keyword_swatch(
+                                                                                if is_dark {
+                                                                                    &rule.color_dark
+                                                                                } else {
+                                                                                    &rule.color_light
+                                                                                },
+                                                                            )
+                                                                            .unwrap_or(if is_dark {
+                                                                                0x79c0ff
+                                                                            } else {
+                                                                                0x0969da
+                                                                            }),
+                                                                        ))
+                                                                        .font_family(crate::features::shell::gpui_code_font_family())
+                                                                        .child(t!("settings.keywordHighlightPreviewSample")),
                                                                 ),
                                                         ),
                                                 ),

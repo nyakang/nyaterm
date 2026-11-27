@@ -119,6 +119,7 @@ fn reverse_hidden_text_uses_effective_background_with_and_without_keywords() {
     let rules = [crate::keywords::CompiledKeywordRule {
         regex: regex::Regex::new("SELECTED").unwrap(),
         color: 0xff2244,
+        background: None,
         priority: 0,
     }];
     for compiled in [rules.as_slice(), &[]] {

@@ -184,6 +184,34 @@ mod tests {
         }
     }
 
+    /// The keyword highlight editor draws its delete and clear buttons with
+    /// gpui-kit's `Trash` icon, which addresses `icons/trash.svg`. That path is
+    /// not part of gpui-kit's default icon bundle, so NyaTerm has to ship it
+    /// itself; without it the buttons render blank.
+    ///
+    /// The same holds for the three matching options of the pattern box. They
+    /// come from the full Lucide catalog, but the application only falls back
+    /// to gpui-kit's *default* bundle, which ships `case-sensitive.svg` alone.
+    /// `whole-word.svg` and `regex.svg` are missing there, so the app has to
+    /// embed all three to keep the trio shipping together; otherwise those two
+    /// buttons keep their hitbox but paint nothing at all.
+    #[test]
+    fn keyword_highlight_editor_icons_are_embedded() {
+        const REQUIRED: &[&str] = &[
+            "icons/trash.svg",          // Delete a rule / clear the session rules.
+            "icons/plus.svg",           // Add a rule to a group.
+            "icons/case-sensitive.svg", // Match case sensitively.
+            "icons/whole-word.svg",     // Match whole words only.
+            "icons/regex.svg",          // Treat the pattern as a regular expression.
+        ];
+        for path in REQUIRED {
+            assert!(
+                EmbeddedAssets::get(path).is_some(),
+                "{path} is referenced by the keyword highlight editor but is not embedded"
+            );
+        }
+    }
+
     #[test]
     fn notes_panel_icons_are_embedded() {
         const REQUIRED: &[&str] = &[

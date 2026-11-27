@@ -1315,6 +1315,7 @@ fn semantic_foreground_respects_ansi_color_and_hidden_text() {
                     start_col: 0,
                     end_col: token.len(),
                     color: swatch(id),
+                    background: None,
                 }]),
                 &[],
                 nyaterm_ui::theme_palette("github-dark"),
@@ -1358,7 +1359,11 @@ fn whole_match_ties_are_deterministic_and_user_marks_do_not_split_strings() {
             name: "Mark".into(),
             patterns: vec!["ERROR".into()],
             color: "#123456".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         },
     );
     let highlighter = compile_terminal_keyword_highlighter(

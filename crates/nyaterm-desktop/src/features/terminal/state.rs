@@ -353,10 +353,18 @@ pub(super) struct TerminalFontMetricsCache {
     pub(super) cell_width: f32,
 }
 
+/// Word resolved from the right-click position for highlight-only menu entries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TerminalContextWord {
+    pub(super) session_id: String,
+    pub(super) text: String,
+}
+
 /// Terminal actions overlay and context menu.
 pub(super) struct TerminalMenuState {
     pub(super) actions_open: bool,
     pub(super) actions_focus: FocusHandle,
+    pub(super) context_word: Option<TerminalContextWord>,
     pub(super) action_link_menu: Option<ActionLinkMenuState>,
     pub(super) action_link_menu_generation: u64,
     pub(super) action_link_tooltip: Option<ActionLinkTooltipState>,
@@ -533,6 +541,7 @@ impl TerminalFeatureState {
             menus: TerminalMenuState {
                 actions_open: false,
                 actions_focus: focus.actions,
+                context_word: None,
                 action_link_menu: None,
                 action_link_menu_generation: 0,
                 action_link_tooltip: None,
@@ -624,6 +633,7 @@ impl TerminalFeatureState {
         self.selection.click_anchor = None;
         let had_interaction = self.selection.selection.take().is_some()
             || self.selection.dragging
+            || self.menus.context_word.is_some()
             || self.menus.action_link_menu.is_some()
             || self.menus.action_link_tooltip.is_some();
         self.selection.text.invalidate();
@@ -636,6 +646,7 @@ impl TerminalFeatureState {
         self.menus.action_link_menu = None;
         self.menus.action_link_tooltip = None;
         self.menus.action_link_hover_pending = None;
+        self.menus.context_word = None;
         had_interaction
     }
 

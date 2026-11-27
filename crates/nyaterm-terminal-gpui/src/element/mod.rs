@@ -1268,6 +1268,32 @@ pub(super) fn terminal_background_ranges_for_cells(
     out
 }
 
+/// Keyword highlights paint as cell blocks below the shaped text. Only a rule
+/// that declares a background paints a block; a rule without one stays
+/// transparent, so clearing a background really clears it.
+fn terminal_keyword_background_ranges(
+    spans: &[TerminalHighlightSpan],
+) -> Vec<TerminalRowBackgroundRange> {
+    let mut col = 0;
+    let mut backgrounds = Vec::new();
+    for span in spans {
+        let end = col + terminal_cell_count(&span.text).max(1);
+        // The span builder has already excluded concealed, inverse and
+        // explicitly coloured ANSI text. Never paint raw matcher ranges here.
+        if span.keyword
+            && let Some(bg) = span.bg
+        {
+            backgrounds.push(TerminalRowBackgroundRange {
+                bg,
+                start: col,
+                end,
+            });
+        }
+        col = end;
+    }
+    backgrounds
+}
+
 #[cfg(test)]
 fn terminal_underline_ranges_for_spans(
     spans: &[TerminalHighlightSpan],
@@ -2181,7 +2207,7 @@ impl Element for NyaTerminalElement {
                 } else {
                     glyph_spans
                 };
-                let background_ranges = snapshot_row
+                let mut background_ranges = snapshot_row
                     .map(|row| {
                         terminal_background_ranges_for_cells(
                             &row.cells,
@@ -2190,6 +2216,11 @@ impl Element for NyaTerminalElement {
                         )
                     })
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
+                // Cell backgrounds are authoritative for normal rows, so keyword
+                // backgrounds must be overlaid explicitly. A rule only paints a
+                // background when it carries one, so a cleared background stays
+                // transparent. It paints below the shaped text.
+                background_ranges.extend(terminal_keyword_background_ranges(&background_spans));
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,
                     snapshot_row.map(|row| row.cells.as_ref()),

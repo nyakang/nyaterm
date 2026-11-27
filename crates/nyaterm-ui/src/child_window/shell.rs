@@ -153,14 +153,22 @@ impl ChildWindowSpec {
     /// A scoped edit that owns a draft until it is saved or cancelled.
     ///
     /// `WindowKind::Dialog` is a real platform modal, so the owner is blocked by
-    /// the OS rather than by anything here: Windows disables the owner HWND, macOS
-    /// runs it as an AppKit sheet, X11 sets `_NET_WM_STATE_MODAL` and Wayland
-    /// `xdg_dialog_v1.set_modal`, and on X11/Wayland GPUI also drops input to a
-    /// blocked parent itself. That is what makes it safe to have no app-level
-    /// modality: there is no entry point left to forget about.
+    /// the OS rather than by anything here: Windows disables the owner HWND, X11
+    /// sets `_NET_WM_STATE_MODAL` and Wayland `xdg_dialog_v1.set_modal`, and on
+    /// X11/Wayland GPUI also drops input to a blocked parent itself. That is what
+    /// makes it safe to have no app-level modality: there is no entry point left
+    /// to forget about.
     ///
-    /// Not minimisable on purpose. An owned window carries no taskbar button, so a
-    /// minimised one is hard to get back while its owner is still disabled.
+    /// On macOS our GPUI fork presents a `Dialog` as a titled NSWindow with an
+    /// AppKit modal session rather than as a sheet, so it keeps the traffic-light
+    /// controls. That session is pumped from a timer while `[NSApp run]` owns the
+    /// event loop, so it does not stop GPUI's own view handlers from dispatching
+    /// clicks to the owner; the scrim owns pointer input there instead (see
+    /// `modal_scrim_owns_input`). The draft-owning window still has to be kept
+    /// alive until saved or cancelled.
+    ///
+    /// Modal editors cannot minimise: their owner stays blocked until the
+    /// draft is saved or discarded, and restoration is not guaranteed.
     pub fn modal_editor(title: String, width: f32, height: f32) -> Self {
         Self {
             title,
@@ -198,15 +206,11 @@ impl ChildWindowSpec {
 
     /// Which chrome the platform will leave for this window to draw.
     ///
-    /// macOS presents `WindowKind::Dialog` through `beginSheet:`, and a sheet has
-    /// no title bar: the style mask still carries `NSClosableWindowMask`, but
-    /// AppKit never draws the buttons, so a gutter reserved for them stays empty.
+    /// Every child window has a real title bar. On macOS our GPUI fork runs a
+    /// `Dialog` as an AppKit modal session on a plain NSWindow instead of as a
+    /// sheet, so even scoped edits have traffic lights and a draggable header.
     pub fn chrome(&self) -> ChildWindowChrome {
-        if cfg!(target_os = "macos") && matches!(self.kind, WindowKind::Dialog) {
-            ChildWindowChrome::Sheet
-        } else {
-            ChildWindowChrome::Window
-        }
+        ChildWindowChrome::Window
     }
 }
 
@@ -235,14 +239,28 @@ pub fn child_window_options(
 
 /// Whether the main window should dim itself behind a modal child window.
 ///
-/// The dim is only ever a visual cue -- the blocking is the platform's job. On
-/// Windows `EnableWindow` does not grey a window's content, and on X11/Wayland
-/// GPUI blocks input without changing how the parent looks, so without this the
-/// main window would look completely live while being unclickable. macOS is the
-/// exception: an AppKit sheet dims its parent itself, and drawing a second scrim
-/// over that would double it.
+/// The dim is always drawn: Windows `EnableWindow` does not grey a window's
+/// content, X11/Wayland GPUI blocks input without changing how the parent looks,
+/// and an AppKit modal session does not dim the owner either.
 pub fn modal_scrim_is_drawn() -> bool {
-    !cfg!(target_os = "macos")
+    true
+}
+
+/// Whether the main window's modal scrim must also own pointer input.
+///
+/// Windows disables the owner `HWND`, and X11/Wayland both set a modal window
+/// hint and have GPUI drop input to a blocked parent, so there the scrim can stay
+/// a passive, visual-only layer.
+///
+/// That is not true on macOS. Our fork presents a `Dialog` as a plain NSWindow
+/// driven by an AppKit modal session that is pumped from a timer while
+/// `[NSApp run]` owns the event loop. Mouse events are still dispatched by
+/// GPUI's own view handlers, so the session alone does not stop clicks reaching
+/// the owner. There the scrim has to be a real `full_window_input_layer` (see
+/// `crate::overlay::full_window_overlay_layer`) or the dimmed main window stays
+/// interactive behind the child.
+pub fn modal_scrim_owns_input() -> bool {
+    cfg!(target_os = "macos")
 }
 
 /// Resolve the display and screen-space bounds a child window should open at.
@@ -424,14 +442,16 @@ mod tests {
     /// different and mixing them up is silent: a `Normal` window that should have
     /// been modal simply lets the user edit two drafts at once, and a `Dialog` that
     /// should have been a prompt blocks the workspace it is reporting on.
+    ///
+    /// A scoped edit is a platform modal everywhere. On macOS our GPUI fork
+    /// implements that with an AppKit modal session on a normal NSWindow, so it
+    /// keeps traffic lights; pointer input to the owner is stopped by the app's
+    /// scrim because the timer-pumped session does not do it.
     #[test]
     fn each_child_window_gets_the_kind_its_task_needs() {
         let scoped_edit = ChildWindowSpec::modal_editor("Edit".to_string(), 520., 620.);
         assert!(matches!(scoped_edit.kind, WindowKind::Dialog));
-        assert!(
-            !scoped_edit.minimizable,
-            "an owned window has no taskbar button, so a minimised modal is hard to get back"
-        );
+        assert!(!scoped_edit.minimizable);
 
         let document = ChildWindowSpec::document("File".to_string(), 980., 720.);
         assert!(matches!(document.kind, WindowKind::Normal));
@@ -445,22 +465,29 @@ mod tests {
         assert!(!prompt.resizable);
     }
 
-    /// A sheet has no title bar, so it must not reserve the traffic-light gutter
-    /// or claim a drag region -- AppKit draws neither, and the gutter would just be
-    /// an empty indent to the left of the title.
+    /// On macOS the modal session is timer-pumped and cannot stop GPUI's own
+    /// view handlers from dispatching clicks to the owner, so the scrim has to
+    /// be an active input boundary there. Everywhere else the platform (or
+    /// GPUI itself) blocks input and the scrim stays passive: a native-child
+    /// overlay would otherwise claim the whole client area with an owned input
+    /// popup raised above the dialog.
+    #[test]
+    fn the_modal_scrim_owns_input_only_where_the_platform_does_not() {
+        let owns_input = super::modal_scrim_owns_input();
+        assert_eq!(owns_input, cfg!(target_os = "macos"));
+        assert!(super::modal_scrim_is_drawn());
+    }
+
+    /// Every child window keeps a real title bar, so each reserves the
+    /// traffic-light gutter and a drag region. Even a scoped edit is an AppKit
+    /// modal session on a plain NSWindow on macOS, not a sheet.
     #[test]
     fn only_a_window_with_a_title_bar_reserves_room_for_platform_controls() {
         let scoped_edit = ChildWindowSpec::modal_editor("Edit".to_string(), 520., 620.);
         let document = ChildWindowSpec::document("File".to_string(), 980., 720.);
         let prompt = ChildWindowSpec::topmost_prompt("Modified".to_string(), 440., 240.);
 
-        // A `Dialog` is only a sheet on macOS; everywhere else it keeps a real
-        // title bar and, on Windows, the controls we draw into it ourselves.
-        if cfg!(target_os = "macos") {
-            assert_eq!(scoped_edit.chrome(), ChildWindowChrome::Sheet);
-        } else {
-            assert_eq!(scoped_edit.chrome(), ChildWindowChrome::Window);
-        }
+        assert_eq!(scoped_edit.chrome(), ChildWindowChrome::Window);
         assert_eq!(document.chrome(), ChildWindowChrome::Window);
         assert_eq!(prompt.chrome(), ChildWindowChrome::Window);
     }

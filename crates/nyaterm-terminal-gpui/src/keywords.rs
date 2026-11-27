@@ -9,6 +9,7 @@ use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{TerminalSnapshot, TerminalSnapshotRow, terminal_cell_col_for_byte_index};
 
 use crate::element::{TerminalBufferMatch, TerminalSearchFlags};
+use crate::keywords::matching::keyword_pattern_source;
 use crate::semantic::{SemanticContext, SemanticHighlighter, extend_region, fallback_prompt};
 use crate::types::{TerminalHighlightSpan, TerminalKeywordRange};
 use nyaterm_core::keyword_highlight_presets::builtin_keyword_matcher;
@@ -19,6 +20,7 @@ pub(super) type CompiledKeywordRules = Vec<CompiledKeywordRule>;
 pub(super) struct CompiledKeywordRule {
     pub(super) regex: regex::Regex,
     pub(super) color: u32,
+    pub(super) background: Option<u32>,
     pub(super) priority: usize,
 }
 
@@ -26,6 +28,8 @@ pub(super) struct CompiledKeywordRule {
 struct CompiledLiteralKeywordRule {
     pattern: String,
     color: u32,
+    /// The background of the rule this pattern belongs to.
+    background: Option<u32>,
     priority: usize,
 }
 
@@ -1041,7 +1045,7 @@ fn terminal_keyword_ranges_for_wrapped_group(
     let matches = keyword_matches_with_context(&line, highlighter, &context);
     let match_duration = match_started.elapsed();
     let range_map_started = Instant::now();
-    for (start, end, color) in matches {
+    for (start, end, color, background) in matches {
         if start >= end || end > line.len() {
             continue;
         }
@@ -1054,6 +1058,7 @@ fn terminal_keyword_ranges_for_wrapped_group(
             if let Some(ranges) = row_ranges.get_mut(row_idx) {
                 if let Some(previous) = ranges.last_mut()
                     && previous.color == color
+                    && previous.background == background
                     && previous.end_col >= cell.start_col
                 {
                     previous.end_col = previous.end_col.max(cell.end_col);
@@ -1063,6 +1068,7 @@ fn terminal_keyword_ranges_for_wrapped_group(
                     start_col: cell.start_col,
                     end_col: cell.end_col,
                     color,
+                    background,
                 });
             }
         }
@@ -1090,15 +1096,20 @@ fn keyword_matches_highlighter(
     highlighter: &TerminalKeywordHighlighter,
 ) -> Vec<(usize, usize, u32)> {
     keyword_matches_with_context(line, highlighter, &SemanticContext::default())
+        .into_iter()
+        .map(|(start, end, color, _)| (start, end, color))
+        .collect()
 }
 
 fn keyword_matches_with_context(
     line: &str,
     highlighter: &TerminalKeywordHighlighter,
     context: &SemanticContext,
-) -> Vec<(usize, usize, u32)> {
+) -> Vec<(usize, usize, u32, Option<u32>)> {
     let user_matches = user_keyword_matches(line, highlighter);
-    highlighter.semantic.ranges(line, context, &user_matches)
+    highlighter
+        .semantic
+        .ranges_with_background(line, context, &user_matches)
 }
 
 fn row_semantic_key(row: &TerminalSnapshotRow) -> u64 {
@@ -1116,7 +1127,7 @@ fn row_semantic_key(row: &TerminalSnapshotRow) -> u64 {
 fn user_keyword_matches(
     line: &str,
     highlighter: &TerminalKeywordHighlighter,
-) -> Vec<(usize, usize, u32)> {
+) -> Vec<(usize, usize, u32, Option<u32>)> {
     if line.is_empty()
         || (highlighter.regex_rules.is_empty() && highlighter.literal_rules.is_empty())
     {
@@ -1146,6 +1157,7 @@ fn user_keyword_matches(
                     start: cursor.saturating_add(found.start()),
                     end: cursor.saturating_add(found.end()),
                     color: rule.color,
+                    background: rule.background,
                     priority: rule.priority,
                 })
             });
@@ -1164,7 +1176,7 @@ fn user_keyword_matches(
         let Some(best) = best else {
             break;
         };
-        matches.push((best.start, best.end, best.color));
+        matches.push((best.start, best.end, best.color, best.background));
         cursor = best.end;
         if cursor >= line.len() {
             break;
@@ -1182,6 +1194,7 @@ fn pending_regex_match(
         start,
         end,
         color: rule.color,
+        background: rule.background,
         priority: rule.priority,
     })
 }
@@ -1189,7 +1202,7 @@ fn pending_regex_match(
 pub(super) fn keyword_matches_compiled(
     line: &str,
     compiled: &[CompiledKeywordRule],
-) -> Vec<(usize, usize, u32)> {
+) -> Vec<(usize, usize, u32, Option<u32>)> {
     let mut pending = compiled
         .iter()
         .map(|rule| {
@@ -1198,6 +1211,7 @@ pub(super) fn keyword_matches_compiled(
                     start,
                     end,
                     color: rule.color,
+                    background: rule.background,
                     priority: rule.priority,
                 }
             })
@@ -1215,6 +1229,7 @@ pub(super) fn keyword_matches_compiled(
                             start,
                             end,
                             color: rule.color,
+                            background: rule.background,
                             priority: rule.priority,
                         }
                     });
@@ -1238,7 +1253,7 @@ pub(super) fn keyword_matches_compiled(
 
         debug_assert!(best.start >= cursor);
         debug_assert!(best.end > best.start);
-        matches.push((best.start, best.end, best.color));
+        matches.push((best.start, best.end, best.color, best.background));
         cursor = best.end;
         if cursor >= line.len() {
             break;
@@ -1253,6 +1268,10 @@ struct PendingKeywordMatch {
     start: usize,
     end: usize,
     color: u32,
+    /// The background of the rule that matched. The paint needs the background
+    /// of the rule itself: two rules can share a text colour and then a
+    /// colour keyed lookup hands the wrong background to one of them.
+    background: Option<u32>,
     priority: usize,
 }
 
@@ -1331,7 +1350,13 @@ pub fn terminal_keyword_rules_key(rules: &[ResolvedKeywordHighlightRule]) -> u64
         rule.name.hash(&mut hasher);
         rule.patterns.hash(&mut hasher);
         rule.color.hash(&mut hasher);
+        rule.background.hash(&mut hasher);
         rule.enabled.hash(&mut hasher);
+        // The matching options change what the patterns match, so they belong
+        // into the cache key.
+        rule.case_sensitive.hash(&mut hasher);
+        rule.whole_word.hash(&mut hasher);
+        rule.use_regex.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -1371,7 +1396,7 @@ pub(super) fn keyword_highlight_spans_compiled(
 
     let mut spans = Vec::new();
     let mut cursor = 0;
-    for (start, end, color) in matches {
+    for (start, end, color, background) in matches {
         if start > cursor {
             spans.push(TerminalHighlightSpan {
                 text: line[cursor..start].to_string(),
@@ -1388,7 +1413,7 @@ pub(super) fn keyword_highlight_spans_compiled(
         spans.push(TerminalHighlightSpan {
             text: line[start..end].to_string(),
             color: Some(color),
-            bg: None,
+            bg: background,
             keyword: true,
             underline: false,
             strikeout: false,
@@ -1435,6 +1460,7 @@ fn compile_keyword_rule_sets(
         .filter(|rule| rule.enabled && builtin_keyword_matcher(&rule.id).is_none())
     {
         let color = parse_hex_rgb(&rule.color).unwrap_or(0x79c0ff);
+        let background = rule.background.as_deref().and_then(parse_hex_rgb);
         let alts = rule
             .patterns
             .iter()
@@ -1446,18 +1472,30 @@ fn compile_keyword_rule_sets(
             continue;
         }
         let priority = regex_rules.len().saturating_add(literal_rules.len());
-        if alts
-            .iter()
-            .all(|pattern| is_literal_keyword_pattern(pattern))
-        {
+        // The literal automaton always matches case insensitively and cannot
+        // check word boundaries, so those rules have to take the regex path.
+        // A pattern that is not a regular expression matches literally in
+        // either case, so the automaton still handles it.
+        let literal_match = !rule.case_sensitive
+            && !rule.whole_word
+            && (!rule.use_regex || alts.iter().all(|p| is_literal_keyword_pattern(p)));
+        if literal_match {
             literal_rules.extend(alts.into_iter().map(|pattern| CompiledLiteralKeywordRule {
                 pattern,
                 color,
+                background,
                 priority,
             }));
             continue;
         }
-        compile_keyword_regex_alternatives(alts, color, priority, &mut regex_rules);
+        compile_keyword_regex_alternatives(
+            alts,
+            color,
+            background,
+            priority,
+            rule,
+            &mut regex_rules,
+        );
     }
     literal_rules.sort_by(|left, right| {
         right
@@ -1490,6 +1528,7 @@ fn compile_keyword_rules_with_filter(
     let mut compiled = Vec::new();
     for rule in rules.iter().filter(|rule| rule.enabled) {
         let color = parse_hex_rgb(&rule.color).unwrap_or(0x79c0ff);
+        let background = rule.background.as_deref().and_then(parse_hex_rgb);
         let alts = rule
             .patterns
             .iter()
@@ -1504,7 +1543,7 @@ fn compile_keyword_rules_with_filter(
             continue;
         }
         let priority = compiled.len();
-        compile_keyword_regex_alternatives(alts, color, priority, &mut compiled);
+        compile_keyword_regex_alternatives(alts, color, background, priority, rule, &mut compiled);
     }
     compiled
 }
@@ -1512,9 +1551,19 @@ fn compile_keyword_rules_with_filter(
 fn compile_keyword_regex_alternatives(
     alts: Vec<String>,
     color: u32,
+    background: Option<u32>,
     priority: usize,
+    rule: &ResolvedKeywordHighlightRule,
     out: &mut CompiledKeywordRules,
 ) {
+    // Every alternative carries its own case and word boundary handling, so
+    // one alternative cannot change the match of the next one.
+    let alts = alts
+        .iter()
+        .map(|alt| {
+            keyword_pattern_source(alt, rule.case_sensitive, rule.whole_word, rule.use_regex)
+        })
+        .collect::<Vec<_>>();
     let combined = if alts.len() == 1 {
         alts[0].clone()
     } else {
@@ -1523,21 +1572,21 @@ fn compile_keyword_regex_alternatives(
             .collect::<Vec<_>>()
             .join("|")
     };
-    let pattern = keyword_pattern_with_default_case(&combined);
-    match regex::Regex::new(&pattern) {
+    match regex::Regex::new(&combined) {
         Ok(regex) => out.push(CompiledKeywordRule {
             regex,
             color,
+            background,
             priority,
         }),
         Err(_) => {
             for alt in alts {
-                let pattern = keyword_pattern_with_default_case(&alt);
-                if let Ok(regex) = regex::Regex::new(&pattern) {
+                if let Ok(regex) = regex::Regex::new(&alt) {
                     let priority = out.len();
                     out.push(CompiledKeywordRule {
                         regex,
                         color,
+                        background,
                         priority,
                     });
                 }
@@ -1554,18 +1603,6 @@ fn is_literal_keyword_pattern(pattern: &str) -> bool {
                 '\\' | '.' | '^' | '$' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
             )
         })
-}
-
-fn keyword_pattern_with_default_case(pattern: &str) -> String {
-    if keyword_pattern_has_inline_case_flag(pattern) {
-        pattern.to_string()
-    } else {
-        format!("(?i){pattern}")
-    }
-}
-
-fn keyword_pattern_has_inline_case_flag(pattern: &str) -> bool {
-    pattern.contains("(?i)") || pattern.contains("(?-i)")
 }
 
 pub fn terminal_buffer_matches(
@@ -1656,6 +1693,25 @@ pub(super) fn parse_hex_rgb(value: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// The background the quick-pick palette pairs with a text colour.
+///
+/// The paint no longer derives a background from a colour: every rule
+/// carries its own background from the rule set to the cell block. This
+/// helper only documents the palette pairing that the quick rules bake
+/// into their stored background.
+#[cfg(test)]
+pub(super) fn quick_highlight_background(text_color: u32) -> Option<u32> {
+    nyaterm_core::KEYWORD_HIGHLIGHT_QUICK_COLORS
+        .iter()
+        .find_map(|(dark, light, background)| {
+            if parse_hex_rgb(dark) == Some(text_color) || parse_hex_rgb(light) == Some(text_color) {
+                parse_hex_rgb(background)
+            } else {
+                None
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1666,16 +1722,80 @@ mod tests {
     };
 
     use super::{
-        CompiledKeywordRule, MAX_KEYWORD_WRAPPED_GROUP_ROWS, TerminalKeywordHighlightLookup,
-        TerminalKeywordHighlightSnapshot, compile_keyword_rules,
+        CompiledKeywordRule, MAX_KEYWORD_WRAPPED_GROUP_ROWS, TerminalKeywordHighlightConfig,
+        TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, compile_keyword_rules,
         compile_terminal_keyword_highlighter, keyword_highlight_spans_compiled,
-        keyword_matches_compiled, keyword_matches_highlighter,
+        keyword_matches_compiled, keyword_matches_highlighter, parse_hex_rgb,
         precompute_terminal_keyword_highlights, precompute_terminal_keyword_highlights_for_rows,
-        precompute_terminal_keyword_highlights_for_rows_with_stats, terminal_buffer_matches,
-        terminal_keyword_row_reuse_keys,
+        precompute_terminal_keyword_highlights_for_rows_with_stats, quick_highlight_background,
+        terminal_buffer_matches, terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
     };
+    use crate::contrast::contrast_ratio;
     use crate::element::TerminalSearchFlags;
     use crate::types::TerminalKeywordRange;
+    use nyaterm_core::KEYWORD_HIGHLIGHT_QUICK_COLORS;
+
+    #[test]
+    fn quick_highlight_pairs_use_dark_backgrounds_and_light_text() {
+        for (dark, light, background) in KEYWORD_HIGHLIGHT_QUICK_COLORS {
+            let background = parse_hex_rgb(background).expect("quick background");
+            for text in [dark, light] {
+                let text = parse_hex_rgb(text).expect("quick text color");
+                assert!(
+                    contrast_ratio(text, background) >= 5.5,
+                    "{text:06x} on {background:06x} must stay highly legible"
+                );
+                assert_eq!(quick_highlight_background(text), Some(background));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_rule_background_overrides_quick_highlight_background() {
+        let compiled = compile_keyword_rules(&[ResolvedKeywordHighlightRule {
+            id: "custom".into(),
+            name: "Custom".into(),
+            patterns: vec!["error".into()],
+            color: "#fff0ee".into(),
+            background: Some("#123456".into()),
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        }]);
+        let spans = keyword_highlight_spans_compiled("an error occurred", &compiled);
+        let highlighted = spans
+            .iter()
+            .find(|span| span.keyword)
+            .expect("keyword span");
+        assert_eq!(highlighted.color, Some(0xfff0ee));
+        assert_eq!(
+            highlighted.bg,
+            Some(0x123456),
+            "explicit rule background wins over quick-highlight lookup"
+        );
+
+        let compiled_no_bg = compile_keyword_rules(&[ResolvedKeywordHighlightRule {
+            id: "custom".into(),
+            name: "Custom".into(),
+            patterns: vec!["error".into()],
+            color: "#fff0ee".into(),
+            background: None,
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        }]);
+        let spans = keyword_highlight_spans_compiled("an error occurred", &compiled_no_bg);
+        let highlighted = spans
+            .iter()
+            .find(|span| span.keyword)
+            .expect("keyword span");
+        assert_eq!(
+            highlighted.bg, None,
+            "a rule without a background stays transparent"
+        );
+    }
 
     fn set_snapshot_row(
         snapshot: &mut TerminalSnapshot,
@@ -1775,6 +1895,15 @@ mod tests {
         shifted
     }
 
+    /// The matches without their background, for the assertions that only
+    /// care about the range and the colour.
+    fn match_colors(matches: Vec<(usize, usize, u32, Option<u32>)>) -> Vec<(usize, usize, u32)> {
+        matches
+            .into_iter()
+            .map(|(start, end, color, _)| (start, end, color))
+            .collect()
+    }
+
     fn keyword_matches_reference(
         line: &str,
         compiled: &[CompiledKeywordRule],
@@ -1817,6 +1946,7 @@ mod tests {
             .map(|(priority, (pattern, color))| CompiledKeywordRule {
                 regex: regex::Regex::new(pattern).unwrap(),
                 color: *color,
+                background: None,
                 priority,
             })
             .collect()
@@ -1827,7 +1957,7 @@ mod tests {
         let compiled = compiled_rules(&[("ERR", 1), ("ERROR", 2), ("ERROR", 3)]);
 
         assert_eq!(
-            keyword_matches_compiled("x ERROR ERR", &compiled),
+            match_colors(keyword_matches_compiled("x ERROR ERR", &compiled)),
             vec![(2, 7, 2), (8, 11, 1)]
         );
 
@@ -1849,7 +1979,7 @@ mod tests {
         let compiled = compiled_rules(&[("ERROR", 0xff2244)]);
 
         assert_eq!(
-            keyword_matches_compiled("ERROR ERROR ERROR", &compiled),
+            match_colors(keyword_matches_compiled("ERROR ERROR ERROR", &compiled)),
             vec![(0, 5, 0xff2244), (6, 11, 0xff2244), (12, 17, 0xff2244)]
         );
     }
@@ -1859,7 +1989,7 @@ mod tests {
         let compiled = compiled_rules(&[("ERR", 1), ("ERROR", 2)]);
 
         assert_eq!(
-            keyword_matches_compiled("ERROR", &compiled),
+            match_colors(keyword_matches_compiled("ERROR", &compiled)),
             vec![(0, 5, 2)]
         );
     }
@@ -1869,9 +1999,134 @@ mod tests {
         let compiled = compiled_rules(&[("ERROR", 1), ("ERROR", 2)]);
 
         assert_eq!(
-            keyword_matches_compiled("ERROR", &compiled),
+            match_colors(keyword_matches_compiled("ERROR", &compiled)),
             vec![(0, 5, 1)]
         );
+    }
+
+    /// A rule with the given matching options, ready for the paint path.
+    fn rule_with_options(
+        patterns: &[&str],
+        case_sensitive: bool,
+        whole_word: bool,
+        use_regex: bool,
+    ) -> ResolvedKeywordHighlightRule {
+        ResolvedKeywordHighlightRule {
+            id: "r".into(),
+            name: "r".into(),
+            patterns: patterns.iter().map(|pattern| pattern.to_string()).collect(),
+            color: "#ffffff".into(),
+            background: None,
+            enabled: true,
+            case_sensitive,
+            whole_word,
+            use_regex,
+        }
+    }
+
+    /// The matches of a single rule on `line`.
+    fn matches_of(rule: &ResolvedKeywordHighlightRule, line: &str) -> Vec<(usize, usize, u32)> {
+        let highlighter = compile_terminal_keyword_highlighter(
+            std::slice::from_ref(rule),
+            TerminalKeywordHighlightConfig::default(),
+        );
+        keyword_matches_highlighter(line, &highlighter)
+    }
+
+    #[test]
+    fn case_sensitive_option_narrows_the_match() {
+        let insensitive = rule_with_options(&["ERROR"], false, false, true);
+        assert_eq!(
+            matches_of(&insensitive, "error"),
+            vec![(0, 5, 0xffffff)],
+            "the default match ignores the case"
+        );
+
+        let sensitive = rule_with_options(&["ERROR"], true, false, true);
+        assert!(
+            matches_of(&sensitive, "error").is_empty(),
+            "a case sensitive rule ignores the other case"
+        );
+        assert_eq!(
+            matches_of(&sensitive, "ERROR"),
+            vec![(0, 5, 0xffffff)],
+            "a case sensitive rule still matches its own case"
+        );
+    }
+
+    #[test]
+    fn whole_word_option_requires_word_boundaries() {
+        let partial = rule_with_options(&["err"], false, false, true);
+        assert_eq!(
+            matches_of(&partial, "an error"),
+            vec![(3, 6, 0xffffff)],
+            "without the option the pattern matches inside a word"
+        );
+
+        let whole = rule_with_options(&["err"], false, true, true);
+        assert!(
+            matches_of(&whole, "an error").is_empty(),
+            "a whole word rule does not match inside a word"
+        );
+        assert_eq!(
+            matches_of(&whole, "err!"),
+            vec![(0, 3, 0xffffff)],
+            "a whole word rule matches at a word boundary"
+        );
+    }
+
+    #[test]
+    fn literal_option_treats_metacharacters_as_text() {
+        let regex_rule = rule_with_options(&["a.c"], false, false, true);
+        assert_eq!(
+            matches_of(&regex_rule, "abc"),
+            vec![(0, 3, 0xffffff)],
+            "a regular expression treats the dot as a wildcard"
+        );
+
+        let literal = rule_with_options(&["a.c"], false, false, false);
+        assert!(
+            matches_of(&literal, "abc").is_empty(),
+            "a literal pattern does not treat the dot as a wildcard"
+        );
+        assert_eq!(
+            matches_of(&literal, "a.c"),
+            vec![(0, 3, 0xffffff)],
+            "a literal pattern matches its own text"
+        );
+    }
+
+    #[test]
+    fn the_options_combine() {
+        let rule = rule_with_options(&["err"], true, true, false);
+        assert!(
+            matches_of(&rule, "ERR").is_empty(),
+            "a case sensitive whole word literal ignores the other case"
+        );
+        assert_eq!(
+            matches_of(&rule, "err"),
+            vec![(0, 3, 0xffffff)],
+            "a case sensitive whole word literal matches its own case"
+        );
+    }
+
+    #[test]
+    fn the_options_change_the_cache_key() {
+        let base = rule_with_options(&["ERROR"], false, false, true);
+        let sensitive = rule_with_options(&["ERROR"], true, false, true);
+        let whole = rule_with_options(&["ERROR"], false, true, true);
+        let literal = rule_with_options(&["ERROR"], false, false, false);
+        let keys = [
+            terminal_keyword_rules_key(&[base]),
+            terminal_keyword_rules_key(&[sensitive]),
+            terminal_keyword_rules_key(&[whole]),
+            terminal_keyword_rules_key(&[literal]),
+        ];
+        for (index, key) in keys.iter().enumerate() {
+            for other in keys.iter().skip(index + 1) {
+                assert_ne!(key, other, "the matching options must change the cache key");
+            }
+        }
     }
 
     #[test]
@@ -1879,7 +2134,7 @@ mod tests {
         let compiled = compiled_rules(&[("XXa12", 1), ("a.*?b", 2)]);
 
         assert_eq!(
-            keyword_matches_compiled("XXa12a3b", &compiled),
+            match_colors(keyword_matches_compiled("XXa12a3b", &compiled)),
             vec![(0, 5, 1), (5, 8, 2)]
         );
     }
@@ -1888,7 +2143,7 @@ mod tests {
     fn keyword_matches_preserve_unicode_byte_boundaries() {
         let line = "前ERROR后";
         let compiled = compiled_rules(&[("ERROR", 0xff2244)]);
-        let matches = keyword_matches_compiled(line, &compiled);
+        let matches = match_colors(keyword_matches_compiled(line, &compiled));
 
         assert_eq!(matches, vec![(3, 8, 0xff2244)]);
         for (start, end, _) in matches {
@@ -1901,7 +2156,7 @@ mod tests {
         let compiled = compiled_rules(&[("^", 1), (r"\b", 2), ("a*", 3), ("ERROR", 4)]);
 
         assert_eq!(
-            keyword_matches_compiled("b ERROR", &compiled),
+            match_colors(keyword_matches_compiled("b ERROR", &compiled)),
             vec![(2, 7, 4)]
         );
     }
@@ -1910,7 +2165,7 @@ mod tests {
     fn keyword_highlight_spans_follow_compiled_matches() {
         let line = "pre ERROR mid WARN end";
         let compiled = compiled_rules(&[("ERROR", 0xff2244), ("WARN", 0xffcc00)]);
-        let matches = keyword_matches_compiled(line, &compiled);
+        let matches = match_colors(keyword_matches_compiled(line, &compiled));
         let spans = keyword_highlight_spans_compiled(line, &compiled);
 
         assert_eq!(matches, vec![(4, 9, 0xff2244), (14, 18, 0xffcc00)]);
@@ -1948,12 +2203,13 @@ mod tests {
                 .map(|(priority, (pattern, color))| CompiledKeywordRule {
                     regex: regex::Regex::new(pattern).unwrap(),
                     color,
+                    background: None,
                     priority,
                 })
                 .collect::<Vec<_>>();
 
             assert_eq!(
-                keyword_matches_compiled(line, &compiled),
+                match_colors(keyword_matches_compiled(line, &compiled)),
                 keyword_matches_reference(line, &compiled),
                 "line: {line}"
             );
@@ -1968,21 +2224,33 @@ mod tests {
                 name: "Short".to_string(),
                 patterns: vec!["ERR".to_string()],
                 color: "#111111".to_string(),
+                background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
             ResolvedKeywordHighlightRule {
                 id: "long".to_string(),
                 name: "Long".to_string(),
                 patterns: vec!["ERROR".to_string()],
                 color: "#222222".to_string(),
+                background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
             ResolvedKeywordHighlightRule {
                 id: "regex".to_string(),
                 name: "Regex".to_string(),
                 patterns: vec![r"WARN\d+".to_string()],
                 color: "#333333".to_string(),
+                background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
         ];
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2006,13 +2274,17 @@ mod tests {
             name: "Mixed".to_string(),
             patterns: vec!["ERROR".to_string(), "(".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let compiled = compile_keyword_rules(&rules);
 
         assert_eq!(compiled.len(), 1);
         assert_eq!(
-            keyword_matches_compiled("prefix ERROR suffix", &compiled),
+            match_colors(keyword_matches_compiled("prefix ERROR suffix", &compiled)),
             vec![(7, 12, 0xff2244)]
         );
     }
@@ -2133,7 +2405,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2222,7 +2498,11 @@ mod tests {
             name: "Options".into(),
             patterns: vec!["-[a-z]+".into()],
             color: "#ff2244".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         precompute_terminal_keyword_highlights(
             snapshot,
@@ -2375,7 +2655,11 @@ mod tests {
             name: "Cross row".to_string(),
             patterns: vec!["aa".to_string()],
             color: "#ff0000".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(
             &rules,
@@ -2414,7 +2698,11 @@ mod tests {
             name: "Errors".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2439,11 +2727,13 @@ mod tests {
                     start_col: 0,
                     end_col: 5,
                     color: 0xff2244,
+                    background: None,
                 },
                 TerminalKeywordRange {
                     start_col: 6,
                     end_col: 11,
                     color: 0xff2244,
+                    background: None,
                 }
             ]
         );
@@ -2485,11 +2775,13 @@ mod tests {
                     start_col: "Ubuntu ".len(),
                     end_col: "Ubuntu 24.04.4".len(),
                     color: 0xff9e64,
+                    background: None,
                 },
                 TerminalKeywordRange {
                     start_col: "Ubuntu 24.04.4 ".len(),
                     end_col: line.len(),
                     color: 0x8be9fd,
+                    background: None,
                 }
             ]
         );
@@ -2504,7 +2796,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2537,7 +2833,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(
             &rules,
@@ -2584,7 +2884,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(
             &rules,
@@ -2629,7 +2933,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2673,7 +2981,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2712,7 +3024,11 @@ mod tests {
             name: "Error".into(),
             patterns: vec!["ERROR".into()],
             color: "#ff2244".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(
             &rules,
@@ -2746,7 +3062,11 @@ mod tests {
             name: "Error".into(),
             patterns: vec!["ERROR".into()],
             color: "#ff2244".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(
             &rules,
@@ -2801,7 +3121,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2833,6 +3157,7 @@ mod tests {
                 start_col: 0,
                 end_col: 3,
                 color: 0xff2244,
+                background: None,
             }]
         );
         assert_eq!(
@@ -2841,6 +3166,7 @@ mod tests {
                 start_col: 0,
                 end_col: 2,
                 color: 0xff2244,
+                background: None,
             }]
         );
     }
@@ -2890,7 +3216,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -2941,7 +3271,11 @@ mod tests {
             name: "Error".to_string(),
             patterns: vec!["ERROR".to_string()],
             color: "#ff2244".to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
 
         let highlighter = compile_terminal_keyword_highlighter(
@@ -3189,7 +3523,11 @@ mod configuration_tests {
             name: "error".into(),
             patterns: vec!["ERROR".into()],
             color: "#ff2244".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(&rules, Default::default());
         let palette = nyaterm_ui::theme_palette("github-dark");
@@ -3223,7 +3561,11 @@ mod configuration_tests {
             name: "error".into(),
             patterns: vec!["ERROR".into()],
             color: "#ff2244".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let highlighter = compile_terminal_keyword_highlighter(&rules, Default::default());
         for logical in [false, true] {
@@ -3334,4 +3676,5 @@ mod configuration_tests {
         assert!(second.lookup(20, &snapshot).unwrap().is_known_empty());
     }
 }
+mod matching;
 pub mod validation;

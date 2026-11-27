@@ -1,6 +1,6 @@
 mod general;
 mod helpers;
-mod keywords;
+pub(super) mod keywords;
 mod recording;
 mod remote_monitoring;
 mod search;
