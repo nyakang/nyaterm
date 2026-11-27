@@ -79,6 +79,19 @@ impl SettingsPanel {
                     ))
                     .child(settings_form_row(
                         palette,
+                        t!("settings.freeTypeMode"),
+                        Some(SharedString::from(t!("settings.freeTypeModeDesc"))),
+                        settings_switch(
+                            palette,
+                            "interaction-free-type",
+                            self.settings.summary().interaction_free_type_enabled,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_interaction_free_type(cx);
+                            }),
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
                         t!("settings.allowOsc52ClipboardWrite"),
                         Some(SharedString::from(t!(
                             "settings.allowOsc52ClipboardWriteDesc"

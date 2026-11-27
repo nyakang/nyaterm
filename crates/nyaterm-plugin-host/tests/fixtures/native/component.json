@@ -1,0 +1,18 @@
+{
+  "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "component": "vnc",
+  "component_version": "1.0.0",
+  "entry": "nyaterm-vnc-helper.exe",
+  "files": {
+    "nyaterm-vnc-helper.exe": {
+      "executable": true,
+      "sha256": "6973929ea4f4fe46c9e7e7940ee10cdf5259842cb0cbf249b51ed3cb93f124ea",
+      "size": 33
+    }
+  },
+  "host_version": ">=2.0.8, <3",
+  "ipc_version": 13,
+  "runtime": "windows-msvc",
+  "schema_version": 2,
+  "target": "x86_64-pc-windows-msvc"
+}

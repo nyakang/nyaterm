@@ -1,5 +1,5 @@
 [workspace]
-members = ["diagnostic-command", "text-tools", "lifecycle-fixture"]
+members = ["diagnostic-command", "text-tools", "lifecycle-fixture", "remote-tools"]
 resolver = "3"
 
 [workspace.dependencies]

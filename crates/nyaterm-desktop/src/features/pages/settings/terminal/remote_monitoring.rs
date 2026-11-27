@@ -1,9 +1,20 @@
 use gpui::{Context, IntoElement, SharedString, div, prelude::*};
-use nyaterm_ui::NyaButton;
+use nyaterm_core::AppSettingsSummary;
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
-use super::super::{settings_form_row, settings_form_section, settings_switch};
+use super::super::{settings_form_row, settings_form_section_with_action, settings_switch};
 use crate::features::pages::settings::panel::SettingsPanel;
+
+fn remote_monitoring_is_default(summary: &AppSettingsSummary) -> bool {
+    let defaults = AppSettingsSummary::default();
+    summary.ui_remote_stats_interval == defaults.ui_remote_stats_interval
+        && summary.ui_gpu_monitor_interval == defaults.ui_gpu_monitor_interval
+        && summary.ui_ascend_npu_monitor_interval == defaults.ui_ascend_npu_monitor_interval
+        && summary.ui_process_manager_interval == defaults.ui_process_manager_interval
+        && summary.ui_docker_manager_interval == defaults.ui_docker_manager_interval
+        && summary.ui_remote_stats_show_users == defaults.ui_remote_stats_show_users
+}
 
 impl SettingsPanel {
     pub(in crate::features) fn remote_monitoring_settings_section(
@@ -11,6 +22,21 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
+        let is_default = remote_monitoring_is_default(self.settings.summary());
+        let reset_action = div()
+            .debug_selector(|| "remote-monitoring-reset".to_string())
+            .child(
+                NyaButton::new(
+                    "remote-monitoring-reset",
+                    t!("settings.remoteMonitoringReset"),
+                )
+                .small()
+                .variant(NyaButtonVariant::Ghost)
+                .disabled(is_default)
+                .on_click(cx.listener(|this, _, _, cx| this.reset_remote_monitoring(cx))),
+            )
+            .into_any_element();
+
         let mut rows = div().flex().flex_col().gap_3();
         for (label, description, input) in [
             (
@@ -57,25 +83,32 @@ impl SettingsPanel {
                 cx.listener(|this, _, _, cx| this.toggle_remote_stats_show_users(cx)),
             ),
         ));
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(settings_form_section(
-                palette,
-                Some(t!("settings.remoteMonitoring")),
-                Some(t!("settings.remoteMonitoringDesc")),
-                rows,
-            ))
-            .child(settings_form_section(
-                palette,
-                None,
-                Some(t!("settings.remoteMonitoringIconDesc")),
-                NyaButton::new(
-                    "remote-monitoring-reset",
-                    t!("settings.remoteMonitoringReset"),
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.reset_remote_monitoring_intervals(cx))),
-            ))
+        settings_form_section_with_action(
+            palette,
+            Some(t!("settings.remoteMonitoring")),
+            Some(t!("settings.remoteMonitoringDesc")),
+            Some(reset_action),
+            rows,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_core::AppSettingsSummary;
+
+    use super::remote_monitoring_is_default;
+
+    #[test]
+    fn remote_monitoring_default_check_tracks_intervals_and_user_visibility() {
+        let mut summary = AppSettingsSummary::default();
+        assert!(remote_monitoring_is_default(&summary));
+
+        summary.ui_remote_stats_show_users = true;
+        assert!(!remote_monitoring_is_default(&summary));
+
+        summary.ui_remote_stats_show_users = false;
+        summary.ui_docker_manager_interval = 15;
+        assert!(!remote_monitoring_is_default(&summary));
     }
 }

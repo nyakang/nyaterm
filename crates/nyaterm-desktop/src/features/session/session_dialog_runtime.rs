@@ -407,5 +407,7 @@ impl NyaTermApp {
         if self.session.restore_is_complete() {
             self.persist_open_tabs();
         }
+        // The closed session may have been the last discovery consumer.
+        self.sync_android_discovery();
     }
 }

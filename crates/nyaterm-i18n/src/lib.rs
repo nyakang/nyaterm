@@ -1,4 +1,16 @@
 //! Shared NyaTerm catalogs. No UI or application state is owned here.
+// The procedural macro reads these files outside rustc's dependency tracking.
+// Track the catalog bytes in production too, so incremental consumers cannot
+// retain an older generated catalog when only translations change.
+const _: &[&str] = &[
+    include_str!("../locales/en.json"),
+    include_str!("../locales/zh-CN.json"),
+    include_str!("../locales/zh-TW.json"),
+    include_str!("../locales/ja.json"),
+    include_str!("../locales/ko.json"),
+    include_str!("../locales/fr.json"),
+    include_str!("../locales/pt-BR.json"),
+];
 rust_i18n::i18n!("locales", fallback = "en");
 use std::borrow::Cow;
 
@@ -12,14 +24,17 @@ const SIMPLIFIED_CHINESE_LOCALE: &str = "zh-CN";
 /// The single traditional-Chinese catalog. Region/script variants fold here.
 const TRADITIONAL_CHINESE_LOCALE: &str = "zh-TW";
 
+/// The single Portuguese catalog. Region variants fold here.
+const BRAZILIAN_PORTUGUESE_LOCALE: &str = "pt-BR";
+
 /// Canonical catalog ids in the order the pickers must present them.
 ///
 /// This order is authoritative: both the settings language selector and the
 /// title-bar language menu iterate [`available_locales`], so listing the ids
 /// here fixes the menu order (English, 简体中文, 繁體中文, 日本語, 한국어,
-/// Français) without touching the view code. Adding a language means shipping
-/// its `<id>.json` catalog and adding the id here.
-const CANONICAL_LOCALES: &[&str] = &["en", "zh-CN", "zh-TW", "ja", "ko", "fr"];
+/// Français, Português (Brasil)) without touching the view code. Adding a
+/// language means shipping its `<id>.json` catalog and adding the id here.
+const CANONICAL_LOCALES: &[&str] = &["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"];
 
 /// Map a stored UI language onto a catalog id rust-i18n can resolve.
 ///
@@ -32,6 +47,7 @@ const CANONICAL_LOCALES: &[&str] = &["en", "zh-CN", "zh-TW", "ja", "ko", "fr"];
 /// The folding rules are:
 /// * `zh-Hans` / `zh-CN` / `zh-SG` / bare `zh` -> `zh-CN`
 /// * `zh-Hant` / `zh-TW` / `zh-HK` / `zh-MO` -> `zh-TW`
+/// * `pt` / `pt-*` -> `pt-BR` (only Brazilian Portuguese ships a catalog)
 /// * `en-*` -> `en`, `ja-*` -> `ja`, `ko-*` -> `ko`, `fr-*` -> `fr`
 /// * anything else -> `en`
 pub fn normalize_locale(language: &str) -> Cow<'static, str> {
@@ -43,6 +59,9 @@ pub fn normalize_locale(language: &str) -> Cow<'static, str> {
     }
     if is_traditional_chinese(&lower) {
         return Cow::Borrowed(TRADITIONAL_CHINESE_LOCALE);
+    }
+    if is_portuguese(&lower) {
+        return Cow::Borrowed(BRAZILIAN_PORTUGUESE_LOCALE);
     }
 
     // Match the exact canonical id first, then the primary language subtag, so
@@ -100,6 +119,13 @@ fn is_simplified_chinese(lower: &str) -> bool {
 
 fn is_traditional_chinese(lower: &str) -> bool {
     matches!(lower, "zh-tw" | "zh-hk" | "zh-mo") || lower.starts_with("zh-hant")
+}
+
+/// Every Portuguese tag folds onto the Brazilian catalog. European Portuguese
+/// is not shipped yet; serving the Brazilian catalog is preferable to dropping
+/// an existing Portuguese install back to English.
+fn is_portuguese(lower: &str) -> bool {
+    lower == "pt" || lower.starts_with("pt-")
 }
 
 const I18N_PRELOAD_STACK_BYTES: usize = 16 * 1024 * 1024;

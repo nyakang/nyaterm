@@ -248,3 +248,5 @@ pub use translation::{
     youdao_truncate_for_sign,
 };
 pub use updater::NativeUpdateInfo;
+
+mod native_protocol;

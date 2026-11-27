@@ -387,6 +387,10 @@ impl RemoteOpsFeatureState {
         self.process.validated_nice_draft()
     }
 
+    pub(in crate::features) fn toggle_stats_memory_expanded(&mut self) {
+        self.stats.toggle_memory_expanded();
+    }
+
     pub(in crate::features) fn toggle_stats_cpu_expanded(&mut self) {
         self.stats.toggle_cpu_expanded();
     }

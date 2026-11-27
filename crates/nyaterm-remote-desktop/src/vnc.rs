@@ -13,8 +13,8 @@ use crate::presentation::{
     VncPresentationId, VncPresentationMetrics,
 };
 use crate::{
-    FRAME_PAYLOAD_LIMIT, MAX_VNC_CLIPBOARD_TEXT_BYTES, MAX_VNC_INPUT_BATCH, PROTOCOL_VERSION,
-    PacketType, QueueWaker, RemoteCursorEvent, RemoteFrameEvent, RemotePointerEvent,
+    FRAME_PAYLOAD_LIMIT, MAX_VNC_CLIPBOARD_TEXT_BYTES, MAX_VNC_INPUT_BATCH, PacketType, QueueWaker,
+    RemoteCursorEvent, RemoteFrameEvent, RemotePointerEvent, VNC_PROTOCOL_VERSION,
     VncControlMessage, VncError, VncErrorKind, VncInputEvent, VncRuntimeEvent, VncSecurityMode,
     VncServerCapabilities, VncSessionConfig, VncSessionDrain, VncSessionState,
     decode_cursor_packet_owned, decode_frame_packet_owned, decode_vnc_control, encode_vnc_control,
@@ -317,6 +317,7 @@ impl EventQueue {
 }
 
 struct SessionRecord {
+    _component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     presentation_worker: Option<PresentationWorker>,
     state: Arc<Mutex<VncSessionState>>,
     capabilities: Arc<Mutex<Option<VncServerCapabilities>>>,
@@ -435,6 +436,24 @@ impl VncSessionManager {
         session_id: String,
         config: VncSessionConfig,
     ) -> Result<String, VncError> {
+        self.create_session_with_component(session_id, config, None)
+    }
+
+    pub fn create_session_with_launch(
+        &self,
+        session_id: String,
+        config: VncSessionConfig,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Result<String, VncError> {
+        self.create_session_with_component(session_id, config, Some(component))
+    }
+
+    fn create_session_with_component(
+        &self,
+        session_id: String,
+        config: VncSessionConfig,
+        component: Option<nyaterm_core::plugins::native::NativeLaunch>,
+    ) -> Result<String, VncError> {
         // Validate before spawning so a bad configuration never costs a process.
         validate_vnc_config(&config)?;
         {
@@ -451,7 +470,10 @@ impl VncSessionManager {
             sessions.remove(&session_id);
         }
         self.ensure_reaper()?;
-        let helper = resolve_helper_path()?;
+        let helper = match &component {
+            Some(component) => component.executable.clone(),
+            None => resolve_helper_path()?,
+        };
         let helper_process::HelperProcess {
             mut child,
             stdin,
@@ -482,6 +504,7 @@ impl VncSessionManager {
         let state = Arc::new(Mutex::new(VncSessionState::Connecting));
         let capabilities = Arc::new(Mutex::new(None));
         let mut record = SessionRecord {
+            _component: component,
             presentation_worker: None,
             state: state.clone(),
             capabilities: capabilities.clone(),
@@ -567,7 +590,7 @@ impl VncSessionManager {
         let start_result = send_control(
             &record.writer,
             &VncControlMessage::ClientHello {
-                version: PROTOCOL_VERSION,
+                version: VNC_PROTOCOL_VERSION,
             },
         );
         if let Err(error) = start_result {
@@ -1066,7 +1089,7 @@ fn spawn_reader(
                 &state,
                 VncErrorKind::Protocol,
                 format!(
-                    "VNC helper ended before IPC {PROTOCOL_VERSION} handshake; rebuild the helper matching this application"
+                    "VNC helper ended before IPC {VNC_PROTOCOL_VERSION} handshake; install a component supporting this IPC version"
                 ),
             );
             return;
@@ -1126,11 +1149,11 @@ fn handle_control(
                 "VNC helper's first control message must be ServerHello",
             ));
         };
-        if version != PROTOCOL_VERSION {
+        if version != VNC_PROTOCOL_VERSION {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
                 format!(
-                    "VNC helper protocol version {version} does not match {PROTOCOL_VERSION}; rebuild the helper matching this application"
+                    "VNC helper protocol version {version} does not match {VNC_PROTOCOL_VERSION}; install a component supporting this IPC version"
                 ),
             ));
         }
@@ -1331,7 +1354,7 @@ mod tests {
     };
     use crate::{
         CursorPosition, CursorShape, CursorVisibility, Framebuffer, MAX_VNC_CLIPBOARD_TEXT_BYTES,
-        PROTOCOL_VERSION, PixelFormat, RemoteCursorEvent, RemoteFrameEvent, RemotePoint,
+        PixelFormat, RemoteCursorEvent, RemoteFrameEvent, RemotePoint, VNC_PROTOCOL_VERSION,
         VncClipboardConfig, VncControlMessage, VncDisplayConfig, VncErrorKind, VncInputEvent,
         VncReconnectConfig, VncRuntimeEvent, VncSecurityConfig, VncSecurityMode,
         VncServerCapabilities, VncSessionConfig, VncSessionState,
@@ -1412,7 +1435,7 @@ mod tests {
         let error = handle_control(
             "s",
             VncControlMessage::ServerHello {
-                version: PROTOCOL_VERSION - 1,
+                version: VNC_PROTOCOL_VERSION - 1,
                 capabilities: advertised,
             },
             &queue,
@@ -1428,7 +1451,7 @@ mod tests {
         handle_control(
             "s",
             VncControlMessage::ServerHello {
-                version: PROTOCOL_VERSION,
+                version: VNC_PROTOCOL_VERSION,
                 capabilities: advertised,
             },
             &queue,
@@ -1443,7 +1466,7 @@ mod tests {
         let error = handle_control(
             "s",
             VncControlMessage::ServerHello {
-                version: PROTOCOL_VERSION,
+                version: VNC_PROTOCOL_VERSION,
                 capabilities: VncServerCapabilities::default(),
             },
             &queue,
@@ -1458,7 +1481,7 @@ mod tests {
         let error = handle_control(
             "s",
             VncControlMessage::ClientHello {
-                version: PROTOCOL_VERSION,
+                version: VNC_PROTOCOL_VERSION,
             },
             &queue,
             &state,

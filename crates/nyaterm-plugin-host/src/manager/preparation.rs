@@ -95,6 +95,7 @@ impl Preparation {
 
 impl PluginManager {
     pub(crate) fn set_change_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        self.environment.set_change_handler(handler.clone());
         self.engine.set_change_handler(handler);
     }
 

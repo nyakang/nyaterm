@@ -16,6 +16,18 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Editing an existing key reveals the same secrets as the private-key viewer.
+        if let Some(id) = key_id.as_ref()
+            && !self.require_security_secrets_unlocked(
+                window,
+                cx,
+                Some(crate::models::SecurityUnlockAction::OpenKeyEditor(
+                    id.clone(),
+                )),
+            )
+        {
+            return;
+        }
         self.forget_text_inputs("security.editor.key-");
         let editor = if let Some(key_id) = key_id {
             let Some(key) = self

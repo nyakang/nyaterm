@@ -20,7 +20,7 @@ pub(super) use errors::format_remote_desktop_error;
 #[cfg(test)]
 use events::MAINTENANCE_INTERVAL;
 #[cfg(test)]
-use events::remote_desktop_drain_delay;
+use events::remote_desktop_frame_interval;
 #[cfg(test)]
 use events::remote_desktop_periodic_delay;
 #[cfg(test)]

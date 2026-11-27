@@ -34,7 +34,7 @@ jobs:
         with:
           extra_packages: xvfb
       - name: Check background pipeline and helper lifecycle
-        run: cargo test --locked -p nyaterm-remote-desktop -p nyaterm-vnc-helper -p nyaterm-rdp-helper
+        run: cargo test --locked -p nyaterm-remote-desktop
       - name: Build native texture probe
         run: cargo build --locked -p nyaterm-app --example vnc_texture_probe --features vnc-renderer-bench
       # Hosted GPUs are often software adapters. Preserve their identity in the

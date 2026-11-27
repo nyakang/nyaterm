@@ -3,8 +3,43 @@ use nyaterm_transport::SessionKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SendCommandTarget {
     Current,
-    AllCompatible,
+    AllSessions,
     Group(String),
+    Sessions(SendCommandSelection),
+}
+
+/// Explicit targets stay fixed when the active tab changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SendCommandSelection {
+    ids: Vec<String>,
+}
+
+pub(crate) fn is_send_command_session_kind(kind: SessionKind) -> bool {
+    matches!(
+        kind,
+        SessionKind::Serial
+            | SessionKind::LocalPty
+            | SessionKind::Ssh
+            | SessionKind::Telnet
+            | SessionKind::RawTcp
+            | SessionKind::AdbShell
+    )
+}
+
+impl SendCommandSelection {
+    pub(crate) fn ids(&self) -> &[String] {
+        &self.ids
+    }
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        self.ids.iter().any(|selected| selected == id)
+    }
+    pub(crate) fn toggle(&mut self, id: String, kind: SessionKind) {
+        if self.contains(&id) {
+            self.ids.retain(|selected| selected != &id);
+        } else if is_send_command_session_kind(kind) {
+            self.ids.push(id);
+        }
+    }
 }
 
 pub(crate) use nyaterm_core::send_command::{
@@ -60,6 +95,35 @@ mod tests {
     use super::{
         SendCommandDataType, SendCommandLineEnding, SendCommandMode, build_send_command_units_for,
     };
+
+    #[test]
+    fn explicit_selection_allows_mixed_protocols_and_removes_targets_independently() {
+        use super::SendCommandSelection;
+        let mut selection = SendCommandSelection::default();
+        selection.toggle("ssh".into(), SessionKind::Ssh);
+        selection.toggle("serial".into(), SessionKind::Serial);
+        selection.toggle("local".into(), SessionKind::LocalPty);
+        assert_eq!(selection.ids(), ["ssh", "serial", "local"]);
+        selection.toggle("serial".into(), SessionKind::Serial);
+        assert_eq!(selection.ids(), ["ssh", "local"]);
+    }
+
+    #[test]
+    fn explicit_selection_rejects_non_terminal_sessions() {
+        use super::SendCommandSelection;
+        let mut selection = SendCommandSelection::default();
+        for kind in [
+            SessionKind::Rdp,
+            SessionKind::Vnc,
+            SessionKind::Spice,
+            SessionKind::AdbFiles,
+            SessionKind::AdbScreen,
+            SessionKind::Ftp,
+        ] {
+            selection.toggle("not-a-terminal".into(), kind);
+        }
+        assert!(selection.ids().is_empty());
+    }
 
     #[test]
     fn parses_hex_send_input_with_spacing() {

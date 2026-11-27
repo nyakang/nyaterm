@@ -1,35 +1,29 @@
 //! Screen subprocess supervision. Handles enqueue work; cleanup never runs in a UI destructor.
 use crate::operation::AdbOperationControl;
+use crate::screen_process::ScreenChild;
 use std::collections::VecDeque;
-use std::io::{self, Read};
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use nyaterm_core::models::android::AndroidScreenSettings;
-use sha2::{Digest, Sha256};
 
 use crate::adb::client::{AdbClient, DeviceBinding};
 use crate::adb::runtime::DeviceRuntime;
-use crate::adb::shell::{
-    EXIT, STDOUT, ShellDecoder, execute_with_cancel, open_shell_with_cancel, quote,
-};
+use crate::adb::shell::{execute_with_cancel, quote};
 use crate::error::{AdbError, AdbResult};
 use crate::ipc::{Control, Frame, PROTOCOL_VERSION, Packet, read_packet_reusing, write_packet};
 
 fn validate_helper_hello(protocol: u32, version: &str) -> AdbResult<()> {
-    if protocol != PROTOCOL_VERSION || version != env!("CARGO_PKG_VERSION") {
+    if protocol != PROTOCOL_VERSION || semver::Version::parse(version).is_err() {
         return Err(AdbError::HelperVersionMismatch);
     }
     Ok(())
 }
 
-pub const SCRCPY_VERSION: &str = "5.0.1";
-pub const SCRCPY_SHA256: &str = "764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536";
-const SERVER: &[u8] = include_bytes!("../assets/scrcpy-server-v5.0.1");
 const INPUT_LIMIT: usize = 256;
 
 #[derive(Clone)]
@@ -124,27 +118,33 @@ impl CleanupStatus {
 }
 pub type CleanupTicket = Arc<CleanupStatus>;
 
+struct ScreenLifetime {
+    control: AdbOperationControl,
+    ticket: CleanupTicket,
+    runtime: Arc<DeviceRuntime>,
+    discovery: Option<crate::devices::DeviceTrackerLease>,
+}
+
 struct Resources {
     cleanup: CleanupSpec,
-    server: Option<TcpStream>,
-    helper: Option<Child>,
+    helper: Option<ScreenChild>,
     ticket: CleanupTicket,
+    _discovery: Option<crate::devices::DeviceTrackerLease>,
 }
 
 impl Drop for Resources {
     fn drop(&mut self) {
         if let Some(child) = &mut self.helper {
-            let _ = crate::process::reap(child, Duration::from_millis(750));
+            let _ = crate::process::reap(child.child_mut(), Duration::from_millis(750));
+            child.terminate();
         }
         // Keep the launching channel alive while checking/killing its PID.
         // Closing it first races adbd's process termination with /proc reads.
         if let Err(error) = self.cleanup.retry() {
             let mut pending = self.cleanup.clone();
             pending.last_error = Some(error.to_string());
+            pending.client.component = None;
             *self.ticket.lock().unwrap_or_else(|p| p.into_inner()) = Some(pending);
-        }
-        if let Some(server) = &self.server {
-            let _ = server.shutdown(Shutdown::Both);
         }
         self.ticket.finished.store(true, Ordering::Release);
     }
@@ -221,7 +221,12 @@ impl ScreenHandle {
         binding: DeviceBinding,
         settings: AndroidScreenSettings,
     ) -> AdbResult<Self> {
-        Self::start_with_helper(client, binding, settings, &resolve_helper()?)
+        let helper = client
+            .component
+            .as_ref()
+            .map(|c| Ok(c.executable.clone()))
+            .unwrap_or_else(resolve_helper)?;
+        Self::start_with_helper(client, binding, settings, &helper)
     }
 
     pub fn start_with_helper(
@@ -247,19 +252,29 @@ impl ScreenHandle {
         control: AdbOperationControl,
         ticket: CleanupTicket,
         runtime: Arc<DeviceRuntime>,
+        discovery: crate::devices::DeviceTrackerLease,
     ) -> AdbResult<Self> {
         let result = control
             .check()
-            .and_then(|()| resolve_helper())
+            .and_then(|()| {
+                client
+                    .component
+                    .as_ref()
+                    .map(|c| Ok(c.executable.clone()))
+                    .unwrap_or_else(resolve_helper)
+            })
             .and_then(|helper| {
-                Self::start_with_helper_controlled(
+                Self::start_with_lifetime(
                     client,
                     binding,
                     settings,
                     &helper,
-                    control,
-                    ticket.clone(),
-                    runtime,
+                    ScreenLifetime {
+                        control,
+                        ticket: ticket.clone(),
+                        runtime,
+                        discovery: Some(discovery),
+                    },
                 )
             });
         if result.is_err() && !ticket.started.load(Ordering::Acquire) {
@@ -276,6 +291,33 @@ impl ScreenHandle {
         ticket: CleanupTicket,
         runtime: Arc<DeviceRuntime>,
     ) -> AdbResult<Self> {
+        Self::start_with_lifetime(
+            client,
+            binding,
+            settings,
+            helper,
+            ScreenLifetime {
+                control: lifetime,
+                ticket,
+                runtime,
+                discovery: None,
+            },
+        )
+    }
+
+    fn start_with_lifetime(
+        client: AdbClient,
+        binding: DeviceBinding,
+        settings: AndroidScreenSettings,
+        helper: &Path,
+        lifetime: ScreenLifetime,
+    ) -> AdbResult<Self> {
+        let ScreenLifetime {
+            control: lifetime,
+            ticket,
+            runtime,
+            discovery,
+        } = lifetime;
         struct EarlyTicket(CleanupTicket);
         impl Drop for EarlyTicket {
             fn drop(&mut self) {
@@ -294,9 +336,6 @@ impl ScreenHandle {
         settings
             .validate()
             .map_err(|_| AdbError::Protocol("screen settings"))?;
-        if hex::encode(Sha256::digest(SERVER)) != SCRCPY_SHA256 {
-            return Err(AdbError::Protocol("server checksum"));
-        }
         let scid = format!(
             "{:08x}",
             uuid::Uuid::new_v4().as_u128() as u32 & 0x7fff_ffff
@@ -313,88 +352,10 @@ impl ScreenHandle {
                 scid,
                 last_error: None,
             },
-            server: None,
             helper: None,
             ticket: Arc::clone(&ticket),
+            _discovery: discovery,
         };
-        let modified = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| AdbError::Protocol("system time"))?
-            .as_secs();
-        let mut payload = SERVER;
-        control.check()?;
-        runtime.with_sync(
-            || control.check(),
-            |stream| {
-                stream.send(
-                    resources.cleanup.remote_path.as_bytes(),
-                    &mut payload,
-                    0o644,
-                    modified,
-                    |_| control.check(),
-                )
-            },
-        )?;
-        control.check()?;
-        let target = format!("localabstract:scrcpy_{}", resources.cleanup.scid);
-        let port = resources.cleanup.client.device_command_with_control(
-            &binding,
-            &["forward", "tcp:0", &target],
-            &control,
-        )?;
-        resources.cleanup.port = port
-            .trim()
-            .parse()
-            .map_err(|_| AdbError::Protocol("forward port"))?;
-        let mut command = b"echo $$; CLASSPATH=".to_vec();
-        command.extend_from_slice(&quote(resources.cleanup.remote_path.as_bytes())?);
-        command.extend_from_slice(format!(" exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={} tunnel_forward=true audio=false control=true video_codec=h264 max_size={} max_fps={} video_bit_rate={} clipboard_autosync=false cleanup=false power_on={} capture_orientation={} log_level=error", resources.cleanup.scid, settings.max_size, settings.max_fps, settings.bit_rate, settings.power_on, settings.capture_orientation.server_value()).as_bytes());
-        control.check()?;
-        let mut server = open_shell_with_cancel(&binding, &command, false, || control.check())?;
-        server.set_read_timeout(Some(Duration::from_millis(100)))?;
-        resources.server = Some(server.try_clone()?);
-        let mut decoder = ShellDecoder::default();
-        let mut buffer = [0; 4096];
-        let mut pid_bytes = Vec::new();
-        while resources.cleanup.pid.is_none() {
-            control.check()?;
-            let count = match server.read(&mut buffer) {
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    continue;
-                }
-                result => result?,
-            };
-            if count == 0 {
-                return Err(AdbError::Protocol("server startup EOF"));
-            }
-            for packet in decoder.push(&buffer[..count])? {
-                if packet.id == EXIT {
-                    return Err(AdbError::ShellExit(packet.data[0]));
-                }
-                if packet.id == STDOUT {
-                    pid_bytes.extend_from_slice(&packet.data);
-                    if pid_bytes.len() > 4096 {
-                        return Err(AdbError::Protocol("server PID output limit"));
-                    }
-                    if let Some(end) = pid_bytes.iter().position(|byte| *byte == b'\n') {
-                        resources.cleanup.pid = std::str::from_utf8(&pid_bytes[..end])
-                            .ok()
-                            .and_then(|value| value.trim().parse().ok());
-                        if resources.cleanup.pid.is_none() {
-                            return Err(AdbError::Protocol("server PID"));
-                        }
-                    }
-                }
-            }
-        }
-        server.set_read_timeout(Some(Duration::from_millis(100)))?;
-        resources.server = Some(server);
-        control.check()?;
         let mut command = std::process::Command::new(helper);
         command
             .stdin(Stdio::piped())
@@ -405,12 +366,14 @@ impl ScreenHandle {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let mut child = command.spawn()?;
+        let mut child = ScreenChild::spawn(&mut command)?;
         let mut stdout = child
+            .child_mut()
             .stdout
             .take()
             .ok_or(AdbError::Protocol("helper stdout"))?;
         let mut stdin = child
+            .child_mut()
             .stdin
             .take()
             .ok_or(AdbError::Protocol("helper stdin"))?;
@@ -515,8 +478,8 @@ impl ScreenHandle {
             }
             state.input.push_back(Control::Connect {
                 binding,
-                endpoint: SocketAddr::from(([127, 0, 0, 1], resources.cleanup.port)),
-                settings,
+                scid: resources.cleanup.scid.clone(),
+                settings: settings.into(),
             });
         }
         let writer_mailbox = Arc::clone(&mailbox);
@@ -550,8 +513,8 @@ impl ScreenHandle {
         let supervisor_mailbox = Arc::clone(&mailbox);
         let supervisor_runtime = runtime.clone();
         nyaterm_core::runtime::worker::spawn("android-screen-supervisor".into(), move || {
+            let started = Instant::now();
             let mut last_ping = Instant::now();
-            let mut decoder = decoder;
             let mut sequence = 0;
             loop {
                 if lifetime.check().is_err() || supervisor_runtime.check().is_err() {
@@ -566,7 +529,9 @@ impl ScreenHandle {
                     if state.closed {
                         break;
                     }
-                    if state.pong.elapsed() > Duration::from_secs(10) {
+                    if state.pong.elapsed() > Duration::from_secs(10)
+                        && started.elapsed() > Duration::from_secs(45)
+                    {
                         drop(state);
                         supervisor_mailbox.fatal("HelperHung");
                         break;
@@ -575,7 +540,7 @@ impl ScreenHandle {
                 if resources
                     .helper
                     .as_mut()
-                    .and_then(|child| child.try_wait().ok().flatten())
+                    .and_then(|child| child.child_mut().try_wait().ok().flatten())
                     .is_some()
                 {
                     supervisor_mailbox.fatal("HelperExited");
@@ -593,34 +558,7 @@ impl ScreenHandle {
                     }
                     last_ping = Instant::now();
                 }
-                if let Some(server) = resources.server.as_mut() {
-                    match server.read(&mut buffer) {
-                        Ok(0) => {
-                            supervisor_mailbox.fatal("DeviceDisconnected");
-                            break;
-                        }
-                        Ok(count) => match decoder.push(&buffer[..count]) {
-                            Ok(packets) if packets.iter().any(|packet| packet.id == EXIT) => {
-                                supervisor_mailbox.fatal("ServerExited");
-                                break;
-                            }
-                            Ok(_) => {}
-                            Err(_) => {
-                                supervisor_mailbox.fatal("ServerProtocolFailed");
-                                break;
-                            }
-                        },
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                            ) => {}
-                        Err(_) => {
-                            supervisor_mailbox.fatal("DeviceDisconnected");
-                            break;
-                        }
-                    }
-                }
+                std::thread::sleep(Duration::from_millis(25));
             }
             drop(resources);
             supervisor_mailbox.changed.notify_all();
@@ -866,14 +804,15 @@ mod tests {
         ));
     }
     #[test]
-    fn mismatched_helper_protocol_or_package_version_is_explicitly_rejected() {
+    fn helper_protocol_is_required_but_component_version_is_independent() {
         use crate::error::AdbError;
         use crate::ipc::PROTOCOL_VERSION;
         use crate::screen::validate_helper_hello;
-        assert!(validate_helper_hello(PROTOCOL_VERSION, env!("CARGO_PKG_VERSION")).is_ok());
+        assert!(validate_helper_hello(PROTOCOL_VERSION, "1.0.0").is_ok());
+        assert!(validate_helper_hello(PROTOCOL_VERSION, "3.2.1").is_ok());
         for (protocol, version) in [
             (PROTOCOL_VERSION - 1, env!("CARGO_PKG_VERSION")),
-            (PROTOCOL_VERSION, "0.0.0"),
+            (PROTOCOL_VERSION, "invalid"),
         ] {
             assert!(matches!(
                 validate_helper_hello(protocol, version),
@@ -1189,5 +1128,58 @@ mod tests {
         assert!(!ticket.is_complete());
         drop(pending);
         assert!(ticket.is_complete());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use crate::adb::client::{AdbClient, DeviceBinding};
+    use crate::devices::SharedDeviceService;
+    use crate::screen::{CleanupSpec, CleanupStatus, Resources};
+    use nyaterm_core::plugins::native::NativeLaunch;
+    use std::sync::Arc;
+
+    #[test]
+    fn failed_screen_cleanup_releases_discovery_and_does_not_pin_the_old_plugin() {
+        let tracker = SharedDeviceService::default();
+        let discovery = tracker.lease();
+        let control = tracker.discovery_control();
+        let proof = Arc::new(());
+        let released = Arc::downgrade(&proof);
+        let ticket = Arc::new(CleanupStatus::default());
+        let resources = Resources {
+            cleanup: CleanupSpec {
+                client: AdbClient::new(
+                    "missing-cleanup-fixture".into(),
+                    "127.0.0.1:1".parse().unwrap(),
+                )
+                .with_component(NativeLaunch {
+                    executable: "fixture".into(),
+                    root: "fixture".into(),
+                    lease: proof,
+                }),
+                binding: DeviceBinding {
+                    server: "127.0.0.1:1".parse().unwrap(),
+                    serial: "fixture".into(),
+                    transport_id: None,
+                    generation: 1,
+                },
+                remote_path: "/data/local/tmp/fixture.jar".into(),
+                port: 0,
+                pid: None,
+                scid: "00000001".into(),
+                last_error: None,
+            },
+            helper: None,
+            ticket: ticket.clone(),
+            _discovery: Some(discovery),
+        };
+        assert!(!control.is_cancelled());
+        drop(resources);
+        assert!(control.is_cancelled());
+        assert!(ticket.is_finished());
+        let pending = ticket.lock().unwrap();
+        assert!(pending.as_ref().unwrap().client.component.is_none());
+        assert!(released.upgrade().is_none());
     }
 }

@@ -162,8 +162,6 @@ def write_portable(
     """Build a portable zip whose layout matches package_native's output."""
     root = "NyaTerm-portable"
     with zipfile.ZipFile(path, "w") as archive:
-        for name, data in android_fixture(target).items(): archive.writestr(f"{root}/{name}", data)
-        for name, data in spice_fixture(target).items(): archive.writestr(f"{root}/{name}", data)
         archive.writestr(
             f"{root}/NyaTerm.exe",
             fake_pe(machine, subsystem=2, resource_ids=application_resources),
@@ -212,8 +210,6 @@ def verify_installer_fixture(
                 **{name: fake_pe(0x8664)
                    for name in verify_native_package.helper_filenames(target)},
             }
-            entries.update(android_fixture(target))
-            entries.update(spice_fixture(target))
             for relative in package_native.conpty_files(target):
                 if relative.as_posix() == missing_conpty:
                     continue
@@ -343,7 +339,7 @@ class VerifyNativePackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portable.zip"
             write_portable(path, 0x8664)
-            with self.assertRaisesRegex(RuntimeError, "nyaterm-rdp-helper.exe"):
+            with self.assertRaisesRegex(RuntimeError, "nyaterm-mcp.exe"):
                 verify_native_package.verify_windows_portable(
                     path, "x86_64-pc-windows-msvc", "2.0.0"
                 )
@@ -396,7 +392,7 @@ class VerifyNativePackageTests(unittest.TestCase):
             path = Path(directory) / "portable.zip"
             write_portable(path, 0x8664, helper_machine=0xAA64)
             with self.assertRaisesRegex(
-                RuntimeError, "PE machine 0xaa64 for nyaterm-rdp-helper.exe"
+                RuntimeError, "PE machine 0xaa64 for nyaterm-mcp.exe"
             ):
                 verify_native_package.verify_windows_portable(
                     path, "x86_64-pc-windows-msvc", "2.0.0"
@@ -455,8 +451,6 @@ class VerifyNativePackageTests(unittest.TestCase):
                     **verify_native_package.package_native.spice_associations.macos_declarations(),
                 }
                 entries = {
-                    **{f"{bundle}/Contents/MacOS/{name}": data for name, data in android_fixture("aarch64-apple-darwin").items()},
-                    **{f"{bundle}/Contents/MacOS/{name}": data for name, data in spice_fixture("aarch64-apple-darwin").items()},
                     f"{bundle}/Contents/MacOS/NyaTerm": fake_macho(0x0100000C),
                     **{f"{bundle}/Contents/MacOS/{name}": fake_macho(0x0100000C)
                        for name in verify_native_package.helper_filenames("aarch64-apple-darwin")},
@@ -600,8 +594,6 @@ class VerifyNativePackageTests(unittest.TestCase):
         prefix = "opt/nyaterm/"
         files = {prefix + "nyaterm": b"app", prefix + "VERSION": b"2.0.0"}
         files.update({prefix + name: b"helper" for name in verify_native_package.helper_filenames(target)})
-        files.update({prefix + name: data for name, data in spice_fixture(target).items()})
-        files.update({prefix + name: data for name, data in android_fixture(target).items()})
         files["usr/share/applications/nyaterm.desktop"] = (
             b"[Desktop Entry]\nType=Application\nName=NyaTerm\nIcon=nyaterm\nStartupWMClass=NyaTerm\n"
             b"Exec=/opt/nyaterm/nyaterm %U\nMimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;application/x-virt-viewer;\n"

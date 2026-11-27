@@ -10,6 +10,7 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+nyaterm-native-protocol.workspace = true
 nucleo-matcher.workspace = true
 csscolorparser = "0.7"
 aes-gcm.workspace = true

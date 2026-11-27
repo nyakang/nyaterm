@@ -1,6 +1,7 @@
 //! Authoritative inline command and credential assistance state.
 
 use nyaterm_core::CredentialPromptKind;
+use nyaterm_core::credential_autofill::matching::CredentialAutofillMatcher;
 use nyaterm_terminal::TerminalLineId;
 
 use super::command_suggestions::state::CommandSuggestionFeatureState;
@@ -10,17 +11,23 @@ use crate::models::{
     PendingCredentialAutofill,
 };
 
+/// Both the input row and a separate TUI label belong to a fill authorization.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct CredentialPromptInstance {
+    pub(super) input: (Option<TerminalLineId>, u64),
+    pub(super) label: (Option<TerminalLineId>, u64),
+}
+
 /// Inline command completion and terminal-output credential prompt assistance.
-///
-/// These states share the terminal input lifecycle: session switches, terminal
-/// mode changes, and settings updates reset them together. The credential
-/// matcher remains a background pipeline and never runs in a render path.
+/// These states share the terminal input lifecycle and reset on session switches.
+/// Prompt classification caches patterns; candidate matching runs in the worker.
 pub(super) struct TerminalAssistState {
     pub(super) commands: CommandSuggestionFeatureState,
     pub(super) credential_suggestions: Option<CredentialSuggestionState>,
     pub(super) credential_autofill_buffer: String,
     pub(super) credential_autofill_recent: Option<(CredentialPromptKind, String)>,
-    credential_prompt_instance: Option<(Option<TerminalLineId>, u64)>,
+    credential_prompt_instance: Option<CredentialPromptInstance>,
+    pub(super) credential_prompt_classifier: CredentialAutofillMatcher,
     pub(super) credential_prompt_awaiting_output: bool,
     pub(super) credential_autofill_generation: u64,
     pub(super) credential_autofill_pending: Option<PendingCredentialAutofill>,
@@ -40,6 +47,7 @@ impl TerminalAssistState {
             credential_autofill_buffer: String::new(),
             credential_autofill_recent: None,
             credential_prompt_instance: None,
+            credential_prompt_classifier: CredentialAutofillMatcher::default(),
             credential_prompt_awaiting_output: false,
             credential_autofill_generation: 0,
             credential_autofill_pending: None,
@@ -88,7 +96,7 @@ impl TerminalAssistState {
 
     pub(super) fn observe_credential_prompt_instance(
         &mut self,
-        instance: Option<(Option<TerminalLineId>, u64)>,
+        instance: Option<CredentialPromptInstance>,
     ) -> bool {
         if self.credential_prompt_instance == instance {
             return false;
@@ -169,17 +177,21 @@ mod tests {
     use nyaterm_core::CredentialPromptKind;
     use nyaterm_terminal::TerminalLineId;
 
-    use super::TerminalAssistState;
+    use super::{CredentialPromptInstance, TerminalAssistState};
     use crate::models::{CredentialAutofillMatchRequestKey, PendingCredentialAutofill};
 
-    fn instance(line: i64, revision: u64) -> Option<(Option<TerminalLineId>, u64)> {
-        Some((
+    fn instance(line: i64, revision: u64) -> Option<CredentialPromptInstance> {
+        let row = (
             Some(TerminalLineId {
                 epoch: 1,
                 logical_line: line,
             }),
             revision,
-        ))
+        );
+        Some(CredentialPromptInstance {
+            input: row,
+            label: row,
+        })
     }
 
     #[test]
@@ -224,6 +236,22 @@ mod tests {
         assert!(!state.credential_fill_is_current(true, generation));
         let generation = state.credential_autofill_generation;
         state.observe_credential_prompt_instance(instance(4, 2));
+        assert!(!state.credential_fill_is_current(true, generation));
+    }
+
+    #[test]
+    fn tui_label_redraw_and_input_row_movement_revoke_fills() {
+        let mut state = TerminalAssistState::new();
+        let mut prompt = instance(4, 1).unwrap();
+        prompt.label = instance(3, 1).unwrap().input;
+        state.observe_credential_prompt_instance(Some(prompt));
+        let generation = state.credential_autofill_generation;
+        prompt.label.1 += 1;
+        state.observe_credential_prompt_instance(Some(prompt));
+        assert!(!state.credential_fill_is_current(true, generation));
+        let generation = state.credential_autofill_generation;
+        prompt.input = instance(5, 1).unwrap().input;
+        state.observe_credential_prompt_instance(Some(prompt));
         assert!(!state.credential_fill_is_current(true, generation));
     }
 

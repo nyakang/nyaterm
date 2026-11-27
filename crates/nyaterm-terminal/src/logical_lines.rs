@@ -364,7 +364,7 @@ mod tests {
     fn active_graphics_use_grid_until_the_placement_is_deleted() {
         let mut screen = TerminalScreen::new(8, 4);
         screen.set_logical_line_snapshots(true);
-        screen.advance(b"\x1b_Ga=T,f=100,i=7,c=2,r=1;QUJD\x1b\\");
+        screen.advance(b"\x1b_Ga=T,f=24,s=1,v=1,i=7,c=2,r=1;QUJD\x1b\\");
         assert!(screen.snapshot().logical_lines.is_none());
         screen.advance(b"\x1b_Ga=d,d=A\x1b\\");
         assert!(screen.snapshot().logical_lines.is_some());

@@ -36,9 +36,7 @@ ICON_DIR = RESOURCE_DIR / "icons"
 LICENSE_PATH = ROOT_DIR / "LICENSE"
 APP_NAME = "NyaTerm"
 APP_BIN = "nyaterm"
-# Helper processes the application spawns at runtime. `resolve_helper_path()`
-# in nyaterm-remote-desktop only looks beside the running executable, so each
-# supported helper must be packaged next to the application binary.
+# Only MCP is part of the base application; native protocol helpers ship as components.
 HELPER_BINS = tuple(Path(name).stem for name in windows_portable.LAYOUT["helper_files"])
 CONPTY_LICENSE = Path(__file__).with_name("conpty-license.txt")
 
@@ -272,11 +270,11 @@ def build_binary(package: str, name: str, target: str) -> Path:
         "cargo", "build", "-p", package, "--bin", name,
         "--release", "--target", target, "--locked",
     ]
-    environment = None
+    environment = os.environ.copy()
+    environment["NYATERM_COMPONENT_TARGET"] = target
     if target.endswith("-windows-msvc"):
         # Keep Rust and every C/C++ dependency on the same static CRT. The ATL
         # shim must not make portable packages require a VC++ redistributable.
-        environment = os.environ.copy()
         flags = environment.get("CARGO_ENCODED_RUSTFLAGS")
         if flags is None:
             flags = "\x1f".join(environment.get("RUSTFLAGS", "").split())
@@ -291,12 +289,6 @@ def build_binary(package: str, name: str, target: str) -> Path:
 
 
 def build_application(target: str) -> Path:
-    import prepare_android
-    _, prefix = prepare_android.prepare(target)
-    if prefix is None:
-        raise RuntimeError("Android decoder dependencies were not prepared")
-    os.environ["FFMPEG_DIR"] = str(prefix)
-    spice_runtime(target)
     binary = build_binary("nyaterm-app", APP_BIN, target)
     for name in helper_bins(target):
         build_binary(name, name, target)
@@ -316,8 +308,6 @@ def copy_helpers(destination: Path, target: str) -> list[Path]:
         if "windows" not in target:
             make_executable(binary)
         copied.append(binary)
-    copy_android_resources(destination, target)
-    copy_spice_resources(destination, target)
     return copied
 
 
@@ -366,9 +356,7 @@ def copy_android_resources(destination: Path, target: str) -> list[Path]:
 def copy_release_documents(destination: Path, version: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     completion_licenses = ROOT_DIR / "crates/nyaterm-core/assets/completion"
-    android_licenses = ROOT_DIR / "crates" / "nyaterm-android" / "assets"
-    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo",
-                 android_licenses / "NOTICE.md", android_licenses / "LICENSE.scrcpy"]
+    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo"]
     (destination / "LICENSE").write_text("\n\n".join(path.read_text(encoding="utf-8") for path in documents), encoding="utf-8")
     (destination / "VERSION").write_text(f"{version}\n", encoding="utf-8")
 
@@ -450,8 +438,7 @@ def create_windows_packages(
     installer_root.mkdir()
     shutil.copy2(binary, installer_root / "NyaTerm.exe")
     installer_helpers = copy_helpers(installer_root, info.target)
-    installer_conpty = [*copy_conpty(installer_root, info.target), *copy_android_resources(installer_root, info.target),
-                       *spice_resource_paths(installer_root)]
+    installer_conpty = copy_conpty(installer_root, info.target)
     copy_release_documents(installer_root, version)
     shutil.copy2(ICON_DIR / "icon.ico", installer_root / "icon.ico")
 
@@ -660,22 +647,8 @@ def create_macos_packages(
     # Sign inside out. A bundle-only signature seals extra Mach-O files in
     # Contents/MacOS as resources instead of signing them as code, which makes
     # the helper fail to launch under Gatekeeper.
-    android_code = [*macos_dir.glob("android-libs/*.dylib"), macos_dir / "adb" / "adb"]
-    spice_manifest_path = macos_dir / "spice/SOURCE.json"
-    spice_manifest = json.loads(spice_manifest_path.read_text(encoding="utf-8"))
-    spice_code = [macos_dir / "spice" / name for name in spice_manifest["files"]
-                  if name.endswith((".dylib", ".so")) or ".so." in name]
-    for helper in [*android_code, *spice_code, *helper_binaries]:
+    for helper in helper_binaries:
         run([codesign, "--force", "--sign", "-", "--timestamp=none", str(helper)])
-    manifest_path = macos_dir / "android-resources.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["files"] = {name: hashlib.sha256((macos_dir / name).read_bytes()).hexdigest() for name in manifest["files"]}
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    spice_manifest["files"] = {name: hashlib.sha256((macos_dir / "spice" / name).read_bytes()).hexdigest()
-                               for name in spice_manifest["files"]}
-    spice_manifest_path.write_text(json.dumps(spice_manifest, indent=2) + "\n", encoding="utf-8")
-    # Nested code is already signed and its final bytes are in the manifests.
-    # Recursive signing here could rewrite libraries after those hashes were set.
     run([codesign, "--force", "--sign", "-", "--timestamp=none", str(bundle)])
     run([codesign, "--verify", "--deep", "--strict", str(bundle)])
 
@@ -853,7 +826,7 @@ def create_linux_deb(
     dependencies = linux_deb_dependencies([app_binary, *helper_binaries])
     # dlopen libraries are invisible to dpkg-shlibdeps on the helper executable.
     # Retain the actual private runtime's glibc floor in the package metadata.
-    dependencies += f", libc6 (>= {spice_glibc_requirement(app_root)})"
+
     (control_dir / "control").write_text(
         textwrap.dedent(
             f"""
@@ -903,7 +876,7 @@ def create_linux_rpm(
 
     rpm_version, rpm_release = linux_rpm_version(version)
     payload_path = str(payload.resolve()).replace("%", "%%")
-    spice_glibc = spice_glibc_requirement(app_root)
+
     spec = textwrap.dedent(
         f"""
         Name: {identity.desktop_id}
@@ -913,7 +886,6 @@ def create_linux_rpm(
         License: Apache-2.0
         URL: https://nyaterm.app
         BuildArch: {linux_rpm_arch(info.target)}
-        Requires: glibc >= {spice_glibc}
 
         # Private dlopen libraries must never satisfy other packages' system
         # dependencies. Their entire closure is bundled except glibc above.
@@ -1003,6 +975,7 @@ def main() -> None:
         create_linux_packages(binary, info, version, artifact_version)
     else:
         create_windows_packages(binary, info, version, artifact_version)
+
 
     actual = {path.name for path in DIST_DIR.iterdir() if path.is_file()}
     expected = artifact_names(info.target, artifact_version)

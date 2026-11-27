@@ -428,6 +428,11 @@ impl NyaTermApp {
                     this.select_all_terminal(cx);
                 })),
         ]);
+        let extensions = self.extension_context_menu(&session_id, &selected, false, cx);
+        if !extensions.is_empty() {
+            items.push(NyaMenuItem::separator());
+            items.extend(extensions);
+        }
         items
     }
 

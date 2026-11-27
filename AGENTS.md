@@ -141,15 +141,11 @@ must include explicit conversion logic and tests.
   tracker, native Shell v2 and Sync channels, bounded Android helper IPC and
   screen process supervision. It may depend on core, but not GPUI, desktop,
   store, transport, files, or decoder libraries.
-* `crates/nyaterm-android-helper`: isolated scrcpy protocol, H.264 decoding,
-  BGRA conversion and Android input enforcement. Only this helper links FFmpeg.
-* `crates/nyaterm-rdp-helper`: isolated IronRDP helper process that communicates
-  with the application through the typed IPC protocol in
-  `nyaterm-remote-desktop`.
-* `crates/nyaterm-vnc-helper`: isolated VNC helper process using the same IPC
-  protocol. It owns the forked `vnc-rs` decoders, the VNC reconnect ladder, and
-  the server-facing policy gates (`view_only`, `shared`, clipboard enablement).
-  Those gates must stay enforced here, not only in the application.
+* Android, RDP, VNC and SPICE helpers live in the independent
+  `nyakang/nyaterm-plugins` repository under `native/crates/`. The application
+  consumes `nyaterm-native-protocol` at an exact Git revision. Decoder dependencies,
+  scrcpy resources, helper versions and native component releases belong there.
+  The VNC helper must continue enforcing view-only/shared/clipboard policy.
 * `crates/nyaterm-windows-rdp`: explicitly selected Windows Native RDP system
   component exception. Thread-bound ActiveX/ATL host and staged controller;
   COM runs on the creating UI/STA thread outside all GPUI borrows. No GPUI
@@ -169,7 +165,8 @@ must include explicit conversion logic and tests.
   a `NYATERM.md` recording its base revision, its patches, and how they were
   validated.
 * `temp/vendor/`: untracked, read-only copies of those sources, kept only so
-  they can be read locally. Nothing under `temp/` is compiled. **Editing
+  they can be read locally. Reference copies under `temp/vendor/` are not compiled.
+  `temp/nyaterm-plugins` is a separate Git checkout with its own build. **Editing
   anything there has no effect on the build and produces no error** — change
   the fork branch instead.
 
@@ -347,23 +344,21 @@ Use package-specific checks while iterating:
 * `cargo test -p <crate-name>`
 * `cargo run -p nyaterm-app --bin nyaterm`
 
-Builtin/IronRDP, VNC and Android screen run in helper processes that the application resolves
-beside its own executable. Windows Native RDP is the explicitly selected
-in-process system-component exception and requires MSVC with ATL when building.
-`cargo run -p nyaterm-app --bin nyaterm` builds only the application, so build the
-helpers into the same target directory first or the helper backends fail with
-`HelperMissing`:
+SPICE, Builtin/IronRDP, VNC and Android run in isolated, independently released
+helpers acquired through `nyaterm-plugin-host`. Windows Native RDP remains the
+explicit in-process MSVC/ATL system-component exception.
 
-* `python3 scripts/release/prepare_android.py` (export its reported `FFMPEG_DIR`)
-* `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper -p nyaterm-android-helper`
+`cargo run -p nyaterm-app --bin nyaterm` and the workspace default build compile
+only application-owned crates. Install native components from Plugins or build
+in `temp/nyaterm-plugins/native` and set `NYATERM_RDP_HELPER`,
+`NYATERM_VNC_HELPER`, `NYATERM_SPICE_HELPER` or `NYATERM_ANDROID_HELPER`.
+Debug builds also look beside the application executable. Android requires its
+ADB/FFmpeg resources; use the independent repository's packaging instructions.
 
-A bare `cargo build` or `cargo check` covers the app and helpers: they are the workspace
-`default-members`. `NYATERM_RDP_HELPER` and `NYATERM_VNC_HELPER` override the
-lookup with an explicit path; `NYATERM_ANDROID_HELPER` does the same for Android.
-See `crates/nyaterm-android/README.md` for pinned dependencies and acceptance probes.
-`scripts/release/package_native.py` is what puts the
-helpers next to the application in release packages; its `HELPER_BINS` list must
-name every helper.
+`scripts/release/package_native.py` produces application packages with MCP only.
+Component publication uses the independent repository's protected signing pipeline
+and signed `native/v1/index.json`. Updates are manual; compatible installed
+versions survive app upgrades. See `NATIVE_COMPONENTS.md`.
 
 Before review, run the relevant broader checks:
 

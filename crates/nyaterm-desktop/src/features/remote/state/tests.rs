@@ -419,9 +419,26 @@ fn process_owner_reduces_matching_and_stale_job_events() {
 }
 
 #[test]
+fn memory_details_toggle_survives_refresh_and_publishes_each_change() {
+    let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
+    assert!(!state.stats_presentation().memory_expanded);
+    let revision = state.stats_revision();
+    state.toggle_stats_memory_expanded();
+    assert!(state.stats_presentation().memory_expanded);
+    assert!(state.stats_revision() > revision);
+    state.apply_stats(RemoteStats::default());
+    assert!(state.stats_presentation().memory_expanded);
+    let revision = state.stats_revision();
+    state.toggle_stats_memory_expanded();
+    assert!(!state.stats_presentation().memory_expanded);
+    assert!(state.stats_revision() > revision);
+}
+
+#[test]
 fn stats_owner_resets_session_runtime_without_losing_expansion_preference() {
     let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
     state.toggle_stats_cpu_expanded();
+    state.toggle_stats_memory_expanded();
     state.begin_stats_job("session-a".to_string(), false);
 
     state.reset_for_session_switch();
@@ -430,6 +447,7 @@ fn stats_owner_resets_session_runtime_without_losing_expansion_preference() {
     assert!(!presentation.pending);
     assert!(presentation.data.is_none());
     assert!(presentation.cpu_expanded);
+    assert!(presentation.memory_expanded);
     assert_eq!(
         state.stats_status(),
         "start an SSH session to inspect remote stats"
@@ -906,6 +924,10 @@ fn presentation_mutations_bump_only_their_own_pane_revision() {
         (
             "toggle_stats_cpu_expanded",
             &|state: &mut RemoteOpsFeatureState| state.toggle_stats_cpu_expanded(),
+        ),
+        (
+            "toggle_stats_memory_expanded",
+            &|state: &mut RemoteOpsFeatureState| state.toggle_stats_memory_expanded(),
         ),
         (
             "record_stats_refresh_failure",

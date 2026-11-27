@@ -1,11 +1,11 @@
-schema_version = 1
+schema_version = 2
 id = "shell-templates"
 name = "Shell diagnostic templates"
 version = "1.0.0"
 authors = ["NyaTerm"]
 description = "Declarative drafts; no Rust or Wasm required"
 host_version = ">=2.0.0-preview.4"
-api_version = "1.0.0"
+api_version = "2.0.0"
 
 [[actions]]
 id = "inspect"

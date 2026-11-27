@@ -5,7 +5,9 @@ use nyaterm_transport::{
 };
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::{ChannelId, server};
-use russh_sftp::protocol::{Attrs, File, FileAttributes, Handle, Name, Status, StatusCode};
+use russh_sftp::protocol::{
+    Attrs, File, FileAttributes, Handle, Name, SftpHandle, SftpString, Status, StatusCode,
+};
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -31,13 +33,14 @@ impl russh_sftp::server::Handler for SftpPeer {
     fn unimplemented(&self) -> Self::Error {
         StatusCode::OpUnsupported
     }
-    async fn realpath(&mut self, id: u32, _: String) -> Result<Name, Self::Error> {
+    async fn realpath(&mut self, id: u32, _: SftpString) -> Result<Name, Self::Error> {
         Ok(Name {
             id,
             files: vec![File::new("/home/test", FileAttributes::default())],
         })
     }
-    async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+    async fn stat(&mut self, id: u32, path: SftpString) -> Result<Attrs, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         if path.starts_with("/root") && !self.root {
             return Err(StatusCode::PermissionDenied);
         }
@@ -49,14 +52,18 @@ impl russh_sftp::server::Handler for SftpPeer {
             },
         })
     }
-    async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+    async fn opendir(&mut self, id: u32, path: SftpString) -> Result<Handle, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         if path.starts_with("/root") && !self.root {
             return Err(StatusCode::PermissionDenied);
         }
         self.listed = false;
-        Ok(Handle { id, handle: path })
+        Ok(Handle {
+            id,
+            handle: path.into(),
+        })
     }
-    async fn readdir(&mut self, id: u32, _: String) -> Result<Name, Self::Error> {
+    async fn readdir(&mut self, id: u32, _: SftpHandle) -> Result<Name, Self::Error> {
         if self.listed {
             return Err(StatusCode::Eof);
         }
@@ -72,14 +79,20 @@ impl russh_sftp::server::Handler for SftpPeer {
             )],
         })
     }
-    async fn rename(&mut self, id: u32, old: String, _: String) -> Result<Status, Self::Error> {
+    async fn rename(
+        &mut self,
+        id: u32,
+        old: SftpString,
+        _: SftpString,
+    ) -> Result<Status, Self::Error> {
+        let old = std::str::from_utf8(old.as_bytes()).unwrap().to_owned();
         if old.starts_with("/root") && !self.root {
             return Err(StatusCode::PermissionDenied);
         }
         self.counts.renames.fetch_add(1, Ordering::SeqCst);
         Ok(ok(id))
     }
-    async fn close(&mut self, id: u32, _: String) -> Result<Status, Self::Error> {
+    async fn close(&mut self, id: u32, _: SftpHandle) -> Result<Status, Self::Error> {
         Ok(ok(id))
     }
 }

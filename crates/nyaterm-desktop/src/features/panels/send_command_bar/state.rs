@@ -3,16 +3,19 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use nyaterm_core::command_draft::DraftOrigin;
-use nyaterm_transport::SessionKind;
 
 use crate::features::{NyaTermApp, panels::SendCommandPresentationState};
-use crate::send_command::{SendCommandDataType, SendCommandMode};
+use crate::send_command::{SendCommandDataType, SendCommandMode, SendCommandTarget};
+
+use super::tabs::display_send_tab_name;
 
 pub(super) struct SendCommandBarViewState {
     pub(super) send: SendCommandPresentationState,
     pub(super) palette: crate::theme::ThemePalette,
     pub(super) group_targets: Vec<(String, String, usize)>,
-    pub(super) is_serial_text_line: bool,
+    pub(super) target_count: usize,
+    pub(super) is_broadcast: bool,
+    pub(super) show_line_ending: bool,
     pub(super) validation_error: bool,
     pub(super) status: String,
     pub(super) send_disabled: bool,
@@ -26,6 +29,7 @@ pub(super) struct SendCommandBarViewState {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SendCommandDensity {
+    Minimal,
     Compact,
     Normal,
     Expanded,
@@ -33,7 +37,9 @@ pub(super) enum SendCommandDensity {
 
 impl SendCommandDensity {
     fn for_size(width: f32, height: f32) -> Self {
-        if height < 160. || (width > 0. && width < 500.) {
+        if width > 0. && width < 360. {
+            Self::Minimal
+        } else if height < 160. || (width > 0. && width < 500.) {
             Self::Compact
         } else if height >= 300. && width >= 700. {
             Self::Expanded
@@ -47,12 +53,11 @@ impl NyaTermApp {
     pub(super) fn send_command_bar_view_state(&self, cx: &gpui::App) -> SendCommandBarViewState {
         let send = self.send_command.view_presentation(cx);
         let palette = self.theme_palette();
-        let active_kind = self.active_session_kind();
         let group_targets = self.send_command_group_target_options();
-        let is_serial_text_line = matches!(active_kind, Some(SessionKind::Serial))
+        let show_line_ending = self.send_command_has_configurable_line_ending()
             && send.data_type == SendCommandDataType::Text
             && send.mode == SendCommandMode::Line;
-        let unit_result = self.send_command.payload_statistics(active_kind, cx);
+        let unit_result = self.send_command_target_statistics(cx);
         let (validation_error, unit_count, byte_count) = match &unit_result {
             Ok(stats) => (false, stats.units, stats.bytes),
             Err(_) => (true, 0usize, 0usize),
@@ -69,19 +74,37 @@ impl NyaTermApp {
         let interval_error =
             nyaterm_core::send_command::parse_interval_ms(&send.interval_input).is_none();
         let validation_error = validation_error || hex_error;
-        let target_available = !self.send_command_target_session_ids().is_empty();
+        let target_ids = self.send_command_target_session_ids();
+        let target_count = target_ids.len();
+        let target_available = !target_ids.is_empty();
+        let is_broadcast = match &send.target {
+            SendCommandTarget::AllSessions | SendCommandTarget::Group(_) => true,
+            SendCommandTarget::Sessions(selected) => selected.ids().len() > 1,
+            SendCommandTarget::Current => false,
+        };
         let send_disabled =
             !send.sending && (validation_error || !has_payload || !target_available);
         let action_hint = if send.sending {
-            t!("serialSend.stop").to_string()
+            let tab_label = self
+                .send_command
+                .tab_name(send.tab_id)
+                .map(display_send_tab_name)
+                .unwrap_or_default();
+            t!("serialSend.tabs.stop", name = tab_label).to_string()
         } else if interval_error {
             t!("quickCommands.errorSegmentedIntervalInvalid").to_string()
         } else if validation_error {
             t!("serialSend.hexError").to_string()
         } else if !has_payload {
-            t!("serialSend.payloadEmpty").to_string()
+            format!("{} · {}", t!("serialSend.payloadEmpty"), send_shortcut())
         } else if !target_available {
-            t!("serialSend.noTarget").to_string()
+            format!("{} · {}", t!("serialSend.noTarget"), send_shortcut())
+        } else if is_broadcast && target_count > 1 {
+            format!(
+                "{} ({target_count}) · {}",
+                t!("serialSend.send"),
+                send_shortcut()
+            )
         } else {
             format!("{} · {}", t!("serialSend.send"), send_shortcut())
         };
@@ -119,6 +142,27 @@ impl NyaTermApp {
             }
             .to_string()
         };
+        if target_count > 1 && !validation_error && !interval_error {
+            let summary = t!(
+                "serialSend.targetPayloadStats",
+                count = target_count,
+                units = unit_count,
+                bytes = byte_count
+            );
+            if send.data_type == SendCommandDataType::Hex {
+                status.push_str(" · ");
+                status.push_str(&summary);
+            } else {
+                status = summary.to_string();
+            }
+        }
+        if let SendCommandTarget::Sessions(selection) = &send.target {
+            let unavailable = selection.ids().len().saturating_sub(target_count);
+            if unavailable > 0 {
+                status.push_str(" · ");
+                status.push_str(&t!("serialSend.unavailableTargets", count = unavailable));
+            }
+        }
         let sources = send
             .provenance
             .origins
@@ -141,9 +185,9 @@ impl NyaTermApp {
             }
         }
         let input_hint = if send.data_type == SendCommandDataType::Hex {
-            t!("serialSend.hexPlaceholder")
+            Cow::Owned(send_hex_placeholder())
         } else {
-            t!("serialSend.textPlaceholder")
+            Cow::Owned(send_text_placeholder())
         };
         let is_sending = send.sending;
         let infinite_progress = is_sending && send.rounds == 0;
@@ -192,7 +236,9 @@ impl NyaTermApp {
             send,
             palette,
             group_targets,
-            is_serial_text_line,
+            target_count,
+            is_broadcast,
+            show_line_ending,
             validation_error,
             status,
             density,
@@ -212,4 +258,29 @@ pub(super) fn send_shortcut() -> &'static str {
     } else {
         "Ctrl+Enter"
     }
+}
+
+pub(super) fn localized_send_shortcut_hint() -> String {
+    let modifier = if cfg!(target_os = "macos") {
+        "Cmd+"
+    } else {
+        "Ctrl+"
+    };
+    t!("serialSend.sendShortcut").replace("Ctrl/Cmd + ", modifier)
+}
+
+pub(super) fn send_text_placeholder() -> String {
+    format!(
+        "{}  ·  {}",
+        t!("serialSend.textPlaceholder"),
+        localized_send_shortcut_hint()
+    )
+}
+
+pub(super) fn send_hex_placeholder() -> String {
+    format!(
+        "{}  ·  {}",
+        t!("serialSend.hexPlaceholder"),
+        localized_send_shortcut_hint()
+    )
 }

@@ -2,17 +2,14 @@ use rust_i18n::t;
 
 use super::state::SendCommandBarViewState;
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_transport::SessionKind;
 use nyaterm_ui::{
     NyaButton, NyaNumberInput, NyaNumberInputOptions, NyaPopover, NyaPopoverAlign,
     NyaPopoverPlacement, NyaScrollable, NyaSelectOption, NyaTabItem, NyaTabs,
 };
 
-use super::super::send_command_control_group;
+use super::super::{send_command_compact_tip, send_command_control_group};
 use crate::features::NyaTermApp;
-use crate::send_command::{
-    SendCommandDataType, SendCommandLineEnding, SendCommandMode, SendCommandTarget,
-};
+use crate::send_command::{SendCommandDataType, SendCommandLineEnding, SendCommandMode};
 
 impl NyaTermApp {
     pub(super) fn send_command_bar_controls(
@@ -20,9 +17,9 @@ impl NyaTermApp {
         state: &SendCommandBarViewState,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let tab_id = state.send.tab_id;
         let palette = state.palette;
         let is_sending = state.is_sending;
-        let is_serial = matches!(self.active_session_kind(), Some(SessionKind::Serial));
         let (mode_options, selected_mode) = if state.send.data_type == SendCommandDataType::Hex {
             (
                 vec![
@@ -46,34 +43,6 @@ impl NyaTermApp {
                 },
             )
         };
-        let mut target_options = vec![NyaSelectOption::new(
-            "current",
-            t!("serialSend.currentSession"),
-        )];
-        if !is_serial {
-            target_options.push(NyaSelectOption::new("all", t!("serialSend.allSessions")));
-        }
-        target_options.extend(state.group_targets.iter().map(|(group_id, name, count)| {
-            NyaSelectOption::new(
-                format!("group:{group_id}"),
-                t!("serialSend.groupSession", name = name, count = count),
-            )
-        }));
-        let selected_target = match &state.send.target {
-            SendCommandTarget::Current => "current".to_string(),
-            SendCommandTarget::AllCompatible if !is_serial => "all".to_string(),
-            SendCommandTarget::AllCompatible => "current".to_string(),
-            SendCommandTarget::Group(group_id) => format!("group:{group_id}"),
-        };
-        if !target_options
-            .iter()
-            .any(|option| option.value() == selected_target)
-        {
-            target_options.push(NyaSelectOption::new(
-                selected_target.clone(),
-                t!("network.group"),
-            ));
-        }
         let line_ending_options = vec![
             NyaSelectOption::new("none", t!("serialSend.noLineEnding")),
             NyaSelectOption::new("cr", "CR"),
@@ -87,9 +56,9 @@ impl NyaTermApp {
             SendCommandLineEnding::Crlf => "crlf",
         }
         .to_string();
-        let layout = ToolbarLayout::for_width(state.send.viewport_width, state.is_serial_text_line);
+        let layout = ToolbarLayout::for_width(state.send.viewport_width, state.show_line_ending);
         let count = self.number_input(
-            "send-command.count",
+            self.send_command.input_id("count"),
             &state.send.count_input,
             NyaNumberInputOptions::default()
                 .range(1.0, 9_999.0)
@@ -99,7 +68,7 @@ impl NyaTermApp {
             cx,
         );
         let interval = self.number_input(
-            "send-command.interval",
+            self.send_command.input_id("interval"),
             &state.send.interval_input,
             NyaNumberInputOptions::default()
                 .range(0.0, 60.0)
@@ -119,17 +88,17 @@ impl NyaTermApp {
                     state.send.interval_input,
                     t!("serialSend.seconds")
                 );
+                let repeat_tip =
+                    format!("{} · {}", t!("serialSend.count"), t!("serialSend.interval"));
                 NyaPopover::new(
-                    "bottom-command-repeat-popover",
-                    div().flex_none().child(
+                    tab_id.input_id("repeat-popover"),
+                    send_command_compact_tip(
+                        "bottom-command-repeat-tip",
+                        repeat_tip.clone(),
                         NyaButton::new("bottom-command-repeat", summary)
                             .height(px(32.))
                             .disabled(is_sending)
-                            .tooltip(format!(
-                                "{} · {}",
-                                t!("serialSend.count"),
-                                t!("serialSend.interval")
-                            )),
+                            .accessibility_label(repeat_tip),
                     ),
                     div()
                         .flex()
@@ -155,30 +124,50 @@ impl NyaTermApp {
             }
             ToolbarLayout::Full | ToolbarLayout::Unlabeled => {
                 let labels = layout == ToolbarLayout::Full;
+                let count_field = labeled_number(
+                    palette,
+                    labels.then(|| count_label.into()),
+                    108.,
+                    NyaNumberInput::new(&count),
+                );
+                let interval_field = labeled_number(
+                    palette,
+                    labels.then(|| interval_label.into()),
+                    144.,
+                    NyaNumberInput::new(&interval),
+                );
                 div()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(send_command_control_group(
-                        palette,
-                        t!("serialSend.count"),
-                        labeled_number(
+                    .child(if labels {
+                        div()
+                            .h(px(32.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(count_field)
+                            .into_any_element()
+                    } else {
+                        send_command_control_group(palette, t!("serialSend.count"), count_field)
+                            .into_any_element()
+                    })
+                    .child(if labels {
+                        div()
+                            .h(px(32.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(interval_field)
+                            .into_any_element()
+                    } else {
+                        send_command_control_group(
                             palette,
-                            labels.then(|| count_label.into()),
-                            108.,
-                            NyaNumberInput::new(&count),
-                        ),
-                    ))
-                    .child(send_command_control_group(
-                        palette,
-                        t!("serialSend.interval"),
-                        labeled_number(
-                            palette,
-                            labels.then(|| interval_label.into()),
-                            144.,
-                            NyaNumberInput::new(&interval),
-                        ),
-                    ))
+                            t!("serialSend.interval"),
+                            interval_field,
+                        )
+                        .into_any_element()
+                    })
                     .into_any_element()
             }
         };
@@ -186,7 +175,9 @@ impl NyaTermApp {
         div()
             .id("bottom-command-controls")
             .debug_selector(|| "bottom-command-controls".into())
-            .h(px(32.))
+            .h(px(36.))
+            .px(px(2.))
+            .py(px(2.))
             .min_w_0()
             .flex_none()
             .flex()
@@ -203,7 +194,10 @@ impl NyaTermApp {
                         .selected_index(usize::from(
                             state.send.data_type == SendCommandDataType::Hex,
                         ))
-                        .on_select(cx.listener(|this, index: &usize, window, cx| {
+                        .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                            if this.send_command.active_id() != tab_id {
+                                return;
+                            }
                             this.set_send_command_data_type(
                                 if *index == 0 {
                                     SendCommandDataType::Text
@@ -220,19 +214,19 @@ impl NyaTermApp {
                 palette,
                 t!("serialSend.sendMode"),
                 self.form_select_control(
-                    "bottom-command-mode-select",
+                    self.send_command.input_id("mode-select"),
                     mode_options,
                     Some(selected_mode.to_string()),
                     is_sending,
                     cx,
                 ),
             ))
-            .when(state.is_serial_text_line, |this| {
+            .when(state.show_line_ending, |this| {
                 this.child(send_command_control_group(
                     palette,
                     t!("serialSend.lineEnding"),
                     self.form_select_control(
-                        "bottom-command-eol-select",
+                        self.send_command.input_id("eol-select"),
                         line_ending_options,
                         Some(selected_line_ending),
                         is_sending,
@@ -241,17 +235,7 @@ impl NyaTermApp {
                 ))
             })
             .child(toolbar_divider(palette))
-            .child(send_command_control_group(
-                palette,
-                t!("serialSend.target"),
-                self.form_select_control(
-                    "bottom-command-target-select",
-                    target_options,
-                    Some(selected_target),
-                    is_sending,
-                    cx,
-                ),
-            ))
+            .child(self.send_command_target_picker(state, cx))
             .child(toolbar_divider(palette))
             .child(repeat)
             .into_any_element()
@@ -272,9 +256,9 @@ impl ToolbarLayout {
     fn for_width(width: f32, line_ending: bool) -> Self {
         // The line-ending select only appears for serial text and needs ~110px.
         let extra = if line_ending { 110. } else { 0. };
-        if width <= 0. || width >= 840. + extra {
+        if width <= 0. || width >= 804. + extra {
             Self::Full
-        } else if width >= 720. + extra {
+        } else if width >= 684. + extra {
             Self::Unlabeled
         } else {
             Self::Folded

@@ -37,11 +37,12 @@ def main():
     output = ROOT / "target/plugin-examples"
     output.mkdir(parents=True, exist_ok=True)
     guest_target = cargo_target(ROOT / "examples/plugins/guests/Cargo.toml")
-    for name in ["templates", "diagnostic-command", "text-tools"]:
+    for name in ["templates", "diagnostic-command", "text-tools", "remote-logs", "upload-deploy"]:
         destination = output / name
         shutil.copytree(ROOT / "examples/plugins" / name, destination, dirs_exist_ok=True)
         if name != "templates":
-            core = guest_target / "wasm32-unknown-unknown/release" / (name.replace("-", "_") + ".wasm")
+            guest_name = "remote_tools" if name in {"remote-logs", "upload-deploy"} else name.replace("-", "_")
+            core = guest_target / "wasm32-unknown-unknown/release" / (guest_name + ".wasm")
             run(str(tool), "component", str(core), str(destination / "plugin.wasm"))
         run(str(tool), "pack", str(destination), str(output / (name + ".zip")))
     if options.fixtures or options.check:

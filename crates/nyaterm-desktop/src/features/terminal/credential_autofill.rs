@@ -1,3 +1,4 @@
+use super::assist_state::CredentialPromptInstance;
 use super::command_suggestions::{
     SUGGESTION_OVERLAY_FOOTER_HEIGHT, SUGGESTION_OVERLAY_HEADER_HEIGHT,
     suggestion_overlay_desired_height,
@@ -28,6 +29,33 @@ const PENDING_PASSWORD_TTL_MS: u64 = 60_000;
 const CREDENTIAL_PROMPT_INPUT_TTL_MS: u64 = 120_000;
 
 impl NyaTermApp {
+    fn credential_prompt_targets(&self) -> Vec<CredentialAutofillTarget> {
+        self.security
+            .credentials()
+            .iter()
+            .cloned()
+            .map(CredentialAutofillTarget::Vault)
+            .chain(
+                self.security
+                    .otp_entries()
+                    .iter()
+                    .filter_map(otp_prompt_target),
+            )
+            .collect()
+    }
+
+    fn detect_configured_credential_prompt(
+        &mut self,
+        prompt: &str,
+    ) -> Option<CredentialPromptKind> {
+        let targets = self.credential_prompt_targets();
+        self.terminal
+            .assist
+            .credential_prompt_classifier
+            .detect_custom_prompt_kind(prompt, &targets)
+            .or_else(|| credential_autofill_detect_prompt_kind(prompt))
+    }
+
     pub(in crate::features) fn now_unix_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -192,16 +220,33 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
         };
-        let view = self.terminal.view.views.get(&session_id);
-        // Missing frames are not evidence that a no-echo prompt ended.
-        let Some(row) = view
-            .and_then(|view| view.frame_snapshot.as_deref())
-            .and_then(credential_autofill_prompt_row_from_snapshot)
+        let Some(snapshot) = self
+            .terminal
+            .view
+            .views
+            .get(&session_id)
+            .and_then(|view| view.frame_snapshot.clone())
         else {
             return false;
         };
-        let instance = Some((row.line_id, row.revision));
-        let prompt_text = credential_autofill_prompt_text_from_visible(&row.text);
+        // Missing frames are not evidence that a no-echo prompt ended.
+        let Some(row) = credential_autofill_prompt_row_from_snapshot(&snapshot) else {
+            return false;
+        };
+        let label = credential_autofill_label_row_from_snapshot(&snapshot, |text| {
+            let targets = self.credential_prompt_targets();
+            self.terminal
+                .assist
+                .credential_prompt_classifier
+                .detect_custom_prompt_kind(text, &targets)
+                .is_some()
+        })
+        .unwrap_or(row);
+        let instance = Some(CredentialPromptInstance {
+            input: (row.line_id, row.revision),
+            label: (label.line_id, label.revision),
+        });
+        let prompt_text = credential_autofill_prompt_text_from_visible(&label.text);
         let dirty = self
             .terminal
             .assist
@@ -243,7 +288,7 @@ impl NyaTermApp {
         {
             return false;
         }
-        let detected_prompt_kind = credential_autofill_detect_prompt_kind(&prompt_text);
+        let detected_prompt_kind = self.detect_configured_credential_prompt(&prompt_text);
         if detected_prompt_kind.is_none()
             && self.terminal.assist.credential_autofill_pending.is_none()
         {
@@ -303,26 +348,14 @@ impl NyaTermApp {
         if prompt_text.is_empty() {
             return false;
         }
-        let Some(prompt_kind) = credential_autofill_detect_prompt_kind(&prompt_text) else {
+        let Some(prompt_kind) = self.detect_configured_credential_prompt(&prompt_text) else {
             return false;
         };
         let current_line = prompt_text.trim().to_string();
         let Some(active_session_id) = self.session.active_id_owned() else {
             return false;
         };
-        let mut credentials: Vec<CredentialAutofillTarget> = self
-            .security
-            .credentials()
-            .iter()
-            .cloned()
-            .map(CredentialAutofillTarget::Vault)
-            .collect();
-        credentials.extend(
-            self.security
-                .otp_entries()
-                .iter()
-                .filter_map(otp_prompt_target),
-        );
+        let credentials = self.credential_prompt_targets();
         if credentials.is_empty() {
             return false;
         }
@@ -1147,6 +1180,32 @@ fn credential_autofill_prompt_row_from_snapshot(
         .map(AsRef::as_ref)
 }
 
+/// A TUI label can sit above an empty input field. Only explicit patterns may
+/// use this neighborhood; ordinary prompt heuristics remain cursor-line only.
+/// Stop at the first nonempty row so unrelated output cannot be skipped over.
+fn credential_autofill_label_row_from_snapshot(
+    snapshot: &TerminalSnapshot,
+    mut matches_custom: impl FnMut(&str) -> bool,
+) -> Option<&nyaterm_terminal::TerminalSnapshotRow> {
+    let cursor = snapshot.cursor.row;
+    if cursor == usize::MAX || snapshot.display_offset != 0 {
+        return None;
+    }
+    let input = snapshot.row(cursor)?;
+    if !input.text.trim().is_empty() {
+        return None;
+    }
+    let visible_start = snapshot.row_count().saturating_sub(snapshot.viewport_rows);
+    for index in (cursor.saturating_sub(2).max(visible_start)..cursor).rev() {
+        let row = snapshot.row(index)?;
+        let text = credential_autofill_prompt_text_from_visible(&row.text);
+        if !text.is_empty() {
+            return matches_custom(&text).then_some(row);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 fn credential_autofill_prompt_line_from_viewport(
     lines: &[String],
@@ -1659,6 +1718,211 @@ mod tests {
             password_prompt_regex: Some("Password:".into()),
             enabled: true,
         })
+    }
+
+    #[test]
+    fn localized_prompts_protect_input_and_recording_then_release_the_shell() {
+        let root = TestConfigDir::new("nyaterm-localized-prompt");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            for (prompt, sensitive) in [
+                ("[sudo] Mot\u{a0}de\u{202f}passe de alice :", true),
+                ("$ ", false),
+                ("Parola da cercare:", false),
+                ("Utilisateur connecté:", false),
+                ("Benutzer online:", false),
+                ("Usuario actual:", false),
+                ("Utente corrente:", false),
+                ("Sifre:", true),
+                ("$ ", false),
+            ] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen
+                    .advance(format!("\x1b[2J\x1b[H{prompt}").as_bytes());
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                // Before output observation, recording falls back to the frame.
+                if !app.recording.has_observed_prompt("s1") {
+                    assert_eq!(app.recording_input_is_sensitive("s1"), sensitive);
+                }
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert_eq!(app.is_credential_prompt_input_mode(), sensitive, "{prompt}");
+                app.observe_recording_prompt_output("s1", &format!("\r\n{prompt}"));
+                assert_eq!(
+                    app.recording_input_is_sensitive("s1"),
+                    sensitive,
+                    "{prompt}"
+                );
+                assert!(!app.recording_input_is_sensitive("other"));
+            }
+        });
+    }
+
+    #[test]
+    fn localized_prompt_pending_fill_requires_the_selected_pattern_and_session() {
+        use nyaterm_core::credential_autofill::matching::{
+            CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey,
+            CredentialAutofillMatcher, PendingCredentialAutofill,
+        };
+        let root = TestConfigDir::new("nyaterm-localized-pending");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, _| {
+            let CredentialAutofillTarget::Vault(mut credential) =
+                test_credential_target("selected")
+            else {
+                unreachable!();
+            };
+            credential.password_prompt_regex = Some("Mot".into());
+            app.security
+                .replace_catalog(vec![], vec![], vec![], vec![credential]);
+            let mut matcher = CredentialAutofillMatcher::default();
+            for (prompt, session, sends) in [
+                ("[sudo] Mot de passe de alice\u{202f}:", "s1", true),
+                ("[sudo] Mot de passe de alice\u{202f}:", "other", false),
+                ("Password:", "s1", false),
+            ] {
+                let kind = app.detect_configured_credential_prompt(prompt).unwrap();
+                let outcome = matcher.evaluate(CredentialAutofillMatchRequest {
+                    key: CredentialAutofillMatchRequestKey {
+                        request_id: 1,
+                        session_id: "s1".into(),
+                        prompt_text: prompt.into(),
+                    },
+                    current_line: prompt.into(),
+                    prompt_kind: kind,
+                    credentials: app.credential_prompt_targets(),
+                    pending: Some(PendingCredentialAutofill {
+                        session_id: session.into(),
+                        credential_id: "selected".into(),
+                        expires_at_ms: u64::MAX,
+                    }),
+                });
+                assert_eq!(
+                    matches!(
+                        crate::models::credential_autofill_action(&outcome),
+                        crate::models::CredentialAutofillAction::Send { .. }
+                    ),
+                    sends
+                );
+            }
+            // An explicit username pattern still takes priority over the built-in password rule.
+            let CredentialAutofillTarget::Vault(mut credential) = test_credential_target("custom")
+            else {
+                unreachable!();
+            };
+            credential.username_prompt_regex = Some("^Mot de passe:$".into());
+            app.security
+                .replace_catalog(vec![], vec![], vec![], vec![credential]);
+            assert_eq!(
+                app.detect_configured_credential_prompt("Mot de passe:"),
+                Some(CredentialPromptKind::Username)
+            );
+        });
+    }
+
+    #[test]
+    fn gateshell_label_above_input_is_detected_and_stale_fills_are_revoked() {
+        let root = TestConfigDir::new("nyaterm-gateshell-prompt");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            let CredentialAutofillTarget::Vault(mut credential) = test_credential_target("gate")
+            else {
+                unreachable!();
+            };
+            credential.username_prompt_regex = Some(r"<<\s*USERNAME\s*>>".into());
+            credential.password_prompt_regex = Some(r"<<\s*PASSWORD\s*>>".into());
+            app.security
+                .replace_catalog(vec![], vec![], vec![], vec![credential]);
+            for (label, kind) in [
+                ("USERNAME", CredentialPromptKind::Username),
+                ("PASSWORD", CredentialPromptKind::Password),
+            ] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen.resize(80, 24);
+                view.screen.advance(
+                    format!(
+                        "\x1b[2J\x1b[H----<< {label} >>----\r\n\r\npress CTRL-C close\x1b[2;1H"
+                    )
+                    .as_bytes(),
+                );
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert_eq!(
+                    app.terminal.assist.credential_autofill_buffer,
+                    format!("----<< {label} >>----")
+                );
+                assert!(app.is_credential_prompt_input_mode());
+                assert!(app.detect_credential_prompt(cx));
+                let key = app
+                    .terminal
+                    .assist
+                    .credential_autofill_pending_request
+                    .clone()
+                    .unwrap();
+                assert_eq!(
+                    app.detect_configured_credential_prompt(&key.prompt_text),
+                    Some(kind)
+                );
+                let generation = app.terminal.assist.credential_autofill_generation;
+                // The label remains visible, but a shell now owns the input row.
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen.advance(b"$ ");
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert!(
+                    !app.terminal
+                        .assist
+                        .credential_fill_is_current(true, generation)
+                );
+                assert!(
+                    app.terminal
+                        .assist
+                        .credential_autofill_pending_request
+                        .is_none()
+                );
+                assert!(!app.is_credential_prompt_input_mode());
+            }
+        });
+    }
+
+    #[test]
+    fn tui_label_search_is_bounded_and_never_skips_unrelated_text() {
+        let root = TestConfigDir::new("nyaterm-gateshell-bounds");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, _| {
+            for (screen, expected) in [
+                ("<< USERNAME >>\r\n", true),
+                ("<< USERNAME >>\r\n\r\n", true),
+                ("<< USERNAME >>\r\n\r\n\r\n", false),
+                ("<< USERNAME >>\r\nother output\r\n", false),
+                ("<< USERNAME >>\r\n$ ", false),
+                ("\r\n<< USERNAME >>\x1b[1;1H", false),
+            ] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen.resize(80, 24);
+                view.screen
+                    .advance(format!("\x1b[2J\x1b[H{screen}").as_bytes());
+                let mut snapshot = view.screen.viewport_snapshot(0);
+                assert_eq!(
+                    super::credential_autofill_label_row_from_snapshot(&snapshot, |text| text
+                        == "<< USERNAME >>")
+                    .is_some(),
+                    expected
+                );
+                snapshot.cursor.row = usize::MAX;
+                assert!(
+                    super::credential_autofill_label_row_from_snapshot(&snapshot, |_| true)
+                        .is_none()
+                );
+            }
+        });
     }
 
     #[test]

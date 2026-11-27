@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn agent_prompts_require_non_interactive_commands_in_all_languages() {
         let settings = AiSettings::default();
-        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
             let request = sample_ai_request(language);
             let prompt = build_agent_prompt(&request, &settings);
             assert!(prompt.contains("git --no-pager"));

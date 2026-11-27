@@ -91,7 +91,7 @@ pub use native_overlay::{
 pub use number_input::{
     NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,
 };
-pub use popover::{NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
+pub use popover::{NyaPopover, NyaPopoverAlign, NyaPopoverGroup, NyaPopoverPlacement};
 pub use root::{NyaRoot, NyaWindowHandle, init_components, nya_root, set_nya_root_transparent};
 pub use selectable_text::NyaSelectableText;
 pub use selection::{

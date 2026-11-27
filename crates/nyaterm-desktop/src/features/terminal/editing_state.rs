@@ -191,6 +191,15 @@ impl SessionEditingState {
 }
 
 impl TerminalEditingState {
+    fn clear_free_type_interactions(&mut self) {
+        // Retain sent edits and their echo confirmation; only retire unsent gestures.
+        for state in self.sessions.values_mut() {
+            state.model.queued_cursor = None;
+            state.selection_origin_version = None;
+            state.selection = None;
+        }
+    }
+
     pub(super) fn allocate_confirmation_id(&mut self) -> u64 {
         self.next_confirmation_id = self
             .next_confirmation_id
@@ -268,6 +277,10 @@ impl TerminalEditingState {
 }
 
 impl super::state::TerminalFeatureState {
+    pub(in crate::features) fn clear_free_type_interactions(&mut self) {
+        self.editing.clear_free_type_interactions();
+    }
+
     pub(in crate::features) fn disconnect_shell_editing_session(&mut self, session_id: &str) {
         // Background sessions must retire evidence and jobs too; they may
         // reconnect before the active-view reconciliation ever observes EOF.
@@ -307,6 +320,61 @@ mod tests {
     use super::{SuggestionFillRequest, TerminalEditingState};
     use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase};
     use std::time::Instant;
+
+    #[test]
+    fn free_type_cleanup_preserves_pending_edits_in_all_sessions() {
+        use crate::features::terminal::editing_state::SessionEditingState;
+        use crate::models::{TerminalBufferCellPos, TerminalSelection};
+
+        let mut editing = TerminalEditingState::default();
+        editing.activate("active");
+        let now = Instant::now();
+        for id in ["active", "background"] {
+            let mut state = SessionEditingState::default();
+            state.model.note_input("abc", now);
+            state.model.queued_cursor = Some(0);
+            state.selection_origin_version = Some(state.model.version);
+            state.selection = Some((
+                TerminalSelection::from_range(
+                    TerminalBufferCellPos::new(0, 0),
+                    TerminalBufferCellPos::new(0, 1),
+                ),
+                state.model.version,
+            ));
+            state.suggestion_fill = Some(SuggestionFillRequest {
+                request_id: 0,
+                input_version: state.model.version,
+                target: "abc".into(),
+                execute_requested: false,
+                deadline: now + EDIT_CONFIRMATION_TIMEOUT,
+                sync_revision: 0,
+            });
+            editing.sessions.insert(id.into(), state);
+        }
+        editing.clear_free_type_interactions();
+        for state in editing.sessions.values_mut() {
+            assert!(state.model.queued_cursor.is_none());
+            assert!(state.selection_origin_version.is_none());
+            assert!(state.selection.is_none());
+            assert_eq!(state.model.phase, EditPhase::Pending);
+            assert_eq!(state.model.input.value, "abc");
+            assert_eq!(state.model.version, 1);
+            assert_eq!(state.model.last_input_at, Some(now));
+            assert!(state.suggestion_fill.is_some());
+        }
+        assert_eq!(
+            editing.sessions.get_mut("active").unwrap().model.confirm(),
+            None
+        );
+        assert!(
+            editing
+                .sessions
+                .get_mut("background")
+                .unwrap()
+                .model
+                .expire(now + EDIT_CONFIRMATION_TIMEOUT)
+        );
+    }
 
     #[test]
     fn clearing_editing_keeps_the_original_shell_and_submission_guard() {

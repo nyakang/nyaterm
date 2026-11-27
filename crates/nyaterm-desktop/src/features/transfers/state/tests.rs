@@ -1121,6 +1121,50 @@ fn transfer_job_retry_keeps_the_original_policy_and_releases_it_after_success() 
 }
 
 #[test]
+fn restarted_upload_retains_its_new_conflict_policy_and_target_lock_for_later_retries() {
+    use nyaterm_files::sftp_transfer_types::{
+        SftpDuplicateDecision, SftpDuplicateRequest, SftpDuplicateResolver,
+    };
+
+    struct Resolver;
+    impl SftpDuplicateResolver for Resolver {
+        fn resolve_duplicate(
+            &self,
+            _: &SftpDuplicateRequest,
+        ) -> Result<SftpDuplicateDecision, String> {
+            Ok(SftpDuplicateDecision::Skip)
+        }
+    }
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    let initial =
+        transfer.bind_transfer_job_path_options("upload", SftpPathTransferOptions::default());
+    let lock = Arc::new(std::sync::Mutex::new(()));
+    transfer.bind_upload_target_lock("upload", lock.clone());
+    let service = nyaterm_files::file_browser::FileBrowserService::local();
+    transfer.bind_transfer_job_source("upload", &service);
+    let restarted = transfer.restart_upload_path_options(
+        "upload",
+        Arc::new(Resolver),
+        SftpTransferOptions::default().with_resume_broken_transfer(true),
+    );
+    assert_eq!(initial.duplicate_policy(), SftpDuplicatePolicy::Overwrite);
+    assert_eq!(restarted.duplicate_policy(), SftpDuplicatePolicy::Ask);
+    assert!(!restarted.transfer_options().resume_broken_transfer);
+    let retry =
+        transfer.transfer_job_retry_path_options("upload", SftpPathTransferOptions::default());
+    assert_eq!(retry.duplicate_policy(), SftpDuplicatePolicy::Ask);
+    assert!(std::ptr::eq(
+        restarted.duplicate_resolver().unwrap(),
+        retry.duplicate_resolver().unwrap()
+    ));
+    assert!(Arc::ptr_eq(&lock, &transfer.upload_target_lock("upload")));
+    assert!(transfer.transfer_job_is_local("upload"));
+}
+
+#[test]
 fn transfer_panel_owns_height_and_resize_lifecycle() {
     let mut panel = TransferPanelState {
         height: 120.,

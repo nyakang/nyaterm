@@ -3610,6 +3610,83 @@ fn save_general_and_diagnostics_settings_roundtrip() {
 }
 
 #[test]
+fn save_general_settings_preserves_every_shipped_ui_language() {
+    let dir = unique_temp_dir("settings-ui-language-roundtrip");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let mut summary = store.load_app_settings_summary().expect("load");
+
+    for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
+        summary.language = language.to_string();
+        let saved = store.save_general_settings(&summary).expect("save general");
+        assert_eq!(saved.language, language, "saved summary for {language}");
+        let raw = store.load_settings_value().expect("raw");
+        assert_eq!(
+            raw["ui"]["language"],
+            serde_json::Value::String(language.into()),
+            "persisted ui.language for {language}"
+        );
+    }
+
+    // Legacy aliases stay untouched in storage; the UI resolves them on read.
+    summary.language = "pt_BR".to_string();
+    let saved = store.save_general_settings(&summary).expect("save alias");
+    assert_eq!(saved.language, "pt_BR");
+    assert_eq!(
+        store.load_settings_value().expect("raw")["ui"]["language"],
+        serde_json::Value::String("pt_BR".into())
+    );
+
+    summary.language = "  ".to_string();
+    let saved = store
+        .save_general_settings(&summary)
+        .expect("save blank language");
+    assert_eq!(saved.language, "en");
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn header_and_workspace_layout_writes_preserve_each_others_fields_and_legacy_extensions() {
+    let dir = unique_temp_dir("settings-header-layout-ownership");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let legacy = serde_json::json!({
+        "ui": {"left_width": 381, "header_status_mode": "host", "header_status_visible": false,
+            "activity_bar_layout": {"left_top": ["connections"], "future": 42},
+            "future_layout": {"enabled": true}},
+        "appearance": {"panel_multi_open": true, "future": "retained"},
+        "future": [1, 2, 3]
+    });
+    store.save_settings_value(&legacy).unwrap();
+    let mut draft = store.load_app_settings_summary().unwrap();
+    draft.ui_left_panel_width = 444;
+    draft.ui_header_status_mode = "datetime".into();
+    draft.ui_header_status_visible = true;
+    store.save_header_status_settings(&draft).unwrap();
+    let mut expected = legacy;
+    expected["ui"]["header_status_mode"] = serde_json::json!("datetime");
+    expected["ui"]["header_status_visible"] = serde_json::json!(true);
+    assert_eq!(store.load_settings_value().unwrap(), expected);
+
+    // A queued layout snapshot can outlive Apply/Cancel. Its header is never written.
+    draft.ui_header_status_mode = "host".into();
+    draft.ui_header_status_visible = false;
+    let saved = store.save_workspace_layout_settings(&draft).unwrap();
+    assert_eq!(saved.ui_left_panel_width, 444);
+    assert_eq!(saved.ui_header_status_mode, "datetime");
+    assert!(saved.ui_header_status_visible);
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["ui"]["activity_bar_layout"]["future"], 42);
+    assert_eq!(raw["ui"]["future_layout"], expected["ui"]["future_layout"]);
+    assert_eq!(raw["appearance"]["future"], "retained");
+    assert_eq!(raw["future"], expected["future"]);
+    drop(store);
+    let reopened = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(reopened.load_app_settings_summary().unwrap(), saved);
+    drop(reopened);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn save_ui_layout_bottom_panel_state_roundtrip_and_clamp() {
     let dir = unique_temp_dir("settings-bottom-panel-heights");
     let store = ConnectionStore::open(&dir).expect("store");
@@ -4035,6 +4112,36 @@ fn header_status_settings_roundtrip_and_preserve_unknown_ui_fields() {
 }
 
 #[test]
+fn free_type_legacy_default_and_round_trip_preserve_unknown_settings() {
+    let dir = unique_temp_dir("free-type-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_settings_value(&serde_json::json!({
+            "interaction": {"future_option": {"enabled": true}},
+            "future_section": {"value": 42}
+        }))
+        .unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert!(settings.interaction_free_type_enabled);
+    for enabled in [false, true] {
+        settings.interaction_free_type_enabled = enabled;
+        let saved = store.save_interaction_settings(&settings).unwrap();
+        assert_eq!(saved.interaction_free_type_enabled, enabled);
+        assert_eq!(
+            store
+                .load_app_settings_summary()
+                .unwrap()
+                .interaction_free_type_enabled,
+            enabled
+        );
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["interaction"]["free_type_enabled"], enabled);
+        assert_eq!(raw["interaction"]["future_option"]["enabled"], true);
+        assert_eq!(raw["future_section"]["value"], 42);
+    }
+}
+
+#[test]
 fn retired_ime_setting_survives_loading_and_saving_interaction_settings() {
     for legacy_enabled in [false, true] {
         let dir = unique_temp_dir("retired-ime-setting");
@@ -4285,6 +4392,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(summary.host_key_policy, "strict");
     assert_eq!(summary.transfer_download_path, "/tmp/downloads");
     assert!(summary.transfer_ask_save_location);
+    assert!(!summary.transfer_external_editor_auto_upload);
     assert_eq!(summary.transfer_duplicate_strategy, "rename");
     assert_eq!(summary.transfer_editor_type, "internal");
     assert_eq!(summary.transfer_internal_editor_font_size, 17);
@@ -4379,6 +4487,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     let mut transfer_update = summary.clone();
     transfer_update.transfer_download_path = "/var/tmp/downloads".to_string();
     transfer_update.transfer_ask_save_location = false;
+    transfer_update.transfer_external_editor_auto_upload = true;
     transfer_update.transfer_duplicate_strategy = "overwrite".to_string();
     transfer_update.transfer_editor_type = "external".to_string();
     transfer_update.transfer_internal_editor_font_size = 19;
@@ -4395,6 +4504,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         .expect("save transfer settings");
     assert_eq!(updated.transfer_download_path, "/var/tmp/downloads");
     assert!(!updated.transfer_ask_save_location);
+    assert!(updated.transfer_external_editor_auto_upload);
     assert_eq!(updated.transfer_duplicate_strategy, "overwrite");
     assert_eq!(updated.transfer_editor_type, "external");
     assert_eq!(updated.transfer_internal_editor_font_size, 19);
@@ -10083,4 +10193,41 @@ fn settings_alternate_screen_policy_is_independent_and_preserves_legacy_document
     }
     drop(store);
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn external_editor_auto_upload_defaults_off_and_survives_reopening() {
+    let dir = unique_temp_dir("external-editor-auto-upload");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(&serde_json::json!({
+                "transfer": {"default_editor": "code --wait", "future_option": [1, 2]},
+                "future_root": {"preserved": true}
+            }))
+            .unwrap();
+        let mut summary = store.load_app_settings_summary().unwrap();
+        assert!(!summary.transfer_external_editor_auto_upload);
+        summary.transfer_external_editor_auto_upload = true;
+        store.save_transfer_settings(&summary).unwrap();
+    }
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let mut summary = store.load_app_settings_summary().unwrap();
+        assert!(summary.transfer_external_editor_auto_upload);
+        assert_eq!(summary.transfer_default_editor, "code --wait");
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["transfer"]["external_editor_auto_upload"], true);
+        assert_eq!(raw["transfer"]["future_option"], serde_json::json!([1, 2]));
+        assert_eq!(raw["future_root"]["preserved"], true);
+        summary.transfer_external_editor_auto_upload = false;
+        store.save_transfer_settings(&summary).unwrap();
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        !store
+            .load_app_settings_summary()
+            .unwrap()
+            .transfer_external_editor_auto_upload
+    );
 }

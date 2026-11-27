@@ -835,3 +835,261 @@ fn android_screen_session_settings_survive_stop_without_changing_device_defaults
         );
     });
 }
+
+#[test]
+fn a_starting_android_session_holds_device_discovery_before_any_view_exists() {
+    use crate::features::session::SavedConnectionStartOptions;
+    let root = TestConfigDir::new("nyaterm-android-start-discovery");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, _cx| {
+        let options = SavedConnectionStartOptions::default();
+        // Any other connection being opened is not an Android consumer.
+        let ssh: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"ssh-server", "name":"SSH", "type":"ssh", "host":"example.com", "username":"root"
+        }))
+        .unwrap();
+        app.session.begin_saved_start_preparation(&ssh, &options);
+        app.sync_android_discovery();
+        assert!(!app.android_discovery_needed());
+        assert!(!app.android.holds_discovery());
+
+        // A saved Android connection is registered before its device is bound,
+        // so no view or session exists yet. Releasing discovery in that window
+        // stopped the tracker and the server the bind was talking to, and the
+        // connection failed right after adb came up.
+        let android: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"android-device", "name":"Android fixture", "type":"adb",
+            "device":{"kind":"usb","serial":"synthetic"}, "directory":"/sdcard/"
+        }))
+        .unwrap();
+        let request = app
+            .session
+            .begin_saved_start_preparation(&android, &options);
+        app.android.pending.insert(android.id.clone(), request);
+        app.sync_android_discovery();
+        assert!(app.android_discovery_needed());
+        assert!(app.android.holds_discovery());
+    });
+}
+
+#[test]
+fn a_reopened_device_picker_uses_only_live_devices_and_reports_startup_errors() {
+    let mut state = crate::features::android::AndroidFeatureState::new(Default::default());
+    state.sync_discovery(true);
+    assert!(state.device_snapshot().devices.is_empty());
+    assert!(state.devices_are_starting());
+    state.tracker_error = Some("fixture startup failure".into());
+    assert!(!state.devices_are_starting());
+    assert_eq!(
+        state.device_snapshot().error.as_deref(),
+        Some("fixture startup failure")
+    );
+    state.sync_discovery(false);
+    state.sync_discovery(true);
+    assert!(state.device_snapshot().devices.is_empty());
+    assert!(state.devices_are_starting());
+}
+
+#[test]
+fn attaching_a_moved_android_tab_holds_discovery_before_the_next_tick() {
+    let root = TestConfigDir::new("nyaterm-android-tab-move");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, cx| {
+        assert!(!app.android.holds_discovery());
+        let bundle = crate::features::android::AndroidTabTransfer {
+            views: vec![crate::features::android::AndroidTransferredView {
+                id: "android-shell".into(),
+                view: AndroidView {
+                    device_key: "android-device".into(),
+                    kind: AndroidViewKind::Shell,
+                },
+                screen: None,
+                workspace: None,
+            }],
+            devices: Vec::new(),
+            discovery: None,
+        };
+        app.android
+            .attach_tab(bundle, &mut app.file_manager, cx.entity(), cx);
+        // The source window releases as soon as its tab is gone, so the
+        // arriving window has to hold discovery itself, not wait for a tick.
+        assert!(app.android.holds_discovery());
+    });
+}
+#[test]
+fn waiting_for_android_component_keeps_one_pending_connection_request() {
+    use crate::features::session::SavedConnectionStartOptions;
+    let root = TestConfigDir::new("nyaterm-android-component-pending");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    app.update(&mut cx, |app, cx| {
+        let connection = missing_adb_connection();
+        let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
+        let request = app
+            .session
+            .begin_saved_start_preparation(&connection, &options);
+        app.android
+            .pending
+            .insert(connection.id.clone(), request.clone());
+        app.start_android_connection(connection, Default::default(), None, cx);
+        let pending: Vec<_> = app.session.start_pending_entries().collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, &request);
+    });
+}
+
+#[test]
+fn a_disconnected_android_tab_releases_discovery_and_its_native_component() {
+    use crate::features::test_support::app_with_visible_android_session;
+    use crate::models::SessionLaunchConfig;
+    let root = TestConfigDir::new("nyaterm-android-disconnected-lease");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        let proof = Arc::new(());
+        let weak = Arc::downgrade(&proof);
+        let component = nyaterm_core::plugins::native::NativeLaunch {
+            executable: root.join("fixture.exe"),
+            root: root.path().into(),
+            lease: proof,
+        };
+        if let SessionLaunchConfig::AdbShell(config) =
+            &mut app.session.metadata_mut("fixture").unwrap().launch_config
+        {
+            config.client.component = Some(component.clone());
+        } else {
+            panic!("expected Android shell");
+        }
+        app.android
+            .devices
+            .get_mut("android-device")
+            .unwrap()
+            .config
+            .client
+            .component = Some(component);
+        app.sync_android_discovery();
+        assert!(app.android.holds_discovery());
+        app.session.mark_session_disconnected("fixture");
+        app.collect_android_devices();
+        app.sync_android_discovery();
+        assert!(!app.android.holds_discovery());
+        assert!(app.android.views.contains_key("fixture"));
+        assert!(weak.upgrade().is_none());
+    });
+}
+
+#[test]
+fn a_transfer_bundle_keeps_discovery_alive_between_windows() {
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-transfer-discovery");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        app.android.sync_discovery(true);
+        let ticket = app.android.tracker.discovery_control();
+        let bundle = app
+            .android
+            .detach_tab(&["fixture".into()], &mut app.file_manager);
+        app.android.sync_discovery(false);
+        assert!(
+            !ticket.is_cancelled(),
+            "transfer introduced a zero-consumer gap"
+        );
+        drop(bundle);
+        assert!(ticket.is_cancelled());
+    });
+}
+
+#[test]
+fn android_clock_stops_when_no_consumers_remain() {
+    let root = TestConfigDir::new("nyaterm-android-idle-clock");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, cx| app.ensure_android_clock(cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    app.update(&mut cx, |app, _| assert!(app.android.clock.is_none()));
+}
+
+#[test]
+fn a_new_view_uses_the_newly_acquired_component_instead_of_the_source_sessions_version() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::app_with_visible_android_session;
+    use crate::models::SessionLaunchConfig;
+    let root = TestConfigDir::new("nyaterm-android-view-component");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let mut config = app.android_config_for_session("fixture").unwrap();
+        config.client.component = Some(nyaterm_core::plugins::native::NativeLaunch {
+            executable: root.join("old/helper"),
+            root: root.join("old"),
+            lease: Arc::new(()),
+        });
+        app.plugins.native_launch_fixture = Some(nyaterm_core::plugins::native::NativeLaunch {
+            executable: root.join("new/helper"),
+            root: root.join("new"),
+            lease: Arc::new(()),
+        });
+        app.request_android_view(
+            config,
+            AndroidViewKind::Files,
+            SavedConnectionStartOptions::default(),
+            cx,
+        );
+        let id = app
+            .android
+            .views
+            .iter()
+            .find(|(_, view)| view.kind == AndroidViewKind::Files)
+            .unwrap()
+            .0;
+        let SessionLaunchConfig::AdbFiles(config) =
+            &app.session.metadata(id).unwrap().launch_config
+        else {
+            panic!("expected files view");
+        };
+        assert_eq!(
+            config.client.component.as_ref().unwrap().root,
+            root.join("new")
+        );
+    });
+}
+
+#[test]
+fn a_cached_session_launch_cannot_open_a_view_without_component_acquisition() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-view-registry");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let mut config = app.android_config_for_session("fixture").unwrap();
+        config.client.component = app.plugins.native_launch_fixture.take();
+        assert!(config.client.component.is_some());
+        app.request_android_view(
+            config,
+            AndroidViewKind::Files,
+            SavedConnectionStartOptions::default(),
+            cx,
+        );
+        assert!(
+            app.android
+                .views
+                .values()
+                .all(|view| view.kind != AndroidViewKind::Files)
+        );
+    });
+}

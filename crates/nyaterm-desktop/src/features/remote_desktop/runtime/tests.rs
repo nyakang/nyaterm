@@ -16,7 +16,7 @@ use super::{
     rdp_error_is_retryable, rdp_key_modifiers, rdp_reconnect_delay,
     record_remote_cursor_position_if_sent, remote_committed_text_supported,
     remote_cursor_repaint_interval, remote_desktop_authentication_disabled,
-    remote_desktop_drain_delay, remote_desktop_password_id, remote_desktop_periodic_delay,
+    remote_desktop_frame_interval, remote_desktop_password_id, remote_desktop_periodic_delay,
     remote_modifier_transitions, remote_state_clears_input, secure_attention_available,
     vnc_auth_failure_accepts_password_prompt, vnc_capabilities_for_state, vnc_input_allowed,
     vnc_keysym_for_key, vnc_retry_requires_password,
@@ -908,31 +908,14 @@ fn cursor_repaints_follow_the_renderer_budget() {
 }
 
 #[test]
-fn continuous_frame_drains_wait_for_the_next_display_frame() {
+fn background_publication_follows_the_renderer_budget() {
     assert_eq!(
-        remote_desktop_drain_delay(Duration::ZERO, false),
+        remote_desktop_frame_interval(false),
         Duration::from_millis(16)
     );
     assert_eq!(
-        remote_desktop_drain_delay(Duration::from_millis(5), false),
-        Duration::from_millis(11)
-    );
-    assert_eq!(
-        remote_desktop_drain_delay(Duration::from_millis(20), false),
-        Duration::from_millis(1),
-        "a drain that already spent a frame's budget must still yield the UI"
-    );
-}
-
-#[test]
-fn software_renderers_get_a_lower_frame_delivery_rate() {
-    assert_eq!(
-        remote_desktop_drain_delay(Duration::ZERO, true),
+        remote_desktop_frame_interval(true),
         Duration::from_millis(33)
-    );
-    assert_eq!(
-        remote_desktop_drain_delay(Duration::from_millis(10), true),
-        Duration::from_millis(23)
     );
 }
 
@@ -1005,6 +988,7 @@ fn committed_text_requires_the_confirmed_protocol_capability() {
     let rdp_supported = RdpServerCapabilities {
         committed_unicode_text: true,
         secure_attention: false,
+        frame_update_complete: false,
     };
     let vnc_supported = VncServerCapabilities {
         committed_unicode_keysyms: true,
@@ -1128,6 +1112,7 @@ fn secure_attention_requires_rdp_connected_state_and_confirmed_capability() {
     let supported = Some(RdpServerCapabilities {
         committed_unicode_text: true,
         secure_attention: true,
+        frame_update_complete: false,
     });
     assert!(secure_attention_available(
         true,
@@ -1290,6 +1275,80 @@ fn closing_a_native_rdp_session_skips_the_helper_manager() {
     });
 }
 
+pub(super) fn rdp_presentation(
+    epoch: u64,
+    sequence: u64,
+    value: u8,
+) -> nyaterm_remote_desktop::presentation::RdpPresentation {
+    use nyaterm_remote_desktop::presentation::{
+        RemotePresentation, RemotePresentationId, RemoteUploadRegion,
+    };
+    RemotePresentation {
+        id: RemotePresentationId {
+            epoch,
+            generation: 1,
+            sequence,
+        },
+        width: 8,
+        height: 8,
+        full: true,
+        regions: vec![RemoteUploadRegion {
+            rect: nyaterm_remote_desktop::DirtyRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+            pixels: vec![value; 8 * 8 * 4].into(),
+        }],
+        completed_at: Instant::now(),
+        prepared_at: Instant::now(),
+    }
+}
+
+#[test]
+fn delayed_reset_keeps_an_already_uploaded_remote_surface() {
+    use crate::features::remote_desktop::state::frame_source::RemoteDesktopFrameSource;
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::TestAppContext;
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RDP_FRAMEBUFFER_LIMITS;
+
+    let root = TestTempDir::new("nyaterm-delayed-remote-reset");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "remote");
+    let (_, cx) = cx.add_window_view(|_, _| gpui::EmptyView);
+    cx.update(|window, cx| {
+        app.update(cx, |app, _| {
+            app.remote_desktop.insert_connecting("remote".into());
+            for vnc in [false, true] {
+                if vnc {
+                    app.reset_vnc_surface("remote", 1, 8, 8, window);
+                    app.apply_vnc_presentation("remote", rdp_presentation(2, 1, 7), window);
+                } else {
+                    app.reset_rdp_framebuffer("remote", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+                    app.apply_rdp_presentation("remote", rdp_presentation(2, 1, 7), window);
+                }
+                let texture = app.remote_desktop.sessions["remote"].texture;
+                assert!(texture.is_some());
+                for epoch in [2, 1] {
+                    if vnc {
+                        app.reset_vnc_surface("remote", epoch, 8, 8, window);
+                    } else {
+                        app.reset_rdp_framebuffer("remote", epoch, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+                    }
+                    let session = &app.remote_desktop.sessions["remote"];
+                    assert_eq!(session.texture, texture, "a delayed reset must retain the acknowledged texture");
+                    assert!(matches!(session.framebuffer,
+                        Some(RemoteDesktopFrameSource::Rdp { id, .. } | RemoteDesktopFrameSource::Vnc { id, .. }) if id.epoch == 2));
+                    assert!(!session.texture_dirty);
+                }
+            }
+        });
+    });
+}
+
 #[test]
 fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
     use crate::features::test_support::app_with_visible_local_session;
@@ -1319,15 +1378,8 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
             app.remote_desktop.insert_connecting("healthy".into());
             app.remote_desktop.insert_connecting("broken".into());
             app.reset_rdp_framebuffer("healthy", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+            app.apply_rdp_presentation("healthy", rdp_presentation(1, 1, 0), window);
             let texture = app.remote_desktop.sessions["healthy"].texture.unwrap();
-            let pixels = app.remote_desktop.sessions["healthy"]
-                .framebuffer
-                .as_ref()
-                .unwrap()
-                .as_rdp()
-                .unwrap()
-                .pixels()
-                .as_ptr();
             app.remote_desktop.release_inactive_textures("local");
             assert!(app.remote_desktop.sessions["healthy"].texture.is_none());
             assert!(app.remote_desktop.sessions["healthy"].texture_dirty);
@@ -1336,16 +1388,14 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
                     .framebuffer
                     .as_ref()
                     .unwrap()
-                    .as_rdp()
-                    .unwrap()
-                    .pixels()
-                    .as_ptr(),
-                pixels
+                    .width(),
+                8
             );
             for old in app.remote_desktop.pending_texture_removals.drain(..) {
                 old.remove(window, cx);
             }
-            app.prepare_remote_desktop_textures("healthy", window);
+            app.sync_remote_presentation_visibility(window);
+            app.apply_rdp_presentation("healthy", rdp_presentation(1, 2, 1), window);
             assert_ne!(
                 app.remote_desktop.sessions["healthy"].texture,
                 Some(texture)
@@ -1383,11 +1433,11 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
 }
 
 #[test]
-fn hidden_window_defers_remote_desktop_uploads_until_it_is_presented_again() {
+fn hidden_window_defers_prepared_remote_desktop_uploads() {
     use crate::features::test_support::app_with_visible_local_session;
     use gpui::{TestAppContext, WindowVisibility};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_remote_desktop::{PixelFormat, RDP_FRAMEBUFFER_LIMITS, RdpFrameEvent};
+    use nyaterm_remote_desktop::RDP_FRAMEBUFFER_LIMITS;
 
     let root = TestTempDir::new("nyaterm-remote-hidden-upload");
     let mut cx = TestAppContext::single();
@@ -1409,6 +1459,7 @@ fn hidden_window_defers_remote_desktop_uploads_until_it_is_presented_again() {
             app.remote_desktop.insert_connecting("remote".into());
             app.observe_remote_desktop_window_visibility(window, cx);
             app.reset_rdp_framebuffer("remote", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+            app.apply_rdp_presentation("remote", rdp_presentation(1, 1, 0), window);
             assert!(app.remote_desktop.sessions["remote"].texture.is_some());
             assert!(!app.remote_desktop.sessions["remote"].texture_dirty);
         });
@@ -1420,27 +1471,11 @@ fn hidden_window_defers_remote_desktop_uploads_until_it_is_presented_again() {
     cx.update(|window, cx| {
         assert!(!window.is_visible());
         app.update(cx, |app, _| {
-            app.apply_rdp_frame_batch(
-                "remote",
-                vec![RdpFrameEvent::Bitmap {
-                    epoch: 1,
-                    full: false,
-                    x: 0,
-                    y: 0,
-                    width: 2,
-                    height: 2,
-                    stride: 8,
-                    format: PixelFormat::Bgra8,
-                    pixels: vec![1; 16].into(),
-                }],
-                window,
-            );
+            app.apply_rdp_presentation("remote", rdp_presentation(1, 2, 1), window);
             let session = &app.remote_desktop.sessions["remote"];
             assert!(session.texture.is_some());
-            assert!(
-                session.texture_dirty,
-                "a hidden window must defer the upload instead of queueing it"
-            );
+            assert!(!session.texture_dirty);
+            assert!(matches!(session.framebuffer, Some(crate::features::remote_desktop::state::frame_source::RemoteDesktopFrameSource::Rdp { id, .. }) if id.sequence == 1), "hidden updates must stay in the background worker");
         });
     });
 
@@ -1448,6 +1483,7 @@ fn hidden_window_defers_remote_desktop_uploads_until_it_is_presented_again() {
     cx.update(|window, cx| {
         assert!(window.is_visible());
         app.update(cx, |app, _| {
+            app.apply_rdp_presentation("remote", rdp_presentation(1, 2, 1), window);
             let session = &app.remote_desktop.sessions["remote"];
             assert!(session.texture.is_some());
             assert!(
@@ -1492,13 +1528,16 @@ fn hidden_window_does_not_create_remote_desktop_textures() {
         app.update(cx, |app, _| {
             app.reset_rdp_framebuffer("remote", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
             assert!(app.remote_desktop.sessions["remote"].texture.is_none());
-            assert!(app.remote_desktop.sessions["remote"].texture_dirty);
+            app.apply_rdp_presentation("remote", rdp_presentation(1, 1, 0), window);
+            assert!(app.remote_desktop.sessions["remote"].texture.is_none());
         });
     });
 
     cx.simulate_visibility_change(WindowVisibility::Visible);
-    cx.update(|_, cx| {
+    cx.update(|window, cx| {
         app.update(cx, |app, _| {
+            assert!(app.remote_desktop.sessions["remote"].texture.is_none());
+            app.apply_rdp_presentation("remote", rdp_presentation(1, 1, 0), window);
             assert!(app.remote_desktop.sessions["remote"].texture.is_some());
             assert!(!app.remote_desktop.sessions["remote"].texture_dirty);
         });
@@ -1527,7 +1566,7 @@ fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_ret
                 token: "12345678901234567890123456789012".into(),
             }),
         ] {
-            config.relay = relay;
+            config.relay = relay.map(Into::into);
             app.session
                 .metadata_mut("unsupported")
                 .unwrap()

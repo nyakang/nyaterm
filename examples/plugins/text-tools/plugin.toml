@@ -1,11 +1,11 @@
-schema_version = 1
+schema_version = 2
 id = "text-tools"
 name = "Text tools"
 version = "1.0.0"
 authors = ["NyaTerm"]
 description = "Transform explicitly provided text"
 host_version = ">=2.0.0-preview.4"
-api_version = "1.0.0"
+api_version = "2.0.0"
 component = "plugin.wasm"
 
 [[actions]]

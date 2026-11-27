@@ -15,6 +15,7 @@ fn placement(line: i32, col: usize, width_cells: usize, height_cells: usize) -> 
         height_cells,
         data: b"image".to_vec().into(),
         content_id: 1,
+        source_rect: None,
         name: None,
         kitty_id: None,
         placement_id: None,
@@ -41,7 +42,8 @@ fn kitty_image_event(id: u32, data: Vec<u8>, place: bool) -> GraphicsEvent {
         compressed: false,
         pixel_width: None,
         pixel_height: None,
-        quiet: 0,
+        quiet: None,
+        source_rect: None,
     }
 }
 
@@ -303,7 +305,8 @@ fn sixel_is_rasterized_into_snapshot() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -389,7 +392,8 @@ fn assembles_kitty_multi_chunk_payload() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -416,7 +420,8 @@ fn assembles_kitty_multi_chunk_payload() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         1,
@@ -454,7 +459,8 @@ fn place_only_reuses_stored_kitty_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -482,7 +488,8 @@ fn place_only_reuses_stored_kitty_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         2,
         5,
@@ -578,15 +585,14 @@ fn kitty_store_prune_after_placement_retains_newest_placed_image() {
 }
 
 #[test]
-fn kitty_store_caps_single_payload_size() {
+fn oversized_kitty_image_is_rejected_without_truncating_or_replacing() {
     let mut state = TerminalGraphicsState::default();
+    state.handle(kitty_image_event(7, vec![1], true), 0, 0, 80, 9, 18);
     let oversized = vec![7; MAX_IMAGE_BYTES + 17];
-    state.handle(kitty_image_event(7, oversized, false), 0, 0, 80, 9, 18);
-
-    assert_eq!(
-        state.kitty_store.get(&7).map(|image| image.data.len()),
-        Some(MAX_IMAGE_BYTES)
-    );
+    let result = state.handle(kitty_image_event(7, oversized, false), 0, 0, 80, 9, 18);
+    assert!(result.pty_writes[0].windows(5).any(|s| s == b"E2BIG"));
+    assert_eq!(state.kitty_store.get(&7).unwrap().data.as_ref(), &[1]);
+    assert_eq!(state.placements.len(), 1);
 }
 
 #[test]
@@ -610,7 +616,8 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -637,7 +644,8 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -648,12 +656,7 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
 
     assert!(state.viewport_images(0, 24, 80).is_empty());
     assert!(!state.kitty_query_ok(GraphicsScreenKind::Primary, Some(42), None));
-    assert_eq!(result.pty_writes.len(), 1);
-    assert!(
-        String::from_utf8_lossy(&result.pty_writes[0]).contains("ENOENT"),
-        "{:?}",
-        result.pty_writes
-    );
+    assert!(result.pty_writes.is_empty());
 }
 
 #[test]
@@ -664,7 +667,7 @@ fn store_only_transmit_does_not_place() {
         GraphicsSegment::Event(GraphicsEvent::Image { place: false, .. }) => {}
         other => panic!("expected store-only transmit: {other:?}"),
     }
-    let segments = ingress.advance(b"\x1b_Ga=T,i=1,c=2,r=2,z=1;QUI=\x1b\\");
+    let segments = ingress.advance(b"\x1b_Ga=T,i=1,c=2,r=2,z=1,C=1;QUI=\x1b\\");
     match &segments[0] {
         GraphicsSegment::Event(GraphicsEvent::Image {
             place: true,
@@ -674,7 +677,8 @@ fn store_only_transmit_does_not_place() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
             ..
         }) => {}
         other => panic!("expected place+above: {other:?}"),
@@ -702,7 +706,8 @@ fn delete_all_clears_placements_and_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -747,7 +752,8 @@ fn delete_all_clears_placements_and_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -779,7 +785,8 @@ fn delete_image_without_free_keeps_store_for_replace() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -822,7 +829,8 @@ fn delete_image_without_free_keeps_store_for_replace() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         1,
         3,
@@ -839,6 +847,7 @@ fn delete_image_without_free_keeps_store_for_replace() {
 #[test]
 fn delete_newest_and_placement_id() {
     let mut state = TerminalGraphicsState::default();
+    state.handle(kitty_image_event(9, b"ZZ".to_vec(), false), 0, 0, 80, 9, 18);
     for (pid, col) in [(1u32, 0usize), (2, 4), (3, 8)] {
         state.handle(
             GraphicsEvent::Image {
@@ -847,7 +856,7 @@ fn delete_newest_and_placement_id() {
                 placement_id: Some(pid),
                 width_cells: Some(2),
                 height_cells: Some(1),
-                data: b"ZZ".to_vec(),
+                data: Vec::new(),
                 name: None,
                 more: false,
                 place: true,
@@ -858,7 +867,8 @@ fn delete_newest_and_placement_id() {
                 compressed: false,
                 pixel_width: None,
                 pixel_height: None,
-                quiet: 0,
+                quiet: None,
+                source_rect: None,
             },
             0,
             col,
@@ -929,7 +939,8 @@ fn delete_by_cell_column_and_z() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -955,7 +966,8 @@ fn delete_by_cell_column_and_z() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         10,
@@ -1084,7 +1096,8 @@ fn kitty_query_reports_existence() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -1142,7 +1155,8 @@ fn kitty_query_reports_existence() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -1169,7 +1183,7 @@ fn kitty_query_reports_existence() {
 }
 
 #[test]
-fn kitty_quiet_always_emits_ok_on_store() {
+fn kitty_quiet_suppresses_success_on_store() {
     let mut state = TerminalGraphicsState::default();
     let result = state.handle(
         GraphicsEvent::Image {
@@ -1189,7 +1203,8 @@ fn kitty_quiet_always_emits_ok_on_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -1197,10 +1212,7 @@ fn kitty_quiet_always_emits_ok_on_store() {
         9,
         18,
     );
-    assert_eq!(result.pty_writes.len(), 1);
-    let msg = String::from_utf8_lossy(&result.pty_writes[0]);
-    assert!(msg.contains("i=2"), "{msg}");
-    assert!(msg.contains("OK"), "{msg}");
+    assert!(result.pty_writes.is_empty());
 }
 
 #[test]
@@ -1254,7 +1266,8 @@ fn place_with_cursor_motion_flag_reports_geometry() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         5,
@@ -1295,7 +1308,8 @@ fn kitty_rgb24_payload_is_rasterized() {
             compressed: false,
             pixel_width: Some(2),
             pixel_height: Some(1),
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -1309,4 +1323,167 @@ fn kitty_rgb24_payload_is_rasterized() {
     assert_eq!(&images[0].data[12..16], &[255, 0, 0, 255]);
     assert_eq!(&images[0].data[16..20], &[0, 255, 0, 255]);
     assert!(result.cursor_motion.is_none());
+}
+
+fn place_kitty_tile(state: &mut TerminalGraphicsState, pid: u32) {
+    let mut event = kitty_image_event(123, Vec::new(), true);
+    if let GraphicsEvent::Image { placement_id, .. } = &mut event {
+        *placement_id = Some(pid);
+    }
+    state.handle(event, 0, 0, 80, 9, 18);
+}
+
+#[test]
+#[ignore = "manual placement scaling benchmark"]
+fn benchmark_kitty_placements() {
+    use std::time::Instant;
+    for count in [1000, 4000, 8000] {
+        let mut state = TerminalGraphicsState::default();
+        state.handle(kitty_image_event(123, vec![1], false), 0, 0, 80, 9, 18);
+        let start = Instant::now();
+        for pid in 1..=count {
+            place_kitty_tile(&mut state, pid);
+        }
+        let insert = start.elapsed();
+        let start = Instant::now();
+        for pid in 1..=count {
+            place_kitty_tile(&mut state, pid);
+        }
+        eprintln!(
+            "{count} placements: insert={insert:?}, replace={:?}",
+            start.elapsed()
+        );
+        assert_eq!(state.placements.len(), count as usize);
+    }
+}
+
+#[test]
+fn retransmission_clears_all_old_placements_only_after_success() {
+    for place in [false, true] {
+        let mut state = TerminalGraphicsState::default();
+        state.handle(kitty_image_event(123, vec![1], true), 0, 0, 80, 9, 18);
+        place_kitty_tile(&mut state, 1);
+        state.handle_on_screen(
+            kitty_image_event(123, Vec::new(), true),
+            GraphicsScreenKind::Alternate,
+            0,
+            0,
+            0,
+            80,
+            9,
+            18,
+        );
+        state.handle(kitty_image_event(456, vec![2], true), 0, 0, 80, 9, 18);
+        let old = std::sync::Arc::downgrade(&state.kitty_store[&123].data);
+        let mut first = kitty_image_event(123, vec![3], place);
+        if let GraphicsEvent::Image { more, .. } = &mut first {
+            *more = true;
+        }
+        state.handle(first, 0, 0, 80, 9, 18);
+        assert_eq!(state.placements.len(), 4);
+        state.handle(kitty_image_event(123, vec![4], false), 0, 0, 80, 9, 18);
+        assert!(old.upgrade().is_none());
+        assert_eq!(state.placements.len(), 1 + usize::from(place));
+        assert_eq!(state.kitty_store[&123].data.as_ref(), &[3, 4]);
+        assert!(state.placements.iter().any(|p| p.kitty_id == Some(456)));
+        place_kitty_tile(&mut state, 1);
+        assert_eq!(state.placements.last().unwrap().data.as_ref(), &[3, 4]);
+    }
+}
+
+#[test]
+fn invalid_retransmission_preserves_old_placements() {
+    let mut state = TerminalGraphicsState::default();
+    state.handle(kitty_image_event(123, vec![1], true), 0, 0, 80, 9, 18);
+    let mut invalid = kitty_image_event(123, vec![2], true);
+    if let GraphicsEvent::Image { format, .. } = &mut invalid {
+        *format = Some(999);
+    }
+    let result = state.handle(invalid, 0, 0, 80, 9, 18);
+    assert!(result.pty_writes[0].windows(6).any(|s| s == b"EINVAL"));
+    assert_eq!(state.placements.len(), 1);
+    assert_eq!(state.kitty_store[&123].data.as_ref(), &[1]);
+}
+
+#[test]
+fn unsupported_kitty_transfers_reply_and_respect_quiet() {
+    for option in ["t=f", "t=t", "t=s", "U=1"] {
+        for action in ["t", "T", "p"] {
+            for quiet in 0..=2 {
+                let body = format!("a={action},{option},i=42,p=7,q={quiet};AAAA");
+                let event = super::parse_kitty_body(body.as_bytes()).unwrap();
+                let mut state = TerminalGraphicsState::default();
+                let result = state.handle(event, 0, 0, 80, 9, 18);
+                assert_eq!(result.pty_writes.len(), usize::from(quiet != 2));
+                if quiet != 2 {
+                    assert!(result.pty_writes[0].starts_with(b"\x1b_Gi=42,p=7;ENOTSUP:"));
+                }
+                assert_eq!(state.placements.len(), 0);
+                assert!(state.kitty_store.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn indexed_placements_preserve_order_and_survive_removal_and_eviction() {
+    let mut state = TerminalGraphicsState::default();
+    state.handle(kitty_image_event(123, vec![1], false), 0, 0, 80, 9, 18);
+    for pid in 1..=8200 {
+        place_kitty_tile(&mut state, pid);
+    }
+    assert_eq!(state.placements.len(), 8192);
+    assert_eq!(
+        state.placements.iter().next().unwrap().placement_id,
+        Some(9)
+    );
+    place_kitty_tile(&mut state, 9);
+    assert_eq!(state.placements.len(), 8192);
+    assert_eq!(state.placements.last().unwrap().placement_id, Some(9));
+    assert_eq!(
+        state.placements.iter().next().unwrap().placement_id,
+        Some(10)
+    );
+    state.clear_screen(GraphicsScreenKind::Primary);
+    place_kitty_tile(&mut state, 9);
+    assert_eq!(state.placements.len(), 1);
+    state.retain_line_range(10, 20);
+    place_kitty_tile(&mut state, 9);
+    assert_eq!(state.placements.len(), 1);
+}
+
+#[test]
+fn rejected_chunk_aborts_pending_transfer_and_inherits_reply_metadata() {
+    let mut state = TerminalGraphicsState::default();
+    let first = super::parse_kitty_body(b"a=T,i=123,p=7,q=1,m=1;AQID").unwrap();
+    assert!(state.handle(first, 0, 0, 80, 9, 18).pty_writes.is_empty());
+    let rejected = super::parse_kitty_body(b"t=f,m=0;AAAA").unwrap();
+    let result = state.handle(rejected, 0, 0, 80, 9, 18);
+    assert!(result.pty_writes[0].starts_with(b"\x1b_Gi=123,p=7;ENOTSUP:"));
+    assert!(state.pending_kitty.is_none());
+    assert!(state.kitty_store.is_empty());
+    assert_eq!(state.placements.len(), 0);
+    state.handle(kitty_image_event(123, vec![4], true), 0, 0, 80, 9, 18);
+    assert_eq!(state.placements.last().unwrap().data.as_ref(), &[4]);
+}
+
+#[test]
+fn placement_index_distinguishes_screens_and_anonymous_placements() {
+    let mut state = TerminalGraphicsState::default();
+    state.handle(kitty_image_event(123, vec![1], false), 0, 0, 80, 9, 18);
+    place_kitty_tile(&mut state, 1);
+    let mut event = kitty_image_event(123, Vec::new(), true);
+    if let GraphicsEvent::Image { placement_id, .. } = &mut event {
+        *placement_id = Some(1);
+    }
+    state.handle_on_screen(event, GraphicsScreenKind::Alternate, 0, 0, 0, 80, 9, 18);
+    place_kitty_tile(&mut state, 1);
+    assert_eq!(state.placements.len(), 2);
+    for _ in 0..2 {
+        state.handle(kitty_image_event(123, Vec::new(), true), 0, 0, 80, 9, 18);
+    }
+    assert_eq!(state.placements.len(), 4);
+    state.clear_screen(GraphicsScreenKind::Alternate);
+    place_kitty_tile(&mut state, 1);
+    assert_eq!(state.placements.len(), 3);
 }

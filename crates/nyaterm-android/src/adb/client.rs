@@ -34,17 +34,11 @@ pub struct AdbDevice {
     pub status: DeviceStatus,
 }
 
-/// Immutable binding. Reconnection creates a new binding and generation.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceBinding {
-    pub server: SocketAddr,
-    pub serial: String,
-    pub transport_id: Option<u64>,
-    pub generation: u64,
-}
+pub use nyaterm_native_protocol::android::settings::DeviceBinding;
 
 #[derive(Clone, Debug)]
 pub struct AdbClient {
+    pub component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     pub executable: PathBuf,
     pub server: SocketAddr,
     servers: crate::adb::server::AdbServerManager,
@@ -53,10 +47,19 @@ pub struct AdbClient {
 impl AdbClient {
     pub fn new(executable: PathBuf, server: SocketAddr) -> Self {
         Self {
+            component: None,
             executable,
             server,
             servers: crate::adb::server::default_manager().clone(),
         }
+    }
+
+    pub fn with_component(
+        mut self,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Self {
+        self.component = Some(component);
+        self
     }
 
     pub fn with_server_manager(mut self, servers: crate::adb::server::AdbServerManager) -> Self {
@@ -155,17 +158,26 @@ impl AdbClient {
     }
 
     pub fn bind(&self, selector: &AdbDeviceSelector, generation: u64) -> AdbResult<DeviceBinding> {
+        self.bind_with_control(selector, generation, &AdbOperationControl::default())
+    }
+
+    pub fn bind_with_control(
+        &self,
+        selector: &AdbDeviceSelector,
+        generation: u64,
+        control: &AdbOperationControl,
+    ) -> AdbResult<DeviceBinding> {
         selector.validate().map_err(AdbError::Protocol)?;
-        self.ensure_server()?;
+        self.ensure_server_with_control(control)?;
         let serial = selector.serial();
         if matches!(selector, AdbDeviceSelector::Tcp { .. }) {
-            self.command(&["connect", &serial])?;
+            self.command_with_control(&["connect", &serial], control)?;
         }
-        let device = self
-            .devices()?
-            .into_iter()
-            .find(|device| device.serial == serial)
-            .ok_or(AdbError::Offline)?;
+        let device =
+            controlled::devices(crate::adb::server::connect(self.server, control)?, control)?
+                .into_iter()
+                .find(|device| device.serial == serial)
+                .ok_or(AdbError::Offline)?;
         match device.status {
             DeviceStatus::Unauthorized => return Err(AdbError::Unauthorized),
             DeviceStatus::Online => {}

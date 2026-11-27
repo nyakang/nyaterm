@@ -82,7 +82,7 @@ impl ConnectionKindTab {
             Self::Rdp => "RDP",
             Self::Vnc => "VNC",
             Self::Spice => "SPICE",
-            Self::Adb => "Android (ADB)",
+            Self::Adb => "ADB",
             Self::Ftp => "FTP",
         }
     }

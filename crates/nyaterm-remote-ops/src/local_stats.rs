@@ -108,6 +108,11 @@ impl LocalStatsCollector {
             // Not every OS distinguishes cache from free; "free" is the closest
             // honest value for the cached column where it does not.
             cached: available.saturating_sub(self.system.free_memory()),
+            free: Some(self.system.free_memory()),
+            buffers: None,
+            shared: None,
+            swap_total: Some(self.system.total_swap()),
+            swap_used: Some(self.system.used_swap()),
         };
 
         let mut networks = Vec::new();
@@ -214,6 +219,11 @@ mod tests {
         assert!(first.network_traffic().is_none());
         assert!(first.network_sample_time.sampled_at.is_some());
         assert!(first.memory.used > 0 && first.memory.available > 0);
+        assert!(first.memory.free.is_some());
+        assert!(first.memory.swap_total.is_some());
+        assert!(first.memory.swap_used <= first.memory.swap_total);
+        assert_eq!(first.memory.buffers, None);
+        assert_eq!(first.memory.shared, None);
         assert!(first.cpu.cores > 0);
         assert!(!first.system.hostname.is_empty());
         assert!(

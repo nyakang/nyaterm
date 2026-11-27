@@ -1,0 +1,39 @@
+schema_version = 2
+id = "remote-logs"
+name = "Remote logs"
+version = "1.0.0"
+publisher = "nyakang"
+authors = ["NyaTerm"]
+description = "Read an SSH log in a tool panel."
+host_version = ">=2.0.8"
+api_version = "2.0.0"
+component = "plugin.wasm"
+capabilities = ["ui", "remote_files_read"]
+
+[contributions]
+terminal_menu = ["open"]
+file_menu = ["open"]
+
+[[actions]]
+id = "open"
+name = "View remote log"
+description = "Open from a connected SSH session."
+result = "text"
+
+[[actions]]
+id = "stop"
+name = "Stop"
+description = "Cancel the current task."
+result = "text"
+
+[[actions]]
+id = "refresh"
+name = "Read log"
+description = "Run the configured operation."
+result = "text"
+
+[[actions.parameters]]
+id = "remote_path"
+name = "remote_path"
+kind = "string"
+required = false

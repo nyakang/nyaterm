@@ -18,6 +18,7 @@ permissions:
 
 env:
   NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+  NYATERM_EXTENSION_PUBLIC_KEY: ${{ vars.NYATERM_EXTENSION_PUBLIC_KEY }}
 
 jobs:
   build:
@@ -43,7 +44,7 @@ jobs:
               output.write('version=' + tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version'] + '\n')
           PY
       - name: Test ABI gate and renderer selection
-        run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher scripts.tests.test_android_release_integration scripts.tests.test_prepare_spice scripts.tests.test_spice_release_integration
+        run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher
       - name: Build focal toolchain image
         env:
           RUST_VERSION: ${{ steps.identity.outputs.rust }}
@@ -57,8 +58,10 @@ jobs:
           NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
         run: >-
           docker run --rm --user "$(id -u):$(id -g)"
+          -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT
           -e NYATERM_FOCAL_DEB
           -e NYATERM_GITHUB_GIST_CLIENT_ID
+          -e NYATERM_EXTENSION_PUBLIC_KEY
           -v "$PWD:/src" -w /src nyaterm-focal
       - name: Verify CPU fallback without Vulkan or NVIDIA
         run: >-

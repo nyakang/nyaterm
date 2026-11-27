@@ -227,21 +227,11 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
-    pub(in crate::features) fn reset_remote_monitoring_intervals(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        let defaults = nyaterm_core::AppSettingsSummary::default();
-        self.settings
-            .set_remote_stats_interval(defaults.ui_remote_stats_interval);
-        self.settings
-            .set_gpu_monitor_interval(defaults.ui_gpu_monitor_interval);
-        self.settings
-            .set_ascend_npu_monitor_interval(defaults.ui_ascend_npu_monitor_interval);
-        self.settings
-            .set_process_manager_interval(defaults.ui_process_manager_interval);
-        self.settings
-            .set_docker_manager_interval(defaults.ui_docker_manager_interval);
+    pub(in crate::features) fn reset_remote_monitoring(&mut self, cx: &mut Context<Self>) {
+        let users_changed = self.settings.reset_remote_monitoring();
+        if users_changed {
+            self.remote_stats_users_setting_changed(cx);
+        }
         self.sync_remote_monitoring_inputs(cx);
         self.save_terminal_settings(cx);
     }

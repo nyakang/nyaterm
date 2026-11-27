@@ -86,6 +86,7 @@ pub struct AdbFileService {
     pub control: SftpTransferControl,
     pub runtime: std::sync::Arc<nyaterm_android::adb::runtime::DeviceRuntime>,
     permissions: std::sync::Arc<permissions::PermissionCache>,
+    _discovery: Option<std::sync::Arc<nyaterm_android::devices::DeviceTrackerLease>>,
 }
 
 pub fn raw_path(path: &RemoteFilePath) -> anyhow::Result<Vec<u8>> {
@@ -110,6 +111,14 @@ fn kind(mode: u32) -> SftpFileType {
 }
 
 impl AdbFileService {
+    pub fn with_discovery_lease(
+        mut self,
+        lease: nyaterm_android::devices::DeviceTrackerLease,
+    ) -> Self {
+        self._discovery = Some(std::sync::Arc::new(lease));
+        self
+    }
+
     pub fn new(binding: DeviceBinding) -> Self {
         Self {
             runtime: std::sync::Arc::new(nyaterm_android::adb::runtime::DeviceRuntime::new(
@@ -117,6 +126,7 @@ impl AdbFileService {
             )),
             binding,
             permissions: Default::default(),
+            _discovery: None,
             control: SftpTransferControl::new(),
         }
     }
@@ -690,5 +700,35 @@ mod tests {
                 Some(&AdbFileValidationError::InvalidFilename)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use crate::adb::AdbFileService;
+    use nyaterm_android::adb::client::DeviceBinding;
+    use nyaterm_android::devices::SharedDeviceService;
+    use std::sync::Arc;
+
+    #[test]
+    fn submitted_file_work_keeps_discovery_until_the_last_service_clone_is_released() {
+        let tracker = SharedDeviceService::default();
+        let window = tracker.lease();
+        let control = tracker.discovery_control();
+        let service = Arc::new(
+            AdbFileService::new(DeviceBinding {
+                server: "127.0.0.1:1".parse().unwrap(),
+                serial: "fixture".into(),
+                transport_id: Some(1),
+                generation: 1,
+            })
+            .with_discovery_lease(tracker.lease()),
+        );
+        let job = Arc::clone(&service);
+        drop(service);
+        drop(window);
+        assert!(!control.is_cancelled());
+        drop(job);
+        assert!(control.is_cancelled());
     }
 }

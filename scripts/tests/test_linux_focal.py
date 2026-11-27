@@ -179,17 +179,18 @@ print(count.value)
                 self.assertIn("libc.so.6", focal.audit(binary)["needed"])
 
     @unittest.skipUnless(os.name == "posix", "POSIX package permissions required")
-    def test_archive_contains_all_helpers_diagnostics_and_integrity_report(self):
+    def test_archive_is_slim_and_helpers_are_separate_components(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in focal.BINARIES:
+            for name in (*focal.BINARIES, *["nyaterm-" + component + "-helper" for component in ("spice", "rdp", "vnc", "android")]):
                 (root / name).write_bytes(name.encode())
                 (root / name).chmod(0o600)
             runtime = root / "opengl"
             runtime.mkdir()
             stage_android_fixture(root, "x86_64-unknown-linux-gnu")
             stage_spice_fixture(root, "x86_64-unknown-linux-gnu")
-            with mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
+            with mock.patch.dict(os.environ, {"NYATERM_COMPONENT_BUILD_ID": "a" * 40}), \
+                    mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
                     mock.patch.object(focal, "audit", side_effect=lambda p, **kwargs: {"name": p.name}), \
                     mock.patch.object(focal.subprocess, "run"), \
                     mock.patch.object(focal.spice_release, "locked_files", side_effect=fixture_spice_locked_files), \
@@ -212,15 +213,15 @@ print(count.value)
                         self.assertEqual(member.mode, 0o755 if executable else 0o644)
                 for name in (*focal.BINARIES, "nyaterm-portable", "diagnose.sh", "LICENSE",
                              "OFFLINE-README.zh-CN.md", "abi-report.json", "start-nyaterm.sh",
-                             "opengl/opengl-lock.txt", "opengl/egl_desktop.c", "adb/adb",
-                             "android-resources.json", "android-libs/libavcodec.so.62"):
+                             "opengl/opengl-lock.txt", "opengl/egl_desktop.c"):
                     self.assertIn(prefix + name, handle.getnames())
                 report = json.load(handle.extractfile(prefix + "abi-report.json"))
-                self.assertIn(prefix + "spice/libspice-client-glib-2.0.so.8", handle.getnames())
-                self.assertIn(prefix + "spice/SOURCE.json", handle.getnames())
-                self.assertEqual(len(report["binaries"]), 6)
-                self.assertEqual(len(report["android_runtime"]), 5)
-                self.assertGreater(len(report["spice_runtime"]), 10)
+                self.assertNotIn(prefix + "spice/SOURCE.json", handle.getnames())
+                self.assertNotIn(prefix + "android-resources.json", handle.getnames())
+                self.assertEqual(len(report["binaries"]), 2)
+                self.assertEqual(report["android_runtime"], [])
+                self.assertEqual(report["spice_runtime"], [])
+            self.assertEqual(list((root / "dist").glob("*_component_*.zip")), [])
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
 
     def test_packaging_refuses_validation_on_newer_host(self):

@@ -753,14 +753,12 @@ impl NyaTermApp {
             )
         {
             let mut settings = snapshot.settings.clone();
-            let local = self.settings.summary();
-            settings.ui_left_panel_width = local.ui_left_panel_width;
-            settings.ui_right_panel_width = local.ui_right_panel_width;
-            settings.ui_quick_cmd_height = local.ui_quick_cmd_height;
-            settings.ui_active_left_panel = local.ui_active_left_panel.clone();
-            settings.ui_active_right_panel = local.ui_active_right_panel.clone();
-            settings.ui_left_panel_collapsed = local.ui_left_panel_collapsed;
-            settings.ui_right_panel_collapsed = local.ui_right_panel_collapsed;
+            // Apply publishes a shared refresh too; it must not replace layout
+            // that is still local or waiting for the workspace debounce.
+            super::settings_runtime::draft::copy_workspace_state(
+                &mut settings,
+                self.settings.summary(),
+            );
             self.settings
                 .replace_keyword_config(snapshot.keyword_highlights.clone());
             self.apply_gpui_settings(settings, cx);

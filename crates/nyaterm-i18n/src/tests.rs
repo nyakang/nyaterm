@@ -23,6 +23,7 @@ const ZH_TW_JSON: &str = include_str!("../locales/zh-TW.json");
 const JA_JSON: &str = include_str!("../locales/ja.json");
 const KO_JSON: &str = include_str!("../locales/ko.json");
 const FR_JSON: &str = include_str!("../locales/fr.json");
+const PT_BR_JSON: &str = include_str!("../locales/pt-BR.json");
 
 /// Every catalog currently shipped, paired with its canonical id. The
 /// structural tests below iterate this table, so extending it is the only
@@ -34,6 +35,7 @@ const CATALOGS: &[(&str, &str)] = &[
     ("ja", JA_JSON),
     ("ko", KO_JSON),
     ("fr", FR_JSON),
+    ("pt-BR", PT_BR_JSON),
 ];
 
 /// Mirror of the flattening `rust_i18n` applies to a version-1 locale file, so
@@ -73,7 +75,7 @@ fn placeholder_names(value: &str) -> BTreeSet<String> {
 }
 
 #[test]
-fn every_android_label_and_error_is_translated_in_all_six_catalogs() {
+fn every_android_label_and_error_is_translated_in_all_seven_catalogs() {
     crate::preload().unwrap();
     let english = flatten(EN_JSON);
     let keys: Vec<_> = english
@@ -171,6 +173,9 @@ fn normalizes_region_and_script_aliases_onto_canonical_ids() {
     assert_eq!(normalize_locale("ko-KR"), "ko");
     assert_eq!(normalize_locale("fr"), "fr");
     assert_eq!(normalize_locale("fr-FR"), "fr");
+    for portuguese in ["pt", "pt-BR", "pt_BR", "pt-PT", "pt-BR ", " PT "] {
+        assert_eq!(normalize_locale(portuguese), "pt-BR", "for {portuguese:?}");
+    }
     assert_eq!(normalize_locale("en"), "en");
     assert_eq!(normalize_locale("en-US"), "en");
     for unknown in ["", "nonsense", "de", "es-ES"] {
@@ -252,6 +257,28 @@ fn every_shipped_locale_names_itself_for_the_language_pickers() {
     assert_eq!(locale_display_name("ja"), "日本語");
     assert_eq!(locale_display_name("ko"), "한국어");
     assert_eq!(locale_display_name("fr"), "Français");
+    assert_eq!(locale_display_name("pt-BR"), "Português (Brasil)");
+}
+
+#[test]
+fn brazilian_portuguese_catalog_keeps_technical_terms_and_curations() {
+    crate::preload().unwrap();
+    let catalog = flatten(PT_BR_JSON);
+    // A literal machine translation of these words would change the meaning
+    // of connection, sync and shell actions (Port->Porto, Apply->inscrever).
+    for (key, expected) in [
+        ("language.name", "Português (Brasil)"),
+        ("dialog.host", "Host"),
+        ("dialog.port", "Porta"),
+        ("network.listenPortDynamic", "Porta SOCKS"),
+        ("settings.actionLinksMatcherHostPort", "Host:Porta"),
+        ("settings.syncV3Apply", "Confirmar, aplicar e publicar"),
+        ("android.shell", "Shell do Android"),
+        ("titleBar.weekday.monday", "seg."),
+    ] {
+        assert_eq!(catalog[key], expected, "on-disk catalog: {key}");
+        assert_eq!(text("pt-BR", key), expected, "loaded catalog: {key}");
+    }
 }
 
 #[test]
@@ -419,4 +446,30 @@ fn connection_editor_algorithm_and_telnet_labels_are_localized() {
         ),
         "future-kex is not supported in key exchanges."
     );
+}
+
+#[test]
+fn command_target_picker_labels_resolve_from_shared_backend_in_every_locale() {
+    use rust_i18n::Backend;
+    crate::preload().unwrap();
+    let backend = crate::SharedCatalogBackend;
+    for (locale, json) in CATALOGS {
+        let catalog = flatten(json);
+        for key in [
+            "chooseSessions",
+            "selectedTargets",
+            "selectAllTargets",
+            "clearTargets",
+            "targetPayloadStats",
+            "targetUnavailable",
+            "unavailableTargets",
+        ] {
+            let key = format!("serialSend.{key}");
+            assert_eq!(
+                backend.translate(locale, &key).as_deref(),
+                Some(catalog[key.as_str()].as_str()),
+                "{locale}: {key}"
+            );
+        }
+    }
 }

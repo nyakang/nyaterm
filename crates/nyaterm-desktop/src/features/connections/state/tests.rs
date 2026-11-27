@@ -2782,6 +2782,29 @@ fn mstsc_backend_selection_and_switching_preserve_other_rdp_settings() {
 }
 
 #[test]
+fn rdp_graphics_switch_preserves_display_settings_and_saved_request() {
+    let mut editor = connection_editor_state_with_secret_draft();
+    editor.kind = ConnectionKindTab::Rdp;
+    assert!(!editor.rdp_display.graphics_pipeline);
+    let original = editor.rdp_display.clone();
+    let mut draft = Some(editor);
+    assert!(toggle_connection_editor_flag(
+        &mut draft,
+        ConnectionEditorToggle::RdpGraphicsPipeline
+    ));
+    let enabled = draft.as_ref().unwrap().rdp_display.clone();
+    assert!(enabled.graphics_pipeline);
+    let saved = serde_json::to_value(&enabled).unwrap();
+    let loaded: nyaterm_core::RdpDisplaySettings = serde_json::from_value(saved).unwrap();
+    assert_eq!(loaded, enabled);
+    assert!(toggle_connection_editor_flag(
+        &mut draft,
+        ConnectionEditorToggle::RdpGraphicsPipeline
+    ));
+    assert_eq!(draft.unwrap().rdp_display, original);
+}
+
+#[test]
 fn rdp_local_resource_switches_update_draft_and_clipboard_mode() {
     let mut editor = connection_editor_state_with_secret_draft();
     editor.kind = ConnectionKindTab::Rdp;

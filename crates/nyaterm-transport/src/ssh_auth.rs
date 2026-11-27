@@ -710,7 +710,11 @@ async fn authenticate_ssh_key(
     let result = if let Some(cert) = cert {
         tokio::time::timeout(
             Duration::from_secs(30),
-            handle.authenticate_openssh_cert(config.username.clone(), Arc::new(key), cert),
+            handle.authenticate_openssh_cert(
+                config.username.clone(),
+                PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
+                cert,
+            ),
         )
         .await
     } else {

@@ -7,7 +7,9 @@ use crate::sftp::{
 };
 use nyaterm_transport::{SftpSettings, SshSessionConfig};
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{Attrs, File, FileAttributes, Handle, Name, Status, StatusCode};
+use russh_sftp::protocol::{
+    Attrs, File, FileAttributes, Handle, Name, SftpHandle, SftpString, Status, StatusCode,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -74,7 +76,8 @@ impl russh_sftp::server::Handler for Peer {
         StatusCode::OpUnsupported
     }
 
-    async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+    async fn lstat(&mut self, id: u32, path: SftpString) -> Result<Attrs, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         files.lstat_calls += 1;
         let mode = *files.entries.get(&path).ok_or(StatusCode::NoSuchFile)?;
@@ -87,16 +90,21 @@ impl russh_sftp::server::Handler for Peer {
         })
     }
 
-    async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+    async fn opendir(&mut self, id: u32, path: SftpString) -> Result<Handle, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         let files = self.files.lock().unwrap();
         if files.entries.get(&path) != Some(&0o040755) {
             return Err(StatusCode::NoSuchFile);
         }
         self.listed.remove(&path);
-        Ok(Handle { id, handle: path })
+        Ok(Handle {
+            id,
+            handle: path.into(),
+        })
     }
 
-    async fn readdir(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+    async fn readdir(&mut self, id: u32, path: SftpHandle) -> Result<Name, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         if !self.listed.insert(path.clone()) {
             return Err(StatusCode::Eof);
         }
@@ -123,11 +131,12 @@ impl russh_sftp::server::Handler for Peer {
         Ok(Name { id, files: entries })
     }
 
-    async fn close(&mut self, id: u32, _handle: String) -> Result<Status, Self::Error> {
+    async fn close(&mut self, id: u32, _handle: SftpHandle) -> Result<Status, Self::Error> {
         Ok(ok(id))
     }
 
-    async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+    async fn remove(&mut self, id: u32, filename: SftpString) -> Result<Status, Self::Error> {
+        let filename = std::str::from_utf8(filename.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         if files.denied.contains(&filename) {
             return Err(StatusCode::PermissionDenied);
@@ -140,7 +149,8 @@ impl russh_sftp::server::Handler for Peer {
         Ok(ok(id))
     }
 
-    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+    async fn rmdir(&mut self, id: u32, path: SftpString) -> Result<Status, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         if files
             .entries

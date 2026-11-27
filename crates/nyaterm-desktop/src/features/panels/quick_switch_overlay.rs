@@ -33,7 +33,24 @@ impl NyaTermApp {
             .quick_switch_command_state(cx)
             .expect("an open quick switch must own command state");
         let query = command_state.read(cx).query(cx);
-        let items = self.filtered_quick_switch_items(&query);
+        let mut items = self.filtered_quick_switch_items(&query);
+        let catalog = self.plugins.panel.read(cx).catalog(cx);
+        for contribution in &catalog.contributions {
+            if query.trim().is_empty()
+                || format!(
+                    "{} {}",
+                    contribution.action.name, contribution.action.description
+                )
+                .to_lowercase()
+                .contains(&query.to_lowercase())
+            {
+                items.push(QuickSwitchItem::Extension {
+                    contribution: contribution.clone(),
+                    title: contribution.action.name.clone(),
+                    subtitle: contribution.plugin_id.clone(),
+                });
+            }
+        }
         let catalog_empty = items.is_empty() && self.quick_switch_items().is_empty();
         let items: Arc<[QuickSwitchItem]> = items.into();
         let saved_badge_bg = self.shell_surface_color(palette.hover);
@@ -53,9 +70,9 @@ impl NyaTermApp {
                     QuickSwitchItem::Session { active: true, .. }
                     | QuickSwitchItem::Pending { active: true, .. } => QuickSwitchBadge::Active,
                     QuickSwitchItem::Connection { .. } => QuickSwitchBadge::Saved,
-                    QuickSwitchItem::Session { .. } | QuickSwitchItem::Pending { .. } => {
-                        QuickSwitchBadge::None
-                    }
+                    QuickSwitchItem::Session { .. }
+                    | QuickSwitchItem::Pending { .. }
+                    | QuickSwitchItem::Extension { .. } => QuickSwitchBadge::None,
                 };
                 let row_title = title.clone();
                 NyaCommandItem::new()

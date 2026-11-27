@@ -13,6 +13,19 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 
 pub enum PluginOperation {
+    Authorize {
+        id: String,
+        expected_revision: u64,
+        capability: String,
+        scope: String,
+    },
+    RevokeAuthorizations {
+        id: String,
+    },
+    RefreshStore,
+    InstallFromStore {
+        id: String,
+    },
     Install {
         source: PathBuf,
         development: bool,
@@ -68,6 +81,7 @@ enum Message {
     Request(Request),
     Prepared(u64, Box<PluginResult<PreparedChange>>),
     RuntimeChanged,
+    StoreChanged,
     Shutdown,
 }
 
@@ -86,6 +100,13 @@ const PREPARATION_WORKERS: usize = 2;
 /// Requests for the same plugin retain submission order, while other plugins
 /// can still invoke or prepare. No worker wakes periodically while idle.
 pub struct PluginService {
+    observed_sessions: Mutex<std::collections::HashSet<String>>,
+    pub desktop: Arc<crate::desktop_bridge::DesktopBridge>,
+    pub store_catalog: RwLock<Option<nyaterm_core::plugins::catalog::Catalog>>,
+    store_busy: AtomicBool,
+    store_worker: Mutex<Option<JoinHandle<()>>>,
+    store_root: PathBuf,
+    pub native: Arc<crate::native::NativeService>,
     requests: Sender<Message>,
     queued: Arc<AtomicUsize>,
     snapshot: Arc<RwLock<CatalogSnapshot>>,
@@ -117,6 +138,16 @@ impl PluginService {
         let (requests, receiver) = mpsc::channel::<Message>();
         let queued = Arc::new(AtomicUsize::new(0));
         let (mut events, event_receiver) = async_channel::channel(16);
+        let native_events = Mutex::new(events.clone());
+        let native = crate::native::NativeService::start(
+            &runtime,
+            Arc::new(move || {
+                let _ = native_events
+                    .lock()
+                    .unwrap()
+                    .try_send(PluginEvent::CatalogChanged);
+            }),
+        )?;
         let snapshot = Arc::new(RwLock::new(CatalogSnapshot::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let dispatch = Arc::new(Mutex::new(()));
@@ -125,6 +156,9 @@ impl PluginService {
         let dispatch_for_worker = dispatch.clone();
         let queued_for_worker = queued.clone();
         let completion = requests.clone();
+        let desktop = Arc::new(crate::desktop_bridge::DesktopBridge::default());
+        let desktop_worker = desktop.clone();
+        let store_root = runtime.data_dir().join("plugins/v2/downloads");
         let worker = thread::Builder::new()
             .name("plugin-manager".into())
             .spawn(move || {
@@ -132,10 +166,13 @@ impl PluginService {
                 let opened = PluginManager::for_runtime(&runtime);
                 #[cfg(test)]
                 let opened = PluginManager::open(
-                    runtime.data_dir().join("plugins"),
+                    runtime.data_dir().join("plugins/v2"),
                     env!("CARGO_PKG_VERSION"),
                     limits,
                 );
+                if let Ok(manager) = &opened {
+                    manager.set_host_adapter(desktop_worker);
+                }
                 let mut manager = match opened {
                     Ok(manager) => {
                         let changed = completion.clone();
@@ -290,6 +327,17 @@ impl PluginService {
                             }
                         } else {
                             let result = match request.operation {
+                                PluginOperation::Authorize {
+                                    id,
+                                    expected_revision,
+                                    capability,
+                                    scope,
+                                } => manager
+                                    .authorize(&id, expected_revision, &capability, &scope)
+                                    .map(|_| OperationReply::Changed),
+                                PluginOperation::RevokeAuthorizations { id } => manager
+                                    .revoke_authorizations(&id)
+                                    .map(|_| OperationReply::Changed),
                                 PluginOperation::Enable { id, enabled: false } => manager
                                     .set_enabled(&id, false)
                                     .map(|_| OperationReply::Changed),
@@ -332,6 +380,9 @@ impl PluginService {
                                 publish(manager, &snapshot_for_worker, &mut events);
                             }
                         }
+                        Ok(Message::StoreChanged) => {
+                            let _ = events.try_send(PluginEvent::CatalogChanged);
+                        }
                         Ok(Message::Shutdown) => {}
                         Err(_) => break,
                     }
@@ -368,6 +419,13 @@ impl PluginService {
             })?;
         Ok((
             Arc::new(Self {
+                observed_sessions: Mutex::new(std::collections::HashSet::new()),
+                desktop,
+                store_catalog: RwLock::new(None),
+                store_busy: AtomicBool::new(false),
+                store_worker: Mutex::new(None),
+                store_root,
+                native,
                 requests,
                 queued,
                 snapshot,
@@ -383,10 +441,25 @@ impl PluginService {
         self.snapshot.read().unwrap().clone()
     }
 
-    pub fn submit(&self, operation: PluginOperation) -> PluginResult<OperationTask> {
+    pub fn record_session_event(&self, id: &str, connected: bool) -> bool {
+        let mut sessions = self.observed_sessions.lock().unwrap();
+        if connected {
+            sessions.insert(id.to_owned())
+        } else {
+            sessions.remove(id)
+        }
+    }
+
+    pub fn submit(self: &Arc<Self>, operation: PluginOperation) -> PluginResult<OperationTask> {
         let _dispatch = self.dispatch.lock().unwrap();
         if self.stop.load(Ordering::Acquire) {
             return Err(shutdown_error());
+        }
+        if matches!(
+            operation,
+            PluginOperation::RefreshStore | PluginOperation::InstallFromStore { .. }
+        ) {
+            return self.store_operation(operation);
         }
         if self.queued.load(Ordering::Acquire) >= QUEUE_CAPACITY {
             return Err(PluginError::new(
@@ -407,11 +480,81 @@ impl PluginService {
         Ok(task)
     }
 
+    fn store_operation(
+        self: &Arc<Self>,
+        operation: PluginOperation,
+    ) -> PluginResult<OperationTask> {
+        if self.store_busy.swap(true, Ordering::AcqRel) {
+            return Err(PluginError::new(
+                ErrorCode::QueueFull,
+                "An extension store operation is already running",
+            ));
+        }
+        if let Some(previous) = self.store_worker.lock().unwrap().take() {
+            let _ = previous.join();
+        }
+        let service = self.clone();
+        let (reply, task) = oneshot::channel();
+        let worker = thread::Builder::new().name("extension-store".into()).spawn(move || {
+            let result = (|| {
+                match operation {
+                    PluginOperation::RefreshStore => {
+                        let catalog = crate::catalog::fetch(|| reply.is_canceled() || service.stop.load(Ordering::Acquire))?;
+                        if service.stop.load(Ordering::Acquire) { return Err(shutdown_error()); }
+                        *service.store_catalog.write().unwrap() = Some(catalog);
+                        let _ = service.requests.send(Message::StoreChanged);
+                        Ok(OperationReply::Changed)
+                    }
+                    PluginOperation::InstallFromStore { id } => {
+                        let listing = service.store_catalog.read().unwrap().as_ref()
+                            .and_then(|catalog| catalog.extensions.iter().find(|listing| listing.id == id)).cloned()
+                            .ok_or_else(|| PluginError::new(ErrorCode::NotFound, "Refresh the extension store first"))?;
+                        let release = listing.compatible_release(env!("CARGO_PKG_VERSION"))
+                            .ok_or_else(|| PluginError::new(ErrorCode::Incompatible, "No compatible extension release"))?;
+                        std::fs::create_dir_all(&service.store_root).map_err(|_| crate::package::io_error())?;
+                        let stage = crate::catalog::acquire(&listing, release, &service.store_root, env!("CARGO_PKG_VERSION"), || reply.is_canceled() || service.stop.load(Ordering::Acquire))?;
+                        if reply.is_canceled() || service.stop.load(Ordering::Acquire) { return Err(shutdown_error()); }
+                        crate::catalog::remember_release(&service.store_root.parent().unwrap().join("host/trusted"), &stage, release, env!("CARGO_PKG_VERSION"))?;
+                        let source = stage.path.join("payload");
+                        let current = service.snapshot();
+                        if current.plugins.iter().any(|plugin| plugin.id == id && matches!(plugin.source, crate::manager::PluginSource::Development(_))) {
+                            return Err(PluginError::new(ErrorCode::Conflict, "Remove the development extension before installing a store release"));
+                        }
+                        let operation = if current.plugins.iter().any(|plugin| plugin.id == id) {
+                            PluginOperation::Update { id, source }
+                        } else { PluginOperation::Install { source, development: false } };
+                        futures::executor::block_on(service.submit(operation)?).map_err(|_| shutdown_error())?
+                    }
+                    _ => unreachable!(),
+                }
+            })();
+            service.store_busy.store(false, Ordering::Release);
+            let _ = reply.send(result);
+        });
+        match worker {
+            Ok(worker) => *self.store_worker.lock().unwrap() = Some(worker),
+            Err(_) => {
+                self.store_busy.store(false, Ordering::Release);
+                return Err(PluginError::new(
+                    ErrorCode::Initialization,
+                    "Cannot start extension store worker",
+                ));
+            }
+        }
+        Ok(task)
+    }
+
     /// Call off the UI thread, before AppShell quits the process.
     pub fn shutdown(&self) {
         self.begin_shutdown();
+        self.native.shutdown();
         let mut worker = self.worker.lock().unwrap();
         if let Some(worker) = worker.take() {
+            let _ = worker.join();
+        }
+        if let Some(worker) = self.store_worker.lock().unwrap().take()
+            && worker.thread().id() != thread::current().id()
+        {
             let _ = worker.join();
         }
     }
@@ -426,8 +569,11 @@ impl PluginService {
 
 fn operation_id(operation: &PluginOperation) -> Option<&str> {
     match operation {
-        PluginOperation::Install { .. } => None,
+        PluginOperation::Install { .. } | PluginOperation::RefreshStore => None,
+        PluginOperation::InstallFromStore { id } => Some(id),
         PluginOperation::Update { id, .. }
+        | PluginOperation::Authorize { id, .. }
+        | PluginOperation::RevokeAuthorizations { id }
         | PluginOperation::Enable { id, .. }
         | PluginOperation::Reload { id }
         | PluginOperation::Uninstall { id } => Some(id),

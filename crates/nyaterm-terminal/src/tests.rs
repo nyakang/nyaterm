@@ -3311,16 +3311,92 @@ fn graphics_delete_clears_kitty_image() {
 #[test]
 fn graphics_kitty_multi_chunk_via_advance() {
     let mut screen = TerminalScreen::new(40, 8);
-    // m=1 then m=0 with base64 "AB" + "CD"; a=T places after final chunk.
-    // a=t would be store-only (see graphics store/place unit tests).
-    screen.advance(b"\x1b_Ga=T,i=11,c=3,r=2,m=1;QUI=\x1b\\");
+    screen.advance(b"\x1b_Ga=T,i=11,p=3,s=4,v=1,c=3,r=2,z=1,C=1,q=2,m=1;/wAA/wD/\x1b\\");
     assert!(screen.snapshot().images.is_empty());
-    screen.advance(b"\x1b_Ga=T,i=11,m=0;Q0Q=\x1b\\");
+    screen.advance(b"\x1b[2;5H\x1b_Gm=1;AP8AAP//\x1b");
+    screen.advance(b"\\\x1b_Gm=0;AP8A/w==\x1b\\");
     let snap = screen.snapshot();
     assert_eq!(snap.images.len(), 1);
-    assert_eq!(snap.images[0].data.as_ref(), b"ABCD");
+    assert_eq!(
+        &snap.images[0].data[12..],
+        &[
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255
+        ]
+    );
+    assert_eq!((snap.images[0].row, snap.images[0].col), (1, 4));
     assert_eq!(snap.images[0].width_cells, 3);
     assert_eq!(snap.images[0].height_cells, 2);
+    assert!(snap.images[0].above_text);
+    assert_eq!((snap.cursor.row, snap.cursor.col), (1, 4));
+    assert!(screen.take_effects().pty_write.is_empty());
+
+    screen.advance(b"\x1b_Ga=q,i=11,p=3\x1b\\");
+    assert_eq!(
+        screen.take_effects().pty_write.concat(),
+        b"\x1b_Gi=11,p=3;OK\x1b\\"
+    );
+}
+
+#[test]
+fn graphics_kitty_tiled_preview_keeps_each_crop_and_erases_by_placement_id() {
+    use base64::Engine;
+
+    let mut screen = TerminalScreen::new(20, 12);
+    screen.advance(b"\x1b[?1049h");
+    let pixels = base64::engine::general_purpose::STANDARD.encode([0_u8; 12 * 8 * 3]);
+    screen.advance(format!("\x1b_Gq=2,a=t,i=42,f=24,s=12,v=8;{pixels}\x1b\\").as_bytes());
+    for y in 0..8 {
+        for x in 0..12 {
+            let id = y * 12 + x + 1;
+            screen.advance(
+                format!(
+                    "\x1b[{};{}H\x1b_Gq=2,a=p,i=42,p={id},x={x},y={y},w=1,h=1,c=1,r=1,C=1\x1b\\",
+                    y + 2,
+                    x + 3
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    let snapshot = screen.snapshot();
+    assert_eq!(snapshot.images.len(), 96);
+    for (index, placement) in snapshot.images.iter().enumerate() {
+        let x = index % 12;
+        let y = index / 12;
+        assert_eq!((placement.row, placement.col), (y + 1, x + 2));
+        assert_eq!((placement.width_cells, placement.height_cells), (1, 1));
+        let source = placement.source_rect.unwrap();
+        assert_eq!(
+            (source.x, source.y, source.width, source.height),
+            (x as u32, y as u32, 1, 1)
+        );
+        assert!(Arc::ptr_eq(&placement.data, &snapshot.images[0].data));
+        assert_eq!(placement.content_id, snapshot.images[0].content_id);
+    }
+
+    screen.advance(b"\x1b_Gq=2,a=d,d=i,i=42,p=1\x1b\\");
+    let snapshot = screen.snapshot();
+    assert_eq!(snapshot.images.len(), 95);
+    assert_eq!((snapshot.images[0].row, snapshot.images[0].col), (1, 3));
+
+    screen.advance(b"\x1b[2;3H\x1b_Gq=2,a=p,i=42,p=2,x=10,y=7,w=99,c=1,r=1,C=1\x1b\\");
+    let snapshot = screen.snapshot();
+    assert_eq!(snapshot.images.len(), 95);
+    let replacement = snapshot.images.last().unwrap();
+    assert_eq!((replacement.row, replacement.col), (1, 2));
+    let clipped = replacement.source_rect.unwrap();
+    assert_eq!(
+        (clipped.x, clipped.y, clipped.width, clipped.height),
+        (10, 7, 2, 1)
+    );
+
+    screen.advance(b"\x1b_Gq=2,a=d,d=I,i=42\x1b\\");
+    assert!(screen.snapshot().images.is_empty());
+    screen.advance(b"\x1b_Ga=p,i=42,p=1\x1b\\");
+    assert_eq!(
+        screen.take_effects().pty_write.concat(),
+        b"\x1b_Gi=42,p=1;ENOENT\x1b\\"
+    );
 }
 
 #[test]
@@ -3352,8 +3428,8 @@ fn graphics_sixel_via_advance() {
 #[test]
 fn graphics_kitty_cursor_motion_via_advance() {
     let mut screen = TerminalScreen::new(40, 8);
-    // Place 3x2 at origin with C=1; cursor should leave top-left.
-    screen.advance(b"\x1b_Ga=T,i=1,c=3,r=2,C=1;QUI=\x1b\\");
+    // The default Kitty policy moves the cursor past the placement.
+    screen.advance(b"\x1b_Ga=T,i=1,c=3,r=2;QUI=\x1b\\");
     let snap = screen.snapshot();
     assert_eq!(snap.images.len(), 1);
     // After CUD1 + CHA4: row=1, col=3 (0-based).
@@ -3364,7 +3440,7 @@ fn graphics_kitty_cursor_motion_via_advance() {
 #[test]
 fn graphics_after_scroll_in_same_chunk_stays_on_live_screen() {
     let mut screen = TerminalScreen::new(40, 3);
-    screen.advance(b"one\r\ntwo\r\nthree\r\n\x1b_Ga=T,i=1,c=1,r=1;QUI=\x1b\\");
+    screen.advance(b"one\r\ntwo\r\nthree\r\n\x1b_Ga=T,i=1,c=1,r=1,C=1;QUI=\x1b\\");
     let snap = screen.snapshot();
     assert_eq!(snap.images.len(), 1);
     assert_eq!(
@@ -3387,7 +3463,7 @@ fn graphics_kitty_rgb24_via_advance() {
 #[test]
 fn graphics_kitty_query_via_advance() {
     let mut screen = TerminalScreen::new(40, 8);
-    screen.advance(b"\x1b_Ga=t,i=4,c=1,r=1,q=2;QUI=\x1b\\");
+    screen.advance(b"\x1b_Ga=t,i=4,c=1,r=1;QUI=\x1b\\");
     let effects = screen.take_effects();
     assert_eq!(effects.pty_write.len(), 1);
     assert!(
@@ -3408,6 +3484,36 @@ fn graphics_kitty_query_via_advance() {
         String::from_utf8_lossy(&effects.pty_write[0]).contains("ENOENT"),
         "{:?}",
         effects.pty_write
+    );
+}
+
+#[test]
+fn graphics_kitty_capability_probe_replies_before_device_attributes_without_storing_data() {
+    let mut screen = TerminalScreen::new(40, 8);
+    screen.advance(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c");
+    let effects = screen.take_effects();
+    assert_eq!(effects.pty_write.len(), 2);
+    assert_eq!(effects.pty_write[0], b"\x1b_Gi=31;OK\x1b\\");
+    assert!(effects.pty_write[1].starts_with(b"\x1b[?"));
+    assert!(screen.snapshot().images.is_empty());
+
+    screen.advance(b"\x1b_Ga=p,i=31\x1b\\");
+    assert_eq!(
+        screen.take_effects().pty_write.concat(),
+        b"\x1b_Gi=31;ENOENT\x1b\\"
+    );
+}
+
+#[test]
+fn graphics_kitty_malformed_continuation_aborts_the_transfer() {
+    let mut screen = TerminalScreen::new(40, 8);
+    screen.advance(b"\x1b_Ga=T,i=7,f=24,s=2,v=1,q=1,m=1;/wAA\x1b\\");
+    screen.advance(b"\x1b_Gm=1;@@@@\x1b\\");
+    screen.advance(b"\x1b_Gm=0;AP8A\x1b\\");
+    assert!(screen.snapshot().images.is_empty());
+    assert_eq!(
+        screen.take_effects().pty_write.concat(),
+        b"\x1b_Gi=7;EINVAL:Invalid base64 payload\x1b\\"
     );
 }
 

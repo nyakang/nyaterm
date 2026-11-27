@@ -33,8 +33,6 @@ def stage_payload(root: Path, target: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(fake_pe(0xAA64 if "arm64" in relative.parts else 0x8664))
     (root / "conpty/LICENSE.txt").write_text("ConPTY test license", encoding="utf-8")
-    stage_android_fixture(root, target)
-    stage_spice_fixture(root, target)
 
 
 class WindowsMsiTests(unittest.TestCase):
@@ -43,6 +41,7 @@ class WindowsMsiTests(unittest.TestCase):
             for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
                 root = Path(directory) / target
                 stage_payload(root, target)
+                stage_android_fixture(root, target)
                 verify_native_package.verify_android_resources(
                     lambda name: (root / name).read_bytes(), target)
 
@@ -193,11 +192,10 @@ class CompiledWindowsMsiTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "architecture"):
                 verify_native_package.verify_windows_msi_database(changed, target, "2.0.0")
 
-    def test_compiled_database_requires_all_helpers_conpty_and_spice_files(self) -> None:
+    def test_compiled_database_requires_base_helpers_and_conpty_files(self) -> None:
         for target, (_, baseline, _) in self.packages.items():
             files = verify_native_package.verify_windows_msi_database(baseline, target, "2.0.0")
             for name in (*verify_native_package.helper_filenames(target),
-                         *verify_native_package.windows_portable.LAYOUT["spice_files"][target],
                          *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))):
                 changed = copy.deepcopy(baseline)
                 changed["tables"]["File"] = [row for row in changed["tables"]["File"] if row["File"] != files[name]]
@@ -230,7 +228,7 @@ class CompiledWindowsMsiTests(unittest.TestCase):
         target = "x86_64-pc-windows-msvc"
         for relative, content, message in (
             ("NyaTerm.exe", fake_pe(0xAA64), "PE machine"),
-            ("nyaterm-vnc-helper.exe", fake_pe(0xAA64), "PE machine"),
+            ("nyaterm-mcp.exe", fake_pe(0xAA64), "PE machine"),
             ("conpty/x64/conpty.dll", fake_pe(0xAA64), "ConPTY PE machine"),
             ("VERSION", b"2.0.1\n", "installed version"),
         ):

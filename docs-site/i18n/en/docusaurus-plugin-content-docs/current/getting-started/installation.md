@@ -32,6 +32,14 @@ For the Windows portable edition, extract the ZIP and run `NyaTerm.exe`; data li
 
 **Migrating from 1.x: Windows portable and old MSI installations require manual upgrades.** Quit and back up all data and keys first. Replace the complete portable program payload while preserving `data/`; for MSI, back up, uninstall the old version, and install NSIS. Replacing only the main executable is insufficient, and automatic migration is not promised for all legacy installers. See the [2.0 migration guide](./migration-v2).
 
+### Install native components on demand
+
+The main package includes the application and MCP helper. Install SPICE, RDP Builtin, VNC, and Android from the Plugins panel as needed; the Android component includes ADB, the screen helper, and FFmpeg. The first connection asks before downloading, then resumes if the connection request is still valid. Windows Native RDP uses the system component and does not require RDP Builtin.
+
+The Plugins panel supports download progress, cancellation, enabling/disabling, uninstalling, and importing officially signed component ZIPs. For offline installation, enter the ZIP path in the package path field and click the component's import button. Components must support the application's version and target platform. Compatible installed versions remain available after application upgrades; component updates are manual.
+
+When migrating an old portable package to the slim layout, quit the application and back up the complete `data/` directory. Extract the slim package into a new directory and copy the complete `data/` directory into it, leaving old helpers and runtime libraries behind. Reinstall components when first needed. Later slim-package upgrades preserve components and user data.
+
 ### macOS
 
 macOS users can install NyaTerm with Homebrew:

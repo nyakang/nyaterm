@@ -98,7 +98,22 @@ impl SettingsPanel {
                             cx,
                         ),
                     ))
-                    .child(self.transfer_editor_settings_rows(cx)),
+                    .child(self.transfer_editor_settings_rows(cx))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.externalEditorAutoUpload"),
+                        Some(SharedString::from(t!(
+                            "settings.externalEditorAutoUploadDesc"
+                        ))),
+                        settings_switch(
+                            palette,
+                            "transfer-external-editor-auto-upload",
+                            self.settings.summary().transfer_external_editor_auto_upload,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_transfer_external_editor_auto_upload(cx);
+                            }),
+                        ),
+                    )),
             ))
             .child(self.transfer_advanced_settings_section(cx))
     }

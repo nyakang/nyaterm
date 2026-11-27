@@ -10,7 +10,7 @@ use nyaterm_transport::SessionKind;
 use crate::features::NyaTermApp;
 use crate::send_command::{
     SendCommandControlFocus, SendCommandDataType, SendCommandLineEnding, SendCommandMode,
-    SendCommandTarget,
+    SendCommandTarget, is_send_command_session_kind,
 };
 
 impl NyaTermApp {
@@ -33,6 +33,11 @@ impl NyaTermApp {
         text: String,
         cx: &mut Context<Self>,
     ) {
+        let Some((tab_id, control_id)) =
+            crate::features::panels::SendCommandTabId::parse_input(control_id)
+        else {
+            return;
+        };
         let Some(control) = (match control_id {
             "count" => Some(SendCommandControlFocus::Count),
             "interval" => Some(SendCommandControlFocus::Interval),
@@ -41,16 +46,14 @@ impl NyaTermApp {
             return;
         };
         let filtered = normalize_send_command_control_input(control, &text);
-        if !self
+        let Some(value) = self
             .send_command
-            .apply_control_input(control, filtered.clone())
-        {
-            let value = self.send_command.synced_control_input(control);
-            self.reset_text_input(&format!("send-command.{control_id}"), &value, cx);
+            .apply_tab_control(tab_id, control, filtered)
+        else {
             return;
-        }
-        if filtered != text {
-            self.reset_text_input(&format!("send-command.{control_id}"), &filtered, cx);
+        };
+        if value != text {
+            self.reset_text_input(&tab_id.input_id(control_id), &value, cx);
         }
         cx.notify();
     }
@@ -74,7 +77,7 @@ impl NyaTermApp {
             "l" if accel => {
                 self.send_command.clear_draft(cx);
                 if self.send_command.presentation(cx).data_type == SendCommandDataType::Text {
-                    self.reset_text_input("send-command.draft", "", cx);
+                    self.reset_text_input(&self.send_command.input_id("draft"), "", cx);
                 }
                 cx.notify();
             }
@@ -84,6 +87,7 @@ impl NyaTermApp {
     }
 
     /// Textarea edits belong only to the text draft; Hex edits its own bytes.
+    #[cfg(test)]
     pub(in crate::features) fn apply_send_command_draft(
         &mut self,
         text: String,
@@ -98,10 +102,11 @@ impl NyaTermApp {
         append_enter: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.send_command.is_sending() {
+        if self.send_command.active_is_sending() {
             self.stop_send_command(cx);
             return;
         }
+        let tab_id = self.send_command.active_id();
 
         let draft = self.send_command.draft_for_send(append_enter, cx);
         let ids = self.send_command_target_session_ids();
@@ -134,7 +139,7 @@ impl NyaTermApp {
         let run = self
             .send_command
             .begin_send(units_per_round.min(u32::MAX as u64) as u32);
-        let run_id = self.commands.staged.begin(&ids);
+        let run_id = self.commands.staged.begin_shared(&ids);
         self.commands.staged.hide_run(run_id);
         self.send_command.set_run_id(run_id);
         let mut wake = self.commands.staged.take_wake_receiver(run_id);
@@ -143,10 +148,20 @@ impl NyaTermApp {
         } else {
             StagedCommandInput::Text
         };
-        let current = matches!(self.send_command.target(), SendCommandTarget::Current);
+        let current = matches!(
+            self.send_command.target(),
+            SendCommandTarget::Current | SendCommandTarget::Sessions(_)
+        );
+        let skipped = match self.send_command.target() {
+            SendCommandTarget::Sessions(selection) => {
+                selection.ids().len().saturating_sub(ids.len())
+            }
+            _ => 0,
+        };
         let interval = Duration::from_secs_f64(run.interval_seconds);
-        self.shell
-            .set_status(format!("sending {units_per_round} unit(s)"));
+        self.shell.set_status(format!(
+            "sending {units_per_round} unit(s), {skipped} unavailable target(s) skipped"
+        ));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let mut plans = plans;
@@ -181,7 +196,8 @@ impl NyaTermApp {
                     })
                     .collect::<Vec<_>>();
                 let _ = this.update(cx, |this, cx| {
-                    this.send_command.set_progress_round(round);
+                    if !this.send_command.matches_run(tab_id, run_id) { return; }
+                    this.send_command.set_progress_round(tab_id, run_id, round);
                     cx.notify();
                 });
                 loop {
@@ -190,9 +206,12 @@ impl NyaTermApp {
                         break 'rounds;
                     }
                     let Ok((done, interrupted, wait, progress)) = this.update(cx, |this, cx| {
+                        if !this.send_command.matches_run(tab_id, run_id) {
+                            return (true, true, Duration::ZERO, 0);
+                        }
                         let result =
                             this.poll_quick_command_targets(&mut targets, run_id, input, false, cx);
-                        this.send_command.complete_progress_units(result.3);
+                        this.send_command.complete_progress_units(tab_id, run_id, result.3);
                         if result.3 > 0 {
                             cx.notify();
                         }
@@ -245,27 +264,32 @@ impl NyaTermApp {
                 }
                 this.commands.staged.end_run(run_id);
                 aborted |= interrupted_any;
-                let progress = this.send_command.finish_send();
-                if this.send_command.clear_sent_draft(
+                if !this.send_command.matches_run(tab_id, run_id) { return; }
+                let Some(progress) = this.send_command.progress_result(tab_id, run_id) else { return; };
+                if this.send_command.clear_sent_tab(
+                    tab_id, run_id,
                     clear_after_send,
                     !aborted
                         && failed == 0
+                        && skipped == 0
                         && !run.infinite
                         && !run.cancel.load(Ordering::Acquire)
                         && progress.completed == progress.total,
                     &sent_draft,
                     cx,
-                ) && this.send_command.presentation(cx).data_type == SendCommandDataType::Text
-                {
-                    this.reset_text_input("send-command.draft", "", cx);
+                ) && !run.raw_units {
+                    this.reset_text_input(&tab_id.input_id("draft"), "", cx);
                 }
+                this.send_command.finish_send(tab_id, run_id);
                 this.shell
-                    .set_status(if aborted || run.cancel.load(Ordering::Acquire) {
+                    .set_status(if run.cancel.load(Ordering::Acquire) {
                         format!("command send stopped at {} unit(s)", progress.completed)
                     } else if failed > 0 {
-                        format!("command send failed on {failed} target(s)")
+                        format!("command send failed on {failed} target(s), {skipped} unavailable target(s) skipped")
+                    } else if aborted {
+                        format!("command send stopped at {} unit(s)", progress.completed)
                     } else {
-                        format!("command send completed: {round} round(s)")
+                        format!("command send completed: {round} round(s), {skipped} unavailable target(s) skipped")
                     });
                 cx.notify();
             });
@@ -283,33 +307,34 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn send_command_session_supported(&self, id: &str) -> bool {
+        self.session.metadata(id).is_some_and(|metadata| {
+            metadata.ssh_runtime_mode()
+                != Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+        }) && self
+            .session
+            .session_info(id)
+            .is_some_and(|session| is_send_command_session_kind(session.kind))
+    }
+
+    pub(in crate::features) fn send_command_session_available(&self, id: &str) -> bool {
+        self.send_command_session_supported(id)
+            && !self.session.is_disconnected(id)
+            && !self.session.start_reconnect_is_pending(id)
+    }
+
     pub(in crate::features) fn send_command_target_session_ids(&self) -> Vec<String> {
         // Live sessions only from local metadata (skip disconnected tabs).
         let sessions = self
             .session
             .ordered_sessions()
             .into_iter()
-            .filter(|session| {
-                !self.session.is_disconnected(&session.id)
-                    && !matches!(
-                        session.kind,
-                        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice
-                    )
-            })
+            .filter(|session| self.send_command_session_available(&session.id))
             .collect::<Vec<_>>();
         let live_session_ids = sessions
             .iter()
             .map(|session| session.id.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let active_kind = self.active_session_kind();
-        let is_compatible = |kind: SessionKind| -> bool {
-            match active_kind {
-                Some(SessionKind::Serial) => matches!(kind, SessionKind::Serial),
-                Some(SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice) => false,
-                Some(_) => !matches!(kind, SessionKind::Serial),
-                None => true,
-            }
-        };
         match self.send_command.target() {
             SendCommandTarget::Current => self
                 .session
@@ -318,16 +343,14 @@ impl NyaTermApp {
                 .map(ToOwned::to_owned)
                 .into_iter()
                 .collect(),
-            SendCommandTarget::AllCompatible => {
-                if active_kind.is_none() {
-                    return Vec::new();
-                }
-                sessions
-                    .into_iter()
-                    .filter(|session| is_compatible(session.kind))
-                    .map(|session| session.id)
-                    .collect()
+            SendCommandTarget::AllSessions => {
+                sessions.into_iter().map(|session| session.id).collect()
             }
+            SendCommandTarget::Sessions(selection) => sessions
+                .into_iter()
+                .filter(|session| selection.contains(&session.id))
+                .map(|session| session.id)
+                .collect(),
             SendCommandTarget::Group(group_id) => {
                 let Some(group) = self
                     .sync_input
@@ -345,20 +368,11 @@ impl NyaTermApp {
                     .iter()
                     .map(String::as_str)
                     .collect();
-                let session_kind_by_id: std::collections::HashMap<&str, SessionKind> = sessions
-                    .iter()
-                    .map(|session| (session.id.as_str(), session.kind))
-                    .collect();
                 group
                     .session_ids
                     .iter()
                     .filter(|session_id| !paused.contains(session_id.as_str()))
-                    .filter(|session_id| {
-                        session_kind_by_id
-                            .get(session_id.as_str())
-                            .copied()
-                            .is_some_and(is_compatible)
-                    })
+                    .filter(|session_id| live_session_ids.contains(session_id.as_str()))
                     .cloned()
                     .collect()
             }
@@ -372,27 +386,10 @@ impl NyaTermApp {
             .session
             .ordered_sessions()
             .into_iter()
-            .filter(|session| {
-                !self.session.is_disconnected(&session.id)
-                    && !matches!(
-                        session.kind,
-                        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice
-                    )
-            })
+            .filter(|session| self.send_command_session_available(&session.id))
             .collect::<Vec<_>>();
-        let active_kind = self.active_session_kind();
-        let is_compatible = |kind: SessionKind| -> bool {
-            match active_kind {
-                Some(SessionKind::Serial) => matches!(kind, SessionKind::Serial),
-                Some(SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice) => false,
-                Some(_) => !matches!(kind, SessionKind::Serial),
-                None => true,
-            }
-        };
-        let session_kind_by_id: std::collections::HashMap<&str, SessionKind> = sessions
-            .iter()
-            .map(|session| (session.id.as_str(), session.kind))
-            .collect();
+        let live_session_ids: std::collections::HashSet<&str> =
+            sessions.iter().map(|session| session.id.as_str()).collect();
         self.sync_input
             .groups()
             .iter()
@@ -407,12 +404,7 @@ impl NyaTermApp {
                     .session_ids
                     .iter()
                     .filter(|session_id| !paused.contains(session_id.as_str()))
-                    .filter(|session_id| {
-                        session_kind_by_id
-                            .get(session_id.as_str())
-                            .copied()
-                            .is_some_and(is_compatible)
-                    })
+                    .filter(|session_id| live_session_ids.contains(session_id.as_str()))
                     .count();
                 if count == 0 {
                     None
@@ -433,7 +425,8 @@ impl NyaTermApp {
         }
         let label = match self.send_command.target() {
             SendCommandTarget::Current => "Current".to_string(),
-            SendCommandTarget::AllCompatible => "All compatible".to_string(),
+            SendCommandTarget::AllSessions => "All sessions".to_string(),
+            SendCommandTarget::Sessions(selection) => format!("{} selected", selection.ids().len()),
             SendCommandTarget::Group(id) => self
                 .sync_input
                 .groups()
@@ -447,14 +440,33 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn active_session_kind(&self) -> Option<SessionKind> {
-        let active_id = self.session.active_id()?;
-        if self.session.is_disconnected(active_id) {
-            return None;
+    pub(in crate::features) fn send_command_has_configurable_line_ending(&self) -> bool {
+        self.send_command_target_session_ids().iter().any(|id| {
+            self.session.session_info(id).is_some_and(|session| {
+                matches!(
+                    session.kind,
+                    SessionKind::Serial | SessionKind::RawTcp | SessionKind::AdbShell
+                )
+            })
+        })
+    }
+
+    pub(in crate::features) fn send_command_target_statistics(
+        &self,
+        cx: &gpui::App,
+    ) -> Result<nyaterm_core::send_command::SendCommandStatistics, String> {
+        let ids = self.send_command_target_session_ids();
+        if ids.is_empty() {
+            return self.send_command.payload_statistics(None, cx);
         }
-        self.session
-            .session_info(active_id)
-            .map(|session| session.kind)
+        let mut total = nyaterm_core::send_command::SendCommandStatistics { units: 0, bytes: 0 };
+        for id in ids {
+            let kind = self.session.session_info(&id).map(|session| session.kind);
+            let stats = self.send_command.payload_statistics(kind, cx)?;
+            total.units = total.units.saturating_add(stats.units);
+            total.bytes = total.bytes.saturating_add(stats.bytes);
+        }
+        Ok(total)
     }
 
     pub(in crate::features) fn set_send_command_data_type(
@@ -465,7 +477,7 @@ impl NyaTermApp {
         let Some(interval) = self.send_command.set_data_type(data_type) else {
             return;
         };
-        self.reset_text_input("send-command.interval", &interval, cx);
+        self.reset_text_input(&self.send_command.input_id("interval"), &interval, cx);
         self.shell.set_status(format!(
             "command send data: {}",
             match data_type {
@@ -484,7 +496,7 @@ impl NyaTermApp {
         let Some(interval) = self.send_command.set_mode(mode) else {
             return;
         };
-        self.reset_text_input("send-command.interval", &interval, cx);
+        self.reset_text_input(&self.send_command.input_id("interval"), &interval, cx);
         cx.notify();
     }
 

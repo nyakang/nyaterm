@@ -623,6 +623,8 @@ pub struct AppSettingsSummary {
     #[serde(default)]
     pub ui_panel_stack_sizes: HashMap<String, u32>,
     pub interaction_copy_on_select: bool,
+    #[serde(default = "default_true")]
+    pub interaction_free_type_enabled: bool,
     #[serde(default)]
     pub interaction_allow_osc52_clipboard_write: bool,
     pub interaction_right_click_paste: bool,
@@ -658,6 +660,8 @@ pub struct AppSettingsSummary {
     pub host_key_policy: String,
     pub transfer_download_path: String,
     pub transfer_ask_save_location: bool,
+    #[serde(default)]
+    pub transfer_external_editor_auto_upload: bool,
     pub transfer_duplicate_strategy: String,
     pub transfer_editor_type: String,
     #[serde(default)]
@@ -907,6 +911,7 @@ impl Default for AppSettingsSummary {
             ui_right_open_panels: Vec::new(),
             ui_panel_stack_sizes: HashMap::new(),
             interaction_copy_on_select: false,
+            interaction_free_type_enabled: true,
             interaction_allow_osc52_clipboard_write: false,
             interaction_right_click_paste: false,
             interaction_terminal_right_click_action: TerminalRightClickAction::Menu,
@@ -929,6 +934,7 @@ impl Default for AppSettingsSummary {
             host_key_policy: "prompt".to_string(),
             transfer_download_path: String::new(),
             transfer_ask_save_location: false,
+            transfer_external_editor_auto_upload: false,
             transfer_duplicate_strategy: "ask".to_string(),
             transfer_editor_type: "external".to_string(),
             transfer_internal_editor_display: InternalEditorDisplay::Window,
@@ -1281,6 +1287,23 @@ mod tests {
     }
 
     #[test]
+    fn free_type_defaults_on_for_legacy_summaries_and_round_trips_false() {
+        let defaults = AppSettingsSummary::default();
+        assert!(defaults.interaction_free_type_enabled);
+        let mut legacy = serde_json::to_value(defaults).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("interaction_free_type_enabled");
+        let mut restored: AppSettingsSummary = serde_json::from_value(legacy).unwrap();
+        assert!(restored.interaction_free_type_enabled);
+        restored.interaction_free_type_enabled = false;
+        let restored: AppSettingsSummary =
+            serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
+        assert!(!restored.interaction_free_type_enabled);
+    }
+
+    #[test]
     fn summary_deserializes_missing_new_fields_to_defaults() {
         // A minimal JSON document (legacy shape) must fill the new fields with
         // serde defaults rather than failing to deserialize. Built from a raw
@@ -1365,6 +1388,7 @@ mod tests {
         assert!(!summary.terminal_serial_reconnect_send_enter);
         assert!(!summary.ui_remote_stats_show_users);
         assert_eq!(summary.transfer_internal_editor_font_size, 13);
+        assert!(!summary.transfer_external_editor_auto_upload);
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);

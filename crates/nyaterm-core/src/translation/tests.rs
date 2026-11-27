@@ -39,6 +39,19 @@ fn maps_google_language_codes_like_legacy() {
 }
 
 #[test]
+fn maps_brazilian_portuguese_language_codes() {
+    // The translation picker stores the legacy "pt" identifier.
+    for language in ["pt", "pt-BR", "pt_BR"] {
+        assert_eq!(google_translate_lang(language), "pt");
+        assert_eq!(microsoft_translate_lang(language), "pt-BR");
+        assert_eq!(deepl_translate_lang(language), "PT-BR");
+        assert_eq!(baidu_translate_lang(language), "pt");
+        assert_eq!(ali_translate_lang(language), "pt");
+        assert_eq!(youdao_translate_lang(language), "pt");
+    }
+}
+
+#[test]
 fn parses_google_translate_response() {
     let body = r#"{
         "sentences": [

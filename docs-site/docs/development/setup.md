@@ -237,3 +237,9 @@ NyaTerm 打了补丁的第三方依赖**没有 vendor 到仓库里**。每个都
 GPUI 切换候选以 `cutover/gpui` 提交 PR 到 `main`；`migration/gpui` 在过渡期保留，旧 Tauri 主线保存在 `archive/tauri-v1`。只有切换 PR 合并后才从 `main` 开展后续开发和正式发布。
 
 候选的 `2.0.0` 版本号不代表已经发布。维护者使用 Release 工作流的 `verify_release=true`、`upload_release=false` 和固定 `source_ref` 完成签名演练；具体门槛、证据和恢复步骤见仓库 `scripts/release/GPUI_CUTOVER.md`。用户升级见 [迁移指南](../getting-started/migration-v2)。
+
+## 原生组件开发与发布
+
+正式安装包采用精简布局，SPICE、RDP Builtin、VNC 和 Android 的 helper 及私有运行库由插件面板按需安装。调试构建仍支持同目录 helper，以及 `NYATERM_SPICE_HELPER`、`NYATERM_RDP_HELPER`、`NYATERM_VNC_HELPER`、`NYATERM_ANDROID_HELPER` 显式路径。构建 helper 后需同时准备其相邻运行库。
+
+组件必须兼容应用版本和目标平台。Android、RDP、VNC 和 SPICE helper 在独立的 `nyakang/nyaterm-plugins` 仓库中构建、测试和发布；本仓库通过根 `Cargo.toml` 中固定 revision 的 `nyaterm-native-protocol` 共享 IPC 契约。组件发布使用独立仓库的受保护签名流水线和签名的 `native/v1/index.json`。组件更新由用户手动执行，兼容的已安装版本会在应用升级后保留。

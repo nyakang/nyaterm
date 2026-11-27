@@ -31,6 +31,7 @@ pub struct NyaButton {
     small: bool,
     compact: bool,
     form_control: bool,
+    input_surface: bool,
     full_width: bool,
     label_left: bool,
     selected: bool,
@@ -38,6 +39,7 @@ pub struct NyaButton {
     loading: bool,
     autofocus: bool,
     focus_handle: Option<FocusHandle>,
+    accessibility_label: Option<SharedString>,
     tooltip: Option<SharedString>,
     on_click: Option<NyaButtonClickHandler>,
 }
@@ -57,6 +59,7 @@ impl NyaButton {
             small: false,
             compact: false,
             form_control: false,
+            input_surface: false,
             full_width: false,
             label_left: false,
             selected: false,
@@ -64,6 +67,7 @@ impl NyaButton {
             loading: false,
             autofocus: false,
             focus_handle: None,
+            accessibility_label: None,
             tooltip: None,
             on_click: None,
         }
@@ -120,6 +124,12 @@ impl NyaButton {
         self
     }
 
+    /// Paint the button on the input/select surface so custom triggers match `NyaSelect`.
+    pub fn input_surface(mut self) -> Self {
+        self.input_surface = true;
+        self
+    }
+
     pub fn full_width(mut self) -> Self {
         self.full_width = true;
         self
@@ -155,6 +165,11 @@ impl NyaButton {
     /// Use the caller's handle for keyboard activation and focus restoration.
     pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
         self.focus_handle = Some(focus_handle.clone());
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -194,8 +209,8 @@ impl RenderOnce for NyaButton {
         }
         if icon_only {
             // An empty label would create a second content slot and offset the icon.
-            if let Some(tooltip) = &self.tooltip {
-                button = button.accessibility_label(tooltip.clone());
+            if let Some(label) = self.accessibility_label.as_ref().or(self.tooltip.as_ref()) {
+                button = button.accessibility_label(label.clone());
             }
         } else if self.text_color.is_some()
             || self.text_size.is_some()
@@ -204,18 +219,26 @@ impl RenderOnce for NyaButton {
         {
             // Kit's label container sets its own size. Style the label itself,
             // retaining one visible label and its accessible name.
-            button = button.accessibility_label(self.label.clone()).child(
-                div()
-                    .min_w_0()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .when(self.label_left, |this| this.flex_1().text_left())
-                    .when_some(self.text_color, |this, color| this.text_color(color))
-                    .when_some(self.text_size, |this, size| this.text_size(size))
-                    .when_some(self.font_weight, |this, weight| this.font_weight(weight))
-                    .child(self.label),
-            );
+            button = button
+                .accessibility_label(
+                    self.accessibility_label
+                        .unwrap_or_else(|| self.label.clone()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .when(self.label_left, |this| this.flex_1().text_left())
+                        .when_some(self.text_color, |this, color| this.text_color(color))
+                        .when_some(self.text_size, |this, size| this.text_size(size))
+                        .when_some(self.font_weight, |this, weight| this.font_weight(weight))
+                        .child(self.label),
+                );
         } else {
+            if let Some(label) = self.accessibility_label {
+                button = button.accessibility_label(label);
+            }
             button = button.label(self.label);
         }
         if let Some(icon_path) = self.icon_path {
@@ -260,6 +283,9 @@ impl RenderOnce for NyaButton {
         if let Some(height) = self.height {
             button = button.h(height);
         }
+        if self.input_surface {
+            button = button.bg(crate::theme_bridge::input_surface_color(cx));
+        }
         if let Some(color) = self.text_color {
             button = button.text_color(color);
         }
@@ -278,6 +304,9 @@ pub struct NyaIconButton {
     tooltip: Option<SharedString>,
     tab_stop: bool,
     on_click: Option<NyaButtonClickHandler>,
+    content: Option<AnyElement>,
+    radius: Option<Pixels>,
+    toggled: Option<bool>,
 }
 
 impl NyaIconButton {
@@ -292,11 +321,31 @@ impl NyaIconButton {
             tooltip: None,
             tab_stop: true,
             on_click: None,
+            content: None,
+            radius: None,
+            toggled: None,
         }
     }
 
     pub fn icon_size(mut self, size: Pixels) -> Self {
         self.icon_size = Some(size);
+        self
+    }
+
+    /// A composed icon, for example a glyph with independent status marks.
+    pub fn content(mut self, content: impl IntoElement) -> Self {
+        self.content = Some(content.into_any_element());
+        self
+    }
+
+    pub fn radius(mut self, radius: Pixels) -> Self {
+        self.radius = Some(radius);
+        self
+    }
+
+    /// Expose a toggle's state to assistive technology without a selected fill.
+    pub fn toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
         self
     }
 
@@ -346,7 +395,18 @@ impl RenderOnce for NyaIconButton {
         let icon = Icon::default()
             .path(self.icon_path)
             .when_some(self.icon_size, |icon, size| icon.with_size(size));
-        let mut button = Button::new(self.id).icon(icon).ghost().small();
+        let mut button = Button::new(self.id).ghost().small();
+        button = if let Some(content) = self.content {
+            button.p_0().child(content)
+        } else {
+            button.icon(icon)
+        };
+        if let Some(radius) = self.radius {
+            button = button.rounded(radius);
+        }
+        if let Some(toggled) = self.toggled {
+            button = button.toggled(toggled);
+        }
         if let Some(size) = self.size {
             button = button.size(size).flex_none();
         }
@@ -354,7 +414,7 @@ impl RenderOnce for NyaIconButton {
             button = button.text_color(color);
         }
         if let Some(tooltip) = self.tooltip {
-            button = button.tooltip(tooltip);
+            button = button.accessibility_label(tooltip.clone()).tooltip(tooltip);
         }
         if let Some(on_click) = self.on_click {
             button = button.on_click(on_click);

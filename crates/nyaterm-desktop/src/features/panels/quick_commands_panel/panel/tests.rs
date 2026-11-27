@@ -211,11 +211,17 @@ fn quick_command_editor_segmented_select_shows_options_and_saves_profile() {
         );
         app.save_quick_command_editor(cx);
     });
-    for _ in 0..20 {
+    // Saving uses the real blocking store worker, outside GPUI's test executor.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
         draw(cx);
         if !app.read_with(cx, |app, _| app.commands.quick_editor_save_in_flight()) {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "quick command save did not complete"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(cx, |app, _| {

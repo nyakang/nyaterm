@@ -17,6 +17,7 @@ pub(in crate::features) enum SettingsPersistenceDomain {
     QuickCommands,
     Appearance,
     UiLayout,
+    HeaderStatus,
     Keybindings,
     FileExplorer,
 }
@@ -119,7 +120,7 @@ impl SettingsFeatureState {
         self.draft_dirty_domains.clear();
     }
     pub(in crate::features) fn draft_dirty_domains(&self) -> Vec<SettingsPersistenceDomain> {
-        const DOMAINS: [SettingsPersistenceDomain; 13] = [
+        const DOMAINS: [SettingsPersistenceDomain; 14] = [
             SettingsPersistenceDomain::Diagnostics,
             SettingsPersistenceDomain::General,
             SettingsPersistenceDomain::Interaction,
@@ -131,6 +132,7 @@ impl SettingsFeatureState {
             SettingsPersistenceDomain::QuickCommands,
             SettingsPersistenceDomain::Appearance,
             SettingsPersistenceDomain::UiLayout,
+            SettingsPersistenceDomain::HeaderStatus,
             SettingsPersistenceDomain::Keybindings,
             SettingsPersistenceDomain::FileExplorer,
         ];
@@ -140,7 +142,7 @@ impl SettingsFeatureState {
             .collect()
     }
     pub(in crate::features) fn dirty_persistence_domains(&self) -> Vec<SettingsPersistenceDomain> {
-        const DOMAINS: [SettingsPersistenceDomain; 13] = [
+        const DOMAINS: [SettingsPersistenceDomain; 14] = [
             SettingsPersistenceDomain::Diagnostics,
             SettingsPersistenceDomain::General,
             SettingsPersistenceDomain::Interaction,
@@ -152,6 +154,7 @@ impl SettingsFeatureState {
             SettingsPersistenceDomain::QuickCommands,
             SettingsPersistenceDomain::Appearance,
             SettingsPersistenceDomain::UiLayout,
+            SettingsPersistenceDomain::HeaderStatus,
             SettingsPersistenceDomain::Keybindings,
             SettingsPersistenceDomain::FileExplorer,
         ];

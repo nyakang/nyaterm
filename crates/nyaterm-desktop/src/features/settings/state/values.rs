@@ -37,6 +37,18 @@ impl SettingsFeatureState {
         )
     }
 
+    pub(in crate::features) fn move_connection_type_to(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        target_index: usize,
+    ) -> bool {
+        self.summary.connection_type_layout.move_to(
+            &crate::models::ConnectionKindTab::catalog_ids(),
+            kind.persistence_id(),
+            target_index,
+        )
+    }
+
     pub(in crate::features) fn reset_connection_type_layout(&mut self) {
         self.summary
             .connection_type_layout
@@ -124,6 +136,10 @@ impl SettingsFeatureState {
         self.summary.diagnostics_log_shard_bytes = bytes;
         true
     }
+    pub(in crate::features) fn toggle_interaction_free_type(&mut self) {
+        self.summary.interaction_free_type_enabled = !self.summary.interaction_free_type_enabled;
+    }
+
     pub(in crate::features) fn toggle_interaction_copy_on_select(&mut self) {
         self.summary.interaction_copy_on_select = !self.summary.interaction_copy_on_select;
     }
@@ -288,6 +304,18 @@ impl SettingsFeatureState {
     pub(in crate::features) fn set_docker_manager_interval(&mut self, value: u32) {
         self.summary.ui_docker_manager_interval = value.clamp(3, 120);
     }
+    pub(in crate::features) fn reset_remote_monitoring(&mut self) -> bool {
+        let defaults = nyaterm_core::AppSettingsSummary::default();
+        self.set_remote_stats_interval(defaults.ui_remote_stats_interval);
+        self.set_gpu_monitor_interval(defaults.ui_gpu_monitor_interval);
+        self.set_ascend_npu_monitor_interval(defaults.ui_ascend_npu_monitor_interval);
+        self.set_process_manager_interval(defaults.ui_process_manager_interval);
+        self.set_docker_manager_interval(defaults.ui_docker_manager_interval);
+        let users_changed =
+            self.summary.ui_remote_stats_show_users != defaults.ui_remote_stats_show_users;
+        self.summary.ui_remote_stats_show_users = defaults.ui_remote_stats_show_users;
+        users_changed
+    }
     pub(in crate::features) fn toggle_terminal_action_links(&mut self) {
         self.summary.terminal_action_links_enabled = !self.summary.terminal_action_links_enabled;
     }
@@ -373,6 +401,11 @@ impl SettingsFeatureState {
     ) {
         self.summary.transfer_internal_editor_display = display;
     }
+    pub(in crate::features) fn toggle_transfer_external_editor_auto_upload(&mut self) {
+        self.summary.transfer_external_editor_auto_upload =
+            !self.summary.transfer_external_editor_auto_upload;
+    }
+
     pub(in crate::features) fn toggle_transfer_ask_save_location(&mut self) {
         self.summary.transfer_ask_save_location = !self.summary.transfer_ask_save_location;
     }

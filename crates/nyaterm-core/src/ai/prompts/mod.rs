@@ -89,7 +89,7 @@ const LEGACY_JSON_ACTION: &str = r#"{"thought":"","action":"execute_command","co
 {"thought":"","action":"final_answer","answer":""}"#;
 
 pub(super) fn catalog(language: &str) -> &'static Catalog {
-    static CATALOGS: OnceLock<[Catalog; 6]> = OnceLock::new();
+    static CATALOGS: OnceLock<[Catalog; 7]> = OnceLock::new();
     let catalogs = CATALOGS.get_or_init(|| {
         [
             include_str!("en.json"),
@@ -98,6 +98,7 @@ pub(super) fn catalog(language: &str) -> &'static Catalog {
             include_str!("ja.json"),
             include_str!("ko.json"),
             include_str!("fr.json"),
+            include_str!("pt-BR.json"),
         ]
         .map(|source| {
             let mut c: Catalog = serde_json::from_str(source).expect("bundled AI prompt catalog");
@@ -148,6 +149,7 @@ fn locale_index(language: &str) -> usize {
         "ja" => 3,
         "ko" => 4,
         "fr" => 5,
+        "pt" => 6,
         _ => 0,
     }
 }

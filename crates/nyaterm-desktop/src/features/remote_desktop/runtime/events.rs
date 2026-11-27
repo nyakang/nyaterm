@@ -26,24 +26,9 @@ pub(super) const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) const METRICS_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Frame deltas stay ordered, so a full queue must still be drained; entering
-/// the UI every millisecond only moved the same work earlier and uploaded every
-/// intermediate dirty update.
-const HARDWARE_FRAME_DRAIN_INTERVAL: Duration = Duration::from_millis(16);
-
-/// WARP composites the whole window on the CPU, so 60 Hz spends most of the
-/// frame budget presenting rather than delivering new desktop pixels.
-const SOFTWARE_FRAME_DRAIN_INTERVAL: Duration = Duration::from_millis(33);
-
-const MIN_DRAIN_YIELD: Duration = Duration::from_millis(1);
-
-pub(super) fn remote_desktop_drain_delay(elapsed: Duration, software_renderer: bool) -> Duration {
-    let interval = if software_renderer {
-        SOFTWARE_FRAME_DRAIN_INTERVAL
-    } else {
-        HARDWARE_FRAME_DRAIN_INTERVAL
-    };
-    interval.saturating_sub(elapsed).max(MIN_DRAIN_YIELD)
+/// Background compositors publish at the renderer's sustainable cadence.
+pub(super) fn remote_desktop_frame_interval(software_renderer: bool) -> Duration {
+    Duration::from_millis(if software_renderer { 33 } else { 16 })
 }
 
 impl NyaTermApp {
@@ -55,17 +40,15 @@ impl NyaTermApp {
     /// interval, but that still left 50ms idle / 16ms under pressure, so a helper
     /// delivering 60fps was sampled at 20-60fps.
     ///
-    /// Frame deltas stay ordered in bounded queues; only the wake signal is a
-    /// channel (see `models::event_wake`). `update_in` rather
-    /// than `update` because applying a frame needs the `Window` for its dynamic
-    /// texture.
+    /// Background workers compose ordered pixels independently of these UI
+    /// updates. Only controls, cursors and immutable presentations reach the UI;
+    /// the wake channel carries no pixel data.
     pub(in crate::features) fn start_remote_desktop_event_drain(&mut self, cx: &mut Context<Self>) {
         let Some(mut wake_rx) = self.remote_desktop.take_wake_receiver() else {
             return;
         };
         cx.spawn(async move |this, cx| {
             loop {
-                let drain_started_at = Instant::now();
                 // Arm before draining, so a frame enqueued in between still
                 // signals rather than waiting for the next one.
                 let _ = this.update(cx, |this, _| this.remote_desktop.arm_event_wake());
@@ -74,30 +57,19 @@ impl NyaTermApp {
                         // Any event means a session exists; the periodic clock is scoped
                         // to that, and every reconnect is scheduled from an event handler.
                         this.ensure_remote_desktop_periodic_clock(cx);
-                        let drained = this.drain_remote_desktop_queues(window, cx);
-                        let software_renderer =
-                            crate::platform::is_software_renderer(this.shell.renderer());
-                        (drained, software_renderer)
+                        this.drain_remote_desktop_queues(window, cx)
                     });
-                let drained = drained.map(|results| {
-                    (
-                        results.iter().any(|(dirty, _)| *dirty),
-                        results.first().is_some_and(|(_, software)| *software),
-                    )
-                });
                 match drained {
                     Err(_) => break,
-                    // A frame can arrive while the previous one is being applied.
-                    // Keep ordered deltas queued until the next display-frame slot.
-                    Ok((true, software_renderer)) => {
-                        let delay = remote_desktop_drain_delay(
-                            drain_started_at.elapsed(),
-                            software_renderer,
-                        );
-                        cx.background_executor().timer(delay).await;
+                    Ok(results) if results.iter().any(|dirty| *dirty) => {
+                        // Pixel publication is already paced in the workers.
+                        // Yield between control batches without imposing another frame delay.
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1))
+                            .await;
                         continue;
                     }
-                    Ok((false, _)) => {}
+                    Ok(_) => {}
                 }
                 if wake_rx.next().await.is_none() {
                     break;
@@ -113,12 +85,12 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.sync_remote_presentation_visibility(window);
         if self
             .remote_desktop
             .fullscreen_window
             .is_none_or(|host| host.window_id() != window.window_handle().window_id())
         {
-            self.sync_vnc_presentation_visibility(window);
             self.sync_spice_presentation_visibility(window);
         }
         for texture in self.remote_desktop.pending_texture_removals.drain(..) {
@@ -149,6 +121,7 @@ impl NyaTermApp {
                 }
             }
             let drain = self.remote_desktop.manager.drain_batch(&session_id);
+            let rdp_presentation = self.remote_desktop.manager.take_presentation(&session_id);
             let vnc_drain = self.remote_desktop.vnc_manager.drain_batch(&session_id);
             let presentation = self
                 .remote_desktop
@@ -157,6 +130,7 @@ impl NyaTermApp {
             if drain.control.is_empty()
                 && drain.frames.is_empty()
                 && drain.cursors.is_empty()
+                && rdp_presentation.is_none()
                 && vnc_drain.control.is_empty()
                 && vnc_drain.frames.is_empty()
                 && vnc_drain.cursors.is_empty()
@@ -169,7 +143,8 @@ impl NyaTermApp {
             }
             if self.remote_desktop.metrics_enabled {
                 self.remote_desktop.metrics_control_events += drain.control.len();
-                self.remote_desktop.metrics_frame_updates += drain.frames.len();
+                self.remote_desktop.metrics_frame_updates +=
+                    usize::from(rdp_presentation.is_some());
                 self.remote_desktop.metrics_control_events += vnc_drain.control.len();
                 self.remote_desktop.metrics_control_events += vnc_drain.cursors.len();
                 self.remote_desktop.metrics_frame_updates += vnc_drain.frames.len();
@@ -186,7 +161,9 @@ impl NyaTermApp {
                 self.apply_rdp_control_event(&session_id, event, window, cx);
             }
             self.apply_remote_cursor_batch(&session_id, drain.cursors, window);
-            self.apply_rdp_frame_batch(&session_id, drain.frames, window);
+            if let Some(presentation) = rdp_presentation {
+                self.apply_rdp_presentation(&session_id, presentation, window);
+            }
             for event in vnc_drain.control {
                 self.apply_vnc_control_event(&session_id, event, window, cx);
             }
@@ -574,10 +551,38 @@ impl NyaTermApp {
         {
             return;
         }
+        let mut presentation =
+            nyaterm_remote_desktop::presentation::RemotePresentationMetrics::default();
+        for id in self.remote_desktop.sessions.keys() {
+            if let Some(metrics) = self.remote_desktop.manager.presentation_metrics(id) {
+                presentation.rectangles += metrics.rectangles;
+                presentation.completed_updates += metrics.completed_updates;
+                presentation.publications += metrics.publications;
+                presentation.replaced_publications += metrics.replaced_publications;
+                presentation.packed_bytes += metrics.packed_bytes;
+                presentation.compose_nanoseconds = presentation
+                    .compose_nanoseconds
+                    .saturating_add(metrics.compose_nanoseconds);
+                presentation.ingress_items_high_water += metrics.ingress_items_high_water;
+                presentation.ingress_bytes_high_water += metrics.ingress_bytes_high_water;
+                presentation.ingress_blocked_nanoseconds = presentation
+                    .ingress_blocked_nanoseconds
+                    .saturating_add(metrics.ingress_blocked_nanoseconds);
+            }
+        }
         tracing::debug!(
             active_sessions = self.remote_desktop.sessions.len(),
             control_events = self.remote_desktop.metrics_control_events,
             frame_updates = self.remote_desktop.metrics_frame_updates,
+            rdp_rectangles = presentation.rectangles,
+            rdp_completed_updates = presentation.completed_updates,
+            rdp_publications = presentation.publications,
+            rdp_replaced_publications = presentation.replaced_publications,
+            rdp_packed_bytes = presentation.packed_bytes,
+            rdp_compose_ns = presentation.compose_nanoseconds,
+            rdp_ingress_items_high_water = presentation.ingress_items_high_water,
+            rdp_ingress_bytes_high_water = presentation.ingress_bytes_high_water,
+            rdp_ingress_blocked_ns = presentation.ingress_blocked_nanoseconds,
             "RDP runtime metrics"
         );
         self.remote_desktop.metrics_last_report = now;

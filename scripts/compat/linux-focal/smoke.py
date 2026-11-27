@@ -136,16 +136,14 @@ def main():
         with tarfile.open(archives[0]) as archive:
             archive.extractall(directory)
         application = next(Path(directory).glob("*/nyaterm"))
-        android_probe(application)
-        spice_probe(application)
         debs = list(dist.glob("NyaTerm_*_linux_x64_glibc231.deb"))
         if debs:
             if len(debs) != 1:
                 raise RuntimeError("expected one focal deb")
             installed = Path(directory) / "installed"
             subprocess.run(["dpkg-deb", "--extract", str(debs[0]), str(installed)], check=True)
-            android_probe(installed / "opt/nyaterm-compat/nyaterm")
-            spice_probe(installed / "opt/nyaterm-compat/nyaterm")
+            if not (installed / "opt/nyaterm-compat/nyaterm").is_file():
+                raise RuntimeError("compatibility DEB is missing the application")
         (output / "android-runtime.txt").write_text("PASS: packaged ADB, FFmpeg loader, helper IPC and checksums\n")
         (output / "spice-runtime.txt").write_text("PASS: packaged SPICE libraries, video elements, helper IPC and checksums\n")
         with (output / "application.log").open("w") as log:

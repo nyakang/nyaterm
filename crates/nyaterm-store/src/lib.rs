@@ -4,6 +4,7 @@ mod portable_codec;
 mod portable_decode_helper;
 pub use portable_decode_helper::run_cloud_snapshot_decode_helper_if_requested;
 pub mod data_directory;
+pub mod native_component_preferences;
 pub mod plugin_preferences;
 mod runtime;
 pub mod safety_backup;
@@ -195,4 +196,5 @@ mod tests {
         );
     }
 }
+pub mod extension_authorizations;
 pub mod sync_v4;

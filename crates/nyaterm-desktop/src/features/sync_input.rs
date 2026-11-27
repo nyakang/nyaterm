@@ -5,6 +5,7 @@ use nyaterm_core::uuid;
 use nyaterm_transport::SessionInfo;
 use nyaterm_ui::ChildWindowSlot;
 
+pub(in crate::features) mod tab_state;
 mod window;
 
 use super::NyaTermApp;
@@ -467,7 +468,7 @@ impl SyncInputFeatureState {
         self.broadcast_to_all
     }
 
-    /// True while any session can mirror input, so tabs offer the per-session checkbox.
+    /// True while any session can mirror input, so tabs offer receive controls.
     pub(in crate::features) fn input_selection_active(&self) -> bool {
         self.broadcast_to_all || self.groups.iter().any(|group| group.enabled)
     }
@@ -982,7 +983,7 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    /// Tab checkbox: tick or untick every pane under one tab in a single step.
+    /// Change receive eligibility for every terminal pane under a tab in one step.
     pub(in crate::features) fn set_sessions_receive_sync_input(
         &mut self,
         session_ids: &[String],
@@ -1004,11 +1005,13 @@ impl NyaTermApp {
         if !changed {
             return;
         }
-        self.shell.set_status(if receive {
-            "session sync resumed".to_string()
+        let receive_state = if receive {
+            rust_i18n::t!("syncTab.enabled")
         } else {
-            "session sync paused".to_string()
-        });
+            rust_i18n::t!("syncTab.disabled")
+        };
+        self.shell
+            .set_status(rust_i18n::t!("syncTab.receive", state = receive_state).to_string());
         self.align_command_suggestion_sync_revision(cx);
         cx.notify();
     }

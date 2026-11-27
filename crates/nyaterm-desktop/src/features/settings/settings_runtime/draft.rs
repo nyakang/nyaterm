@@ -273,13 +273,6 @@ impl NyaTermApp {
         self.hide_ai_provider_secret(cx);
         self.ai.invalidate_provider_jobs();
         let settings = self.settings.summary().clone();
-        let mut base_settings = self
-            .shell
-            .settings_draft_snapshot()
-            .expect("settings draft checked above")
-            .settings
-            .clone();
-        crate::models::ActivityBarLayoutState::complete_settings_layout(&mut base_settings);
         let base = self
             .shell
             .settings_draft_snapshot()
@@ -368,30 +361,14 @@ impl NyaTermApp {
                 let mut shared_settings = settings.clone();
                 if settings_changed {
                     let persisted_settings = store.load_app_settings_summary()?;
-                    shared_settings.ui_left_panel_width = persisted_settings.ui_left_panel_width;
-                    shared_settings.ui_right_panel_width = persisted_settings.ui_right_panel_width;
-                    shared_settings.ui_quick_cmd_height = persisted_settings.ui_quick_cmd_height;
-                    shared_settings.ui_active_left_panel =
-                        persisted_settings.ui_active_left_panel.clone();
-                    shared_settings.ui_active_right_panel =
-                        persisted_settings.ui_active_right_panel.clone();
-                    shared_settings.ui_left_panel_collapsed =
-                        persisted_settings.ui_left_panel_collapsed;
-                    shared_settings.ui_right_panel_collapsed =
-                        persisted_settings.ui_right_panel_collapsed;
-                    let mut persisted = persisted_settings;
-                    crate::models::ActivityBarLayoutState::complete_settings_layout(&mut persisted);
-                    // These fields are workspace-local projections, not shared settings.
-                    persisted.ui_left_panel_width = base_settings.ui_left_panel_width;
-                    persisted.ui_right_panel_width = base_settings.ui_right_panel_width;
-                    persisted.ui_quick_cmd_height = base_settings.ui_quick_cmd_height;
-                    persisted.ui_active_left_panel = base_settings.ui_active_left_panel.clone();
-                    persisted.ui_active_right_panel = base_settings.ui_active_right_panel.clone();
-                    persisted.ui_left_panel_collapsed = base_settings.ui_left_panel_collapsed;
-                    persisted.ui_right_panel_collapsed = base_settings.ui_right_panel_collapsed;
-                    if persisted != base_settings {
+                    if !settings_apply_matches(&base.settings, &persisted_settings) {
                         return Err(conflict());
                     }
+                    merge_workspace_draft(
+                        &mut shared_settings,
+                        &base.settings,
+                        &persisted_settings,
+                    );
                 }
                 if keyword_changed && store.load_keyword_highlights()? != base.keyword_highlights {
                     return Err(conflict());
@@ -450,7 +427,10 @@ impl NyaTermApp {
                             store.save_appearance_settings(&shared_settings)?;
                         }
                         crate::features::settings::SettingsPersistenceDomain::UiLayout => {
-                            store.save_ui_layout_settings(&shared_settings)?;
+                            // Workspace writes run through their own debounce/generation slot.
+                        }
+                        crate::features::settings::SettingsPersistenceDomain::HeaderStatus => {
+                            store.save_header_status_settings(&shared_settings)?;
                         }
                         crate::features::settings::SettingsPersistenceDomain::Keybindings => {
                             store.save_keybindings(&shared_settings.keybindings)?;
@@ -502,7 +482,11 @@ impl NyaTermApp {
                     saved_cloud_sync_state,
                     saved_ai_settings,
                 )) => {
-                    this.apply_gpui_settings(saved_settings.clone(), cx);
+                    // Apply owns settings, not the workspace projection. In particular,
+                    // a layout debounce may still be pending (or have advanced in flight).
+                    let mut live_settings = saved_settings.clone();
+                    copy_settings_shell_state(&mut live_settings, this.settings.summary());
+                    this.apply_gpui_settings(live_settings, cx);
                     this.publish_shared_settings(saved_settings, cx);
                     if sync_configuration_changed
                         && let Some(controller) = this.desktop_controller.clone()
@@ -730,9 +714,30 @@ fn shell_state_neutral_settings(
     settings
 }
 
-/// The same projection serves comparison and rollback, so a navigation field
-/// ignored by dirty tracking cannot be accidentally restored from an old draft.
+/// Dirty tracking and Cancel preserve Explorer navigation/preferences edited outside
+/// Settings. Apply still checks those shared preferences for concurrent edits.
 fn copy_settings_shell_state(settings: &mut AppSettingsSummary, live: &AppSettingsSummary) {
+    copy_workspace_state(settings, live);
+    settings
+        .ui_file_explorer_show_hidden_files
+        .clone_from(&live.ui_file_explorer_show_hidden_files);
+    settings
+        .ui_file_explorer_view_mode
+        .clone_from(&live.ui_file_explorer_view_mode);
+    settings
+        .ui_file_explorer_auto_sync_cwd_connection_ids
+        .clone_from(&live.ui_file_explorer_auto_sync_cwd_connection_ids);
+    settings
+        .ui_file_explorer_favorite_dirs_by_connection_id
+        .clone_from(&live.ui_file_explorer_favorite_dirs_by_connection_id);
+}
+
+/// Workspace-owned fields: neither shared configuration conflicts nor Settings
+/// rollback may claim them. Header status and File Explorer preferences are excluded.
+pub(in crate::features::settings) fn copy_workspace_state(
+    settings: &mut AppSettingsSummary,
+    live: &AppSettingsSummary,
+) {
     settings
         .ui_quick_cmd_view_mode
         .clone_from(&live.ui_quick_cmd_view_mode);
@@ -757,18 +762,6 @@ fn copy_settings_shell_state(settings: &mut AppSettingsSummary, live: &AppSettin
     settings
         .ui_asset_sort_direction
         .clone_from(&live.ui_asset_sort_direction);
-    settings
-        .ui_file_explorer_show_hidden_files
-        .clone_from(&live.ui_file_explorer_show_hidden_files);
-    settings
-        .ui_file_explorer_view_mode
-        .clone_from(&live.ui_file_explorer_view_mode);
-    settings
-        .ui_file_explorer_auto_sync_cwd_connection_ids
-        .clone_from(&live.ui_file_explorer_auto_sync_cwd_connection_ids);
-    settings
-        .ui_file_explorer_favorite_dirs_by_connection_id
-        .clone_from(&live.ui_file_explorer_favorite_dirs_by_connection_id);
     settings
         .ui_file_manager
         .open
@@ -874,6 +867,46 @@ fn copy_settings_shell_state(settings: &mut AppSettingsSummary, live: &AppSettin
     settings
         .ui_panel_stack_sizes
         .clone_from(&live.ui_panel_stack_sizes);
+}
+
+/// Apply has a stricter comparison than Dirty/Cancel: Explorer preferences are
+/// shared configuration even though their controls live outside the settings page.
+fn settings_apply_matches(base: &AppSettingsSummary, persisted: &AppSettingsSummary) -> bool {
+    let mut comparable = base.clone();
+    copy_workspace_state(&mut comparable, persisted);
+    comparable == *persisted
+}
+
+/// QuickCommands and FileExplorer saves include navigation fields. Only forward
+/// actual edits since the draft opened; an unchanged, stale window projection
+/// must not overwrite another window's durable state. UiLayout itself is saved
+/// independently by the layout debounce; Apply only writes header preferences.
+fn merge_workspace_draft(
+    draft: &mut AppSettingsSummary,
+    base: &AppSettingsSummary,
+    persisted: &AppSettingsSummary,
+) {
+    macro_rules! preserve_unedited {
+        ($($field:ident $(.$nested:ident)?),+ $(,)?) => {
+            $(if draft.$field $(.$nested)? == base.$field $(.$nested)? {
+                draft.$field $(.$nested)?.clone_from(&persisted.$field $(.$nested)?);
+            })+
+        };
+    }
+    preserve_unedited!(
+        ui_quick_cmd_view_mode,
+        ui_quick_cmd_sort_mode,
+        ui_quick_cmd_selected_category,
+        ui_file_manager.open,
+        ui_file_manager.left,
+        ui_file_manager.right,
+        ui_file_manager.split_percent,
+        ui_file_manager.active_pane,
+        ui_file_manager.queue_expanded,
+        ui_file_manager.queue_height,
+        ui_file_manager.left_view,
+        ui_file_manager.right_view,
+    );
 }
 
 fn drive_validation_key(
@@ -1383,6 +1416,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn external_editor_auto_upload_saves_through_transfer_settings_with_and_without_a_draft() {
+        for draft_open in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            app.update(&mut cx, |app, cx| {
+                if draft_open {
+                    app.begin_settings_draft(cx);
+                }
+                app.toggle_transfer_external_editor_auto_upload(cx);
+            });
+            cx.run_until_parked();
+            if draft_open {
+                let saved = app.update(&mut cx, |app, _| {
+                    app.store_blocking_client()
+                        .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                            store.load_app_settings_summary()
+                        })
+                        .unwrap()
+                });
+                assert!(!saved.transfer_external_editor_auto_upload);
+                app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+                cx.run_until_parked();
+            }
+            let saved = app.update(&mut cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            });
+            assert!(saved.transfer_external_editor_auto_upload);
+        }
+    }
+
     fn stored_header_status(
         app: &gpui::Entity<NyaTermApp>,
         cx: &mut TestAppContext,
@@ -1592,6 +1661,314 @@ mod tests {
             assert_eq!(app.settings.summary().connection_type_layout, saved);
         });
         assert_eq!(stored(&mut cx), saved);
+    }
+
+    /// The draft is opened while the live shell keeps persisting layout state.
+    /// Those workspace-local writes must not turn Apply into a false
+    /// "changed in another window" conflict.
+    #[test]
+    fn applying_a_draft_tolerates_shell_layout_progress_after_it_opened() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.begin_settings_draft(cx);
+            assert!(app.settings.set_terminal_font_family("Consolas".into()));
+            app.save_appearance_settings(cx);
+
+            // A panel resize or visibility toggle can persist UI layout after the
+            // settings snapshot was captured. It is not a settings edit.
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut persisted = store.load_app_settings_summary()?;
+                    persisted.ui_transfer_height =
+                        (persisted.ui_transfer_height + 37).clamp(60, 600);
+                    persisted.ui_quick_cmd_visible = !persisted.ui_quick_cmd_visible;
+                    store.save_ui_layout_settings(&persisted)
+                })
+                .expect("persist layout drift");
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        let stored = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .expect("load stored settings")
+        });
+        assert_eq!(stored.terminal_font_family, "Consolas");
+    }
+
+    #[test]
+    fn header_apply_preserves_other_windows_layout_even_if_memory_was_already_stale() {
+        for drift_before_open in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            let (store, local) = cx.update_entity(&app, |app, cx| {
+                app.sync_component_theme(cx);
+                if !drift_before_open {
+                    app.begin_settings_draft(cx);
+                }
+                (app.store_blocking_client(), app.settings.summary().clone())
+            });
+            let external = store
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut external = store.load_app_settings_summary()?;
+                    external.ui_activity_bar_left_top.reverse();
+                    external.ui_activity_bar_show_labels = !external.ui_activity_bar_show_labels;
+                    external.ui_activity_bar_hidden_items.push("notes".into());
+                    external.ui_transfer_height = 397;
+                    external.ui_serial_send_height = 311;
+                    external.ui_quick_cmd_visible = !external.ui_quick_cmd_visible;
+                    external.ui_left_panel_collapsed = !external.ui_left_panel_collapsed;
+                    external.ui_saved_connections_sort_mode = "name".into();
+                    external.ui_panel_stack_sizes.insert("notes".into(), 1234);
+                    store.save_ui_layout_settings(&external)
+                })
+                .unwrap();
+            cx.update_entity(&app, |app, cx| {
+                if drift_before_open {
+                    app.begin_settings_draft(cx);
+                }
+                app.set_header_status_mode(HeaderStatusMode::DateTime, cx);
+                app.apply_settings_draft(false, cx);
+            });
+            finish_settings_apply(&app, &mut cx);
+            let saved = store
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            let mut expected = external;
+            expected.ui_header_status_mode = "datetime".into();
+            assert_eq!(saved, expected, "Apply only owns the header fields");
+            cx.update_entity(&app, |app, _| {
+                let mut expected = local;
+                expected.ui_header_status_mode = "datetime".into();
+                assert_eq!(
+                    app.settings.summary(),
+                    &expected,
+                    "the current workspace stays local"
+                );
+                assert!(!app.settings_draft_dirty());
+            });
+        }
+    }
+
+    #[test]
+    fn apply_preserves_unflushed_layout_from_before_and_after_draft_open() {
+        for before_open in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            cx.update_entity(&app, |app, cx| {
+                app.sync_component_theme(cx);
+                if !before_open {
+                    app.begin_settings_draft(cx);
+                }
+                let mut layout = app.settings.summary().clone();
+                layout.ui_left_panel_width = 419;
+                layout.ui_quick_cmd_height = 317;
+                layout.ui_activity_bar_left_top.reverse();
+                app.settings.replace_summary(layout);
+                app.shell.mark_ui_layout_persist_pending();
+                if before_open {
+                    app.begin_settings_draft(cx);
+                }
+                app.settings.set_terminal_font_family("Consolas".into());
+                app.save_appearance_settings(cx);
+                app.apply_settings_draft(false, cx);
+                // This newer change arrives after the submitted Apply snapshot.
+                let mut layout = app.settings.summary().clone();
+                layout.ui_right_panel_width = 439;
+                app.settings.replace_summary(layout);
+                app.shell.mark_ui_layout_persist_pending();
+            });
+            finish_settings_apply(&app, &mut cx);
+            cx.update_entity(&app, |app, cx| {
+                // Apply broadcasts a shared refresh after its immediate completion.
+                let snapshot = app
+                    .store_blocking_client()
+                    .request(0, nyaterm_store::LoadBootstrap)
+                    .unwrap()
+                    .outcome
+                    .unwrap();
+                app.apply_shared_state(
+                    snapshot,
+                    crate::app_shell::SharedStateEvent {
+                        domain: crate::app_shell::SharedStateDomain::All,
+                        revision: 1,
+                        changed: true,
+                    },
+                    cx,
+                );
+                assert_eq!(app.settings.summary().ui_left_panel_width, 419);
+                assert_eq!(app.settings.summary().ui_right_panel_width, 439);
+                assert_eq!(app.settings.summary().ui_quick_cmd_height, 317);
+                assert!(app.shell.ui_layout_persist_is_pending());
+                app.cancel_settings(cx);
+                assert_eq!(app.settings.summary().ui_left_panel_width, 419);
+                assert_eq!(app.settings.summary().ui_right_panel_width, 439);
+                assert!(app.shell.ui_layout_persist_is_pending());
+            });
+        }
+    }
+
+    #[test]
+    fn layout_generations_during_a_draft_do_not_commit_or_rollback_header_preview() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let store = cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_header_status_mode(HeaderStatusMode::DateTime, cx);
+            // Queue two generations without yielding the UI to the first completion.
+            for width in [401, 423] {
+                let mut layout = app.settings.summary().clone();
+                layout.ui_left_panel_width = width;
+                app.settings.replace_summary(layout);
+                app.queue_settings_save(SettingsSaveKind::UiLayout, cx);
+            }
+            app.store_blocking_client()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if app.read_with(&cx, |app, _| {
+                !app.settings
+                    .dirty_persistence_domains()
+                    .contains(&crate::features::settings::SettingsPersistenceDomain::UiLayout)
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "layout generations did not drain"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let saved = store
+            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                store.load_app_settings_summary()
+            })
+            .unwrap();
+        assert_eq!(saved.ui_left_panel_width, 423);
+        assert_eq!(saved.ui_header_status_mode, "session");
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(app.settings.summary().ui_header_status_mode, "datetime");
+            assert_eq!(app.settings.summary().ui_left_panel_width, 423);
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary().ui_header_status_mode, "session");
+            assert_eq!(app.settings.summary().ui_left_panel_width, 423);
+        });
+    }
+
+    #[test]
+    fn mixed_navigation_domains_preserve_unedited_fields_and_save_explicit_edits() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let store = cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            let mut edited = app.settings.summary().clone();
+            edited.ui_quick_cmd_selected_category = "draft-category".into();
+            edited.ui_file_manager.auto_collapse_sidebar =
+                !edited.ui_file_manager.auto_collapse_sidebar;
+            edited.ui_file_manager.queue_height = 321;
+            app.settings.replace_summary(edited);
+            app.queue_settings_save(SettingsSaveKind::QuickCommands, cx);
+            app.queue_settings_save(SettingsSaveKind::FileExplorer, cx);
+            app.store_blocking_client()
+        });
+        let external = store
+            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                let mut external = store.load_app_settings_summary()?;
+                external.ui_quick_cmd_sort_mode = "name".into();
+                external.ui_file_manager.split_percent = 67;
+                external.ui_file_manager.left.path = "/other-window".into();
+                store.save_quick_command_ui_settings(&external)?;
+                store.save_file_explorer_favorite_dirs(&external)
+            })
+            .unwrap();
+        cx.update_entity(&app, |app, cx| app.apply_settings_draft(false, cx));
+        finish_settings_apply(&app, &mut cx);
+        let saved = store
+            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                store.load_app_settings_summary()
+            })
+            .unwrap();
+        assert_eq!(
+            saved.ui_quick_cmd_sort_mode,
+            external.ui_quick_cmd_sort_mode
+        );
+        assert_eq!(saved.ui_quick_cmd_selected_category, "draft-category");
+        assert_eq!(saved.ui_file_manager.split_percent, 67);
+        assert_eq!(saved.ui_file_manager.left, external.ui_file_manager.left);
+        assert_eq!(saved.ui_file_manager.queue_height, 321);
+        assert_ne!(
+            saved.ui_file_manager.auto_collapse_sidebar,
+            external.ui_file_manager.auto_collapse_sidebar
+        );
+    }
+
+    #[test]
+    fn concurrent_file_explorer_preferences_still_reject_the_stale_draft() {
+        for preference in 0..4 {
+            let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            let original_font = cx.update_entity(&app, |app, cx| {
+                app.sync_component_theme(cx);
+                app.begin_settings_draft(cx);
+                let original = app.settings.summary().terminal_font_family.clone();
+                assert!(app.settings.set_terminal_font_family("Consolas".into()));
+                app.save_appearance_settings(cx);
+                let mut external = app.settings.summary().clone();
+                match preference {
+                    0 => {
+                        external.ui_file_explorer_show_hidden_files =
+                            !external.ui_file_explorer_show_hidden_files
+                    }
+                    1 => {
+                        external.ui_file_explorer_view_mode =
+                            nyaterm_core::models::settings::TransferBrowserViewMode::Tree
+                    }
+                    2 => external
+                        .ui_file_explorer_auto_sync_cwd_connection_ids
+                        .push("other".into()),
+                    _ => {
+                        external
+                            .ui_file_explorer_favorite_dirs_by_connection_id
+                            .insert("other".into(), vec!["/tmp".into()]);
+                    }
+                }
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, move |store| {
+                        store.save_file_explorer_favorite_dirs(&external)
+                    })
+                    .expect("external File Explorer save");
+                app.apply_settings_draft(false, cx);
+                original
+            });
+            cx.run_until_parked();
+            let (stored, draft_font) = cx.update_entity(&app, |app, _| {
+                let stored = app
+                    .store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .expect("load stored settings");
+                (stored, app.settings.summary().terminal_font_family.clone())
+            });
+            assert_eq!(stored.terminal_font_family, original_font);
+            assert_eq!(draft_font, "Consolas");
+            cx.update_entity(&app, |app, _| {
+                assert!(app.shell.has_settings_draft());
+            });
+        }
     }
 
     /// Editing only the word separators must still be written when the draft is applied.
@@ -1806,7 +2183,6 @@ mod tests {
         cx.update_entity(&app, |app, cx| {
             // No draft open, so this takes the immediate-persist path.
             app.set_header_status_visible(false, cx);
-            app.queue_settings_save(SettingsSaveKind::UiLayout, cx);
         });
         cx.run_until_parked();
         assert_eq!(
@@ -1820,7 +2196,7 @@ mod tests {
             app.set_header_status_mode(HeaderStatusMode::Host, cx);
             app.apply_settings_draft(false, cx);
         });
-        cx.run_until_parked();
+        finish_settings_apply(&app, &mut cx);
 
         assert_eq!(
             stored_header_status(&app, &mut cx),
@@ -1874,7 +2250,13 @@ mod tests {
                     store.load_app_settings_summary()
                 })
                 .unwrap();
-            assert_eq!(saved.interaction_word_separators, original_separators);
+            assert_ne!(saved.interaction_word_separators, original_separators);
+            assert_eq!(
+                saved.interaction_word_separators,
+                "fixture changed separators"
+            );
+            // The concurrent layout edit is preserved instead of blocking the
+            // unrelated Interaction save.
             assert_eq!(
                 saved.ui_activity_bar_left_top,
                 expected.ui_activity_bar_left_top

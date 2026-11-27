@@ -203,6 +203,106 @@ fn manual_retry_retains_the_selected_target_and_plain_clone_is_an_independent_up
 }
 
 #[test]
+fn restarting_an_unsafe_upload_rechecks_conflicts_without_adopting_old_targets()
+-> anyhow::Result<()> {
+    for decision in [
+        SftpDuplicateDecision::Overwrite,
+        SftpDuplicateDecision::Skip,
+    ] {
+        let (service, files) = service("UTF-8");
+        {
+            let mut files = files.lock().unwrap();
+            files
+                .contents
+                .insert(b"/file".to_vec(), b"original".to_vec());
+            files.fail_write_once_at = Some(32768);
+        }
+        let root = tempfile::tempdir()?;
+        let local = root.path().join("source");
+        let payload = vec![49; 256 * 1024];
+        std::fs::write(&local, &payload)?;
+        let (initial, calls) = options(SftpDuplicateDecision::Rename, 0);
+        let retained = initial.with_transfer_options(initial.transfer_options().clone());
+        assert!(
+            service
+                .upload_path_with_progress_and_path_options(
+                    &local,
+                    "/file",
+                    SftpTransferControl::new(),
+                    initial,
+                    |_| {},
+                )
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(!retained.upload_restart_required());
+        // A changed target invalidates the checkpoint and permanently blocks the old attempt.
+        files
+            .lock()
+            .unwrap()
+            .contents
+            .get_mut(b"/file(1)".as_slice())
+            .unwrap()
+            .push(99);
+        assert!(
+            service
+                .upload_path_with_progress_and_path_options(
+                    &local,
+                    "/file",
+                    SftpTransferControl::new(),
+                    retained.with_transfer_options(retained.transfer_options().clone()),
+                    |_| {},
+                )
+                .unwrap_err()
+                .is::<super::upload_runtime::UploadRetryUnsafe>()
+        );
+        assert!(retained.upload_restart_required());
+        let old_target = files.lock().unwrap().contents[b"/file(1)".as_slice()].clone();
+        let restarted = retained.restart_upload(
+            Arc::new(Resolver {
+                decision,
+                calls: calls.clone(),
+            }),
+            SftpTransferOptions::default().with_resume_broken_transfer(true),
+        );
+        assert!(!restarted.upload_restart_required());
+        assert!(!restarted.transfer_options().resume_broken_transfer);
+        // Unsafe attempts close the old channel. Reconnect to a peer retaining
+        // the same remote filesystem rather than the fixture's dummy SSH address.
+        let (reconnected, reconnected_files) = super::filename_tests::service("UTF-8");
+        {
+            let old = files.lock().unwrap();
+            let mut current = reconnected_files.lock().unwrap();
+            current.contents = old.contents.clone();
+            current.attributes = old.attributes.clone();
+            current.directories = old.directories.clone();
+        }
+        let summary = reconnected.upload_path_with_progress_and_path_options(
+            &local,
+            "/file",
+            SftpTransferControl::new(),
+            restarted,
+            |_| {},
+        )?;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(summary.remote_path, "/file");
+        assert_eq!(summary.skipped, decision == SftpDuplicateDecision::Skip);
+        assert!(retained.upload_restart_required());
+        let files = reconnected_files.lock().unwrap();
+        assert_eq!(files.contents[b"/file(1)".as_slice()], old_target);
+        assert_eq!(
+            files.contents[b"/file".as_slice()],
+            if decision == SftpDuplicateDecision::Skip {
+                b"original".to_vec()
+            } else {
+                payload
+            }
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn changed_missing_or_unverifiable_retry_targets_are_never_opened_or_modified() -> anyhow::Result<()>
 {
     for change in [

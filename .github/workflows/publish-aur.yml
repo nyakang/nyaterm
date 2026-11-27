@@ -109,8 +109,6 @@ jobs:
           for package in packages/*.deb; do
             contents="$(dpkg-deb --contents "${package}")"
             grep -q './opt/nyaterm/nyaterm' <<< "${contents}"
-            grep -q './opt/nyaterm/nyaterm-rdp-helper' <<< "${contents}"
-            grep -q './opt/nyaterm/nyaterm-vnc-helper' <<< "${contents}"
             grep -q './opt/nyaterm/nyaterm-mcp' <<< "${contents}"
           done
           {
@@ -186,7 +184,7 @@ jobs:
             namcap /pkg/PKGBUILD /pkg/*.pkg.tar.zst
             # bsdtar is available in the Arch image, not the Ubuntu host.
             contents="$(bsdtar -tf /pkg/*.pkg.tar.zst)"
-            for binary in nyaterm nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-mcp; do
+            for binary in nyaterm nyaterm-mcp; do
               grep -q "opt/nyaterm/${binary}$" <<< "${contents}" || {
                 echo "missing bundled binary: ${binary}" >&2
                 exit 1

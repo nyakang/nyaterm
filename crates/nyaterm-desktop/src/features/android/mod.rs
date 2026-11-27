@@ -1,6 +1,6 @@
 use crate::models::session::AndroidSessionConfig;
 use gpui::{Bounds, DynamicTexture, Entity, FocusHandle, Pixels};
-use nyaterm_android::devices::SharedDeviceService;
+use nyaterm_android::devices::{DeviceTrackerLease, SharedDeviceService};
 use nyaterm_android::ipc::Frame;
 use nyaterm_android::screen::{CleanupTicket, ScreenHandle};
 use nyaterm_core::models::android::AndroidViewKind;
@@ -137,7 +137,18 @@ pub(in crate::features) struct AndroidFeatureState {
     pub(in crate::features) pending: HashMap<String, String>,
     pub(super) tracker: SharedDeviceService,
     pub(super) clock: Option<gpui::Task<()>>,
-    pub(super) tracker_revision: u64,
+    pub(super) tracker_revision: (u64, u64),
+    /// Editor/session demand for this window. File and screen jobs retain
+    /// their own leases until their actual work and cleanup finish.
+    discovery_lease: Option<DeviceTrackerLease>,
+    /// An ensure job is on the blocking pool; do not queue a second one.
+    pub(super) tracker_start_pending:
+        Option<(u64, nyaterm_android::operation::AdbOperationControl)>,
+    /// Earliest retry after a failed start, so a broken adb cannot turn the
+    /// 200 ms tick into a retry storm.
+    pub(super) tracker_retry_after: Option<std::time::Instant>,
+    /// Acquisition/startup failure shown by the picker until retry or reopen.
+    pub(super) tracker_error: Option<String>,
 }
 impl AndroidFeatureState {
     pub(in crate::features) fn new(tracker: SharedDeviceService) -> Self {
@@ -151,8 +162,54 @@ impl AndroidFeatureState {
             pending: HashMap::new(),
             tracker,
             clock: None,
-            tracker_revision: 0,
+            tracker_revision: (0, 0),
+            discovery_lease: None,
+            tracker_start_pending: None,
+            tracker_retry_after: None,
+            tracker_error: None,
         }
+    }
+
+    /// Only live snapshots establish device presence. Old lists are not reused
+    /// across discovery lifetimes, including while a new tracker is starting.
+    pub(in crate::features) fn device_snapshot(&self) -> nyaterm_android::devices::DeviceSnapshot {
+        let mut snapshot = self.tracker.snapshot();
+        if snapshot.tracker_generation == 0 && snapshot.error.is_none() {
+            snapshot.error.clone_from(&self.tracker_error);
+        }
+        snapshot
+    }
+
+    /// Held discovery that has published nothing yet.
+    pub(in crate::features) fn devices_are_starting(&self) -> bool {
+        let snapshot = self.tracker.snapshot();
+        self.holds_discovery()
+            && (snapshot.tracker_generation != 0 || self.tracker_error.is_none())
+            && snapshot.revision == 0
+    }
+
+    /// Matches the lease to the consumers that exist; safe to call anywhere.
+    pub(in crate::features) fn sync_discovery(&mut self, needed: bool) {
+        match (needed, self.discovery_lease.is_some()) {
+            (true, false) => {
+                self.discovery_lease = Some(self.tracker.lease());
+                self.tracker_retry_after = None;
+                self.tracker_error = None;
+                self.tracker_revision = (0, 0);
+            }
+            (false, true) => {
+                if let Some((_, control)) = self.tracker_start_pending.take() {
+                    control.cancel();
+                }
+                self.discovery_lease = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether this window currently consumes device discovery.
+    pub(in crate::features) fn holds_discovery(&self) -> bool {
+        self.discovery_lease.is_some()
     }
     pub(in crate::features) fn file_service(
         &self,
@@ -181,12 +238,11 @@ impl AndroidFeatureState {
     pub(in crate::features) fn kind(&self, id: &str) -> Option<AndroidViewKind> {
         self.views.get(id).map(|v| v.kind)
     }
-    pub(super) fn collect_unused_devices(&mut self, pending_shells: &HashSet<String>) {
+    pub(super) fn collect_unused_devices(&mut self, consumers: &HashSet<String>) {
         self.cleanup.retain(|ticket| !ticket.is_complete());
         self.devices.retain(|key, lease| {
-            self.views.values().any(|view| &view.device_key == key)
+            consumers.contains(key)
                 || self.pending.contains_key(key)
-                || pending_shells.contains(key)
                 || Arc::strong_count(&lease.files) > Arc::strong_count(&lease.owners)
         });
     }
@@ -237,6 +293,7 @@ impl AndroidFeatureState {
     }
     pub(in crate::features) fn shutdown(&mut self) {
         self.clock.take();
+        self.sync_discovery(false);
         self.pending.clear();
         for device in self.devices.values() {
             if Arc::strong_count(&device.owners) == 1 {
@@ -261,6 +318,7 @@ struct AndroidTransferredView {
 pub(crate) struct AndroidTabTransfer {
     views: Vec<AndroidTransferredView>,
     devices: Vec<(String, DeviceLease)>,
+    discovery: Option<DeviceTrackerLease>,
 }
 impl AndroidFeatureState {
     pub(crate) fn detach_tab(
@@ -320,7 +378,12 @@ impl AndroidFeatureState {
                 self.devices.remove(key);
             }
         }
-        AndroidTabTransfer { views, devices }
+        let discovery = (!views.is_empty() || !devices.is_empty()).then(|| self.tracker.lease());
+        AndroidTabTransfer {
+            views,
+            devices,
+            discovery,
+        }
     }
     pub(crate) fn attach_tab(
         &mut self,
@@ -329,7 +392,14 @@ impl AndroidFeatureState {
         app: Entity<crate::features::NyaTermApp>,
         cx: &mut gpui::App,
     ) {
-        self.tracker_revision = 0;
+        let _transfer_discovery = bundle.discovery;
+        self.tracker_revision = (0, 0);
+        // Hold discovery across a window move: the source releases as soon as
+        // its tab is gone, which would otherwise stop adb under the session
+        // that just arrived here.
+        if !bundle.devices.is_empty() || !bundle.views.is_empty() {
+            self.sync_discovery(true);
+        }
         for (key, lease) in bundle.devices {
             match self.devices.entry(key) {
                 std::collections::hash_map::Entry::Vacant(entry) => {

@@ -61,7 +61,8 @@ impl NyaTermApp {
         let Some(id) = self.session.active_id() else {
             return false;
         };
-        !self.security.screen_locked()
+        self.settings.summary().interaction_free_type_enabled
+            && !self.security.screen_locked()
             && !self.session.is_disconnected(id)
             && !self.active_terminal_uses_alternate_screen()
             && !self.terminal_protocol_state_for_session(id).mouse_reporting

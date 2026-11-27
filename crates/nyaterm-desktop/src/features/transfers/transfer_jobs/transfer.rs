@@ -433,7 +433,17 @@ impl NyaTermApp {
     pub(in crate::features) fn retry_transfer_job(
         &mut self,
         job_id: String,
-        _window: &mut Window,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.retry_transfer_job_after_confirmation(job_id, false, window, cx);
+    }
+
+    fn retry_transfer_job_after_confirmation(
+        &mut self,
+        job_id: String,
+        restart_confirmed: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.retry_file_operation(&job_id, cx) {
@@ -527,6 +537,25 @@ impl NyaTermApp {
             self.shell
                 .set_status(format!("transfer {job_id} is not retryable"));
             cx.notify();
+            return;
+        }
+
+        let restart_required = self.transfer.upload_restart_required(&job_id);
+        if restart_required && !restart_confirmed {
+            self.open_confirm_dialog(
+                (
+                    t!("fileTransfer.restartUploadTitle").to_string(),
+                    t!("fileTransfer.restartUploadDesc").to_string(),
+                    t!("fileTransfer.restartUpload").to_string(),
+                    false,
+                    move |app, window, cx| {
+                        app.retry_transfer_job_after_confirmation(job_id.clone(), true, window, cx);
+                        true
+                    },
+                ),
+                window,
+                cx,
+            );
             return;
         }
 
@@ -640,14 +669,22 @@ impl NyaTermApp {
                     (duplicate_policy == SftpDuplicatePolicy::Ask).then(|| {
                         self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>
                     });
-                let path_options = self.transfer.transfer_job_retry_path_options(
-                    &job_id,
-                    crate::features::transfers::transfer_options::path_options(
-                        duplicate_policy,
-                        duplicate_resolver,
+                let path_options = if restart_required {
+                    self.transfer.restart_upload_path_options(
+                        &job_id,
+                        self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>,
                         transfer_options,
-                    ),
-                );
+                    )
+                } else {
+                    self.transfer.transfer_job_retry_path_options(
+                        &job_id,
+                        crate::features::transfers::transfer_options::path_options(
+                            duplicate_policy,
+                            duplicate_resolver,
+                            transfer_options,
+                        ),
+                    )
+                };
                 let control = SftpTransferControl::new();
                 let job = self
                     .transfer

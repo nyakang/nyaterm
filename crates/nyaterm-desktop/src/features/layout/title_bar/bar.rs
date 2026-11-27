@@ -877,7 +877,7 @@ impl NyaTermApp {
             .set_header_status_mode(mode.persistence_id().to_string());
         self.shell
             .set_header_status_rendered_minute(current_unix_minute());
-        self.persist_header_status_settings();
+        self.persist_header_status_settings(cx);
         self.ensure_header_status_clock(cx);
         cx.notify();
     }
@@ -888,7 +888,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.settings.set_header_status_visible(visible);
-        self.persist_header_status_settings();
+        self.persist_header_status_settings(cx);
         self.ensure_header_status_clock(cx);
         cx.notify();
     }
@@ -914,18 +914,13 @@ impl NyaTermApp {
         );
     }
 
-    /// Both header-status setters funnel through here, so this is the one place the
-    /// date/time clock has to be reconsidered when the header changes shape.
-    fn persist_header_status_settings(&mut self) {
-        if self.shell.has_settings_draft() {
-            self.settings.mark_draft_domain_dirty(
-                crate::features::settings::SettingsPersistenceDomain::UiLayout,
-            );
-            self.shell
-                .set_status("header status changed; apply settings to persist".to_string());
-        } else {
-            self.persist_ui_layout();
-        }
+    // Header preferences have their own persistence slot: layout debounce writes
+    // must neither commit a preview nor replace a queued header edit (or vice versa).
+    fn persist_header_status_settings(&mut self, cx: &mut Context<Self>) {
+        self.queue_settings_save(
+            crate::features::settings::SettingsSaveKind::HeaderStatus,
+            cx,
+        );
     }
 
     pub(in crate::features) fn header_status_clock_refresh_due(&self) -> bool {
@@ -1358,6 +1353,7 @@ mod tests {
             ("ja", "2026-07-27 09:05 月"),
             ("ko", "2026-07-27 09:05 월"),
             ("fr", "lun. 2026-07-27 09:05"),
+            ("pt-BR", "seg., 2026-07-27 09:05"),
         ] {
             assert_eq!(
                 format_header_datetime(datetime, locale),
@@ -1369,7 +1365,7 @@ mod tests {
 
     #[test]
     fn localizes_every_weekday_without_falling_back() {
-        for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+        for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
             for weekday in [
                 time::Weekday::Monday,
                 time::Weekday::Tuesday,

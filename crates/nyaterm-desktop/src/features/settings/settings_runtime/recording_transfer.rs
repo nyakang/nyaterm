@@ -210,6 +210,14 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn toggle_transfer_external_editor_auto_upload(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_transfer_external_editor_auto_upload();
+        self.save_transfer_settings("external editor auto-upload preference saved", cx);
+    }
+
     pub(in crate::features) fn toggle_transfer_ask_save_location(
         &mut self,
         cx: &mut Context<Self>,

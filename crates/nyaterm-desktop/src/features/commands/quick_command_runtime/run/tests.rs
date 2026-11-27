@@ -249,6 +249,23 @@ impl WireFixture {
         assert_eq!(actual, expected);
     }
 
+    fn assert_wire_lines(&mut self, index: usize, lines: &[&str]) {
+        self.cx.update_entity(&self.app, |app, _| {
+            app.write_session_protocol_response(&self.ids[index], b"END")
+                .unwrap();
+        });
+        let length: usize = lines.iter().map(|line| line.len() + 1).sum();
+        let mut actual = vec![0; length + 3];
+        self.streams[index].read_exact(&mut actual).unwrap();
+        assert_eq!(&actual[length..], b"END");
+        let text = std::str::from_utf8(&actual[..length]).unwrap();
+        let mut actual_lines: Vec<_> = text.split_terminator('\r').collect();
+        let mut expected = lines.to_vec();
+        actual_lines.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual_lines, expected);
+    }
+
     fn open_editor(&mut self) {
         self.cx.update_entity(&self.app, |app, cx| {
             let document = editor_document(
@@ -984,6 +1001,192 @@ fn command_send_hex_keeps_non_utf8_bytes_without_text_encoding() {
 }
 
 #[test]
+fn command_send_selected_targets_ignore_sync_receive_and_stay_pinned_across_rounds() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandSelection, SendCommandTarget};
+    let mut fixture = WireFixture::new(3);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut selection = SendCommandSelection::default();
+        for id in &ids[1..] {
+            selection.toggle(id.clone(), nyaterm_transport::SessionKind::Telnet);
+            app.sync_input.set_session_receives_input(id, false);
+        }
+        app.sync_input.toggle_broadcast_to_all();
+        app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+        app.send_command.apply_draft("chosen".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "2".into());
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"chosen\r");
+    fixture.assert_wire(2, b"chosen\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.session.select_active_session(&ids[2]);
+        let metadata = app.session.metadata(&ids[0]).unwrap().clone();
+        app.session
+            .register_session_metadata("new-unselected-session", metadata);
+        // UI mutations cannot replace an in-flight selection.
+        app.set_send_command_target(SendCommandTarget::Current, cx);
+        app.send_command
+            .toggle_target_session(ids[1].clone(), nyaterm_transport::SessionKind::Telnet);
+        assert_eq!(app.send_command_target_session_ids(), ids[1..]);
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"chosen\r");
+    fixture.assert_wire(2, b"chosen\r");
+}
+
+#[test]
+fn command_send_selection_filters_stale_targets_without_falling_back_to_current() {
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    let mut fixture = WireFixture::new(2);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut selection = SendCommandSelection::default();
+        selection.toggle("closed-session".into(), nyaterm_transport::SessionKind::Ssh);
+        selection.toggle(ids[1].clone(), nyaterm_transport::SessionKind::Telnet);
+        app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+        app.send_command.apply_draft("only-live".into());
+        assert_eq!(app.send_command_target_session_ids(), [ids[1].clone()]);
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"only-live\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.session.metadata_mut(&ids[1]).unwrap().disconnected = true;
+        assert!(app.send_command_target_session_ids().is_empty());
+        app.send_bottom_command(false, cx);
+        assert!(!app.send_command.is_sending());
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"");
+}
+
+#[test]
+fn command_send_selection_excludes_sftp_only_and_moved_sessions() {
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+    let mut fixture = WireFixture::new(2);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut selection = SendCommandSelection::default();
+        for id in &ids {
+            selection.toggle(id.clone(), nyaterm_transport::SessionKind::Telnet);
+        }
+        app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+        app.session
+            .metadata_mut(&ids[0])
+            .unwrap()
+            .confirmed_ssh_runtime_mode = Some(SshRuntimeMode::Sftp);
+        app.session.remove_session_catalog(&ids[1]);
+        assert!(!app.send_command_session_available(&ids[0]));
+        assert!(!app.send_command_session_available(&ids[1]));
+        assert!(app.send_command_target_session_ids().is_empty());
+        app.send_command.apply_draft("never".into());
+        app.send_bottom_command(false, cx);
+        assert!(!app.send_command.is_sending());
+    });
+}
+
+#[test]
+fn command_send_disconnected_selected_target_does_not_rejoin_later_rounds() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandSelection, SendCommandTarget};
+    let mut fixture = WireFixture::new(2);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut selection = SendCommandSelection::default();
+        for id in &ids {
+            selection.toggle(id.clone(), nyaterm_transport::SessionKind::Telnet);
+        }
+        app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+        app.send_command.apply_draft("round".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "3".into());
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"round\r");
+    fixture.assert_wire(1, b"round\r");
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        app.session.metadata_mut(&ids[1]).unwrap().disconnected = true;
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"round\r");
+    fixture.assert_wire(1, b"");
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        app.session.metadata_mut(&ids[1]).unwrap().disconnected = false;
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"round\r");
+    fixture.assert_wire(1, b"");
+}
+
+#[test]
+fn command_send_serial_selection_keeps_serial_presentation_after_focus_changes() {
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    let mut fixture = WireFixture::with_carrier(2, true, true);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut selection = SendCommandSelection::default();
+        selection.toggle(ids[1].clone(), nyaterm_transport::SessionKind::Serial);
+        app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+        app.session.select_active_session(&ids[0]);
+        assert!(app.send_command_has_configurable_line_ending());
+        assert_eq!(app.send_command_target_session_ids(), [ids[1].clone()]);
+        app.send_command.apply_draft("AT".into());
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"AT\r\n");
+}
+
+#[test]
+fn command_send_selected_hex_preserves_bytes_and_stops_on_lock_or_cancel() {
+    use crate::send_command::{
+        SendCommandControlFocus, SendCommandDataType, SendCommandSelection, SendCommandTarget,
+    };
+    for lock in [false, true] {
+        let mut fixture = WireFixture::new(2);
+        let id = fixture.ids[1].clone();
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            let mut selection = SendCommandSelection::default();
+            selection.toggle(id.clone(), nyaterm_transport::SessionKind::Telnet);
+            app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
+            app.send_command.set_data_type(SendCommandDataType::Hex);
+            app.send_command
+                .presentation(cx)
+                .hex
+                .update(cx, |hex, cx| hex.set_bytes(vec![0xff, 0, 0xfe], cx));
+            app.send_command
+                .apply_control_input(SendCommandControlFocus::Interval, "1".into());
+            app.send_bottom_command(false, cx);
+        });
+        fixture.cx.run_until_parked();
+        fixture.assert_wire(0, b"");
+        fixture.assert_wire(1, &[0xff]);
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            if lock {
+                app.security.activate_screen_lock(String::new());
+            } else {
+                app.stop_send_command(cx);
+            }
+        });
+        fixture.advance();
+        fixture.assert_wire(0, b"");
+        fixture.assert_wire(1, b"");
+        fixture.cx.update_entity(&fixture.app, |app, _| {
+            assert!(!app.send_command.is_sending())
+        });
+    }
+}
+
+#[test]
 fn mixed_protocol_broadcast_plans_each_target_independently() {
     let mut fixture = WireFixture::with_carrier(2, true, true);
     fixture.cx.update_entity(&fixture.app, |app, cx| {
@@ -1019,4 +1222,375 @@ fn segmented_literal_line_feed_bypasses_real_telnet_enter_rewriting() {
     });
     fixture.cx.run_until_parked();
     fixture.assert_wire(0, b"a\nb");
+}
+
+#[test]
+fn command_send_mixed_targets_keep_per_target_encoding_line_endings_and_hex() {
+    use crate::send_command::{
+        SendCommandControlFocus, SendCommandDataType, SendCommandSelection, SendCommandTarget,
+    };
+    use nyaterm_transport::SessionKind;
+    let mut fixture = WireFixture::with_carrier(2, true, true);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut serial = app.session.metadata(&ids[1]).unwrap().clone();
+        let SessionLaunchConfig::Serial(config) = &mut serial.launch_config else {
+            panic!("serial fixture");
+        };
+        config.encoding = "GBK".into();
+        app.session.register_session_metadata(&ids[1], serial);
+        app.terminal
+            .seed_session_view(ids[1].clone(), String::new(), "GBK");
+        let mut selected = SendCommandSelection::default();
+        selected.toggle(ids[0].clone(), SessionKind::Telnet);
+        selected.toggle(ids[1].clone(), SessionKind::Serial);
+        app.set_send_command_target(SendCommandTarget::Sessions(selected), cx);
+        app.send_command.apply_draft("中".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "2".into());
+        assert_eq!(app.send_command_target_session_ids(), ids);
+        assert!(app.send_command_has_configurable_line_ending());
+        let stats = app.send_command_target_statistics(cx).unwrap();
+        assert_eq!((stats.units, stats.bytes), (2, 9));
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.advance();
+    fixture.assert_wire(0, "中\r中\r".as_bytes());
+    fixture.assert_wire(1, &[0xd6, 0xd0, 13, 10, 0xd6, 0xd0, 13, 10]);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(!app.send_command.is_sending());
+        app.send_command.set_data_type(SendCommandDataType::Hex);
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "1".into());
+        app.send_command
+            .presentation(cx)
+            .hex
+            .update(cx, |hex, cx| hex.set_bytes(vec![0xff, 0x00, 0x0a], cx));
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    for index in 0..2 {
+        fixture.assert_wire(index, &[0xff, 0x00, 0x0a]);
+    }
+}
+
+#[test]
+fn command_send_all_and_group_targets_include_serial_without_active_protocol_filter() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandTarget};
+    for grouped in [false, true] {
+        let mut fixture = WireFixture::with_carrier(3, true, true);
+        let ids = fixture.ids.clone();
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            let target = if grouped {
+                app.sync_input.create_group();
+                for id in &ids {
+                    app.sync_input.toggle_selected_session(id.clone());
+                }
+                app.sync_input
+                    .toggle_selected_session_paused(ids[2].clone());
+                let group = app.sync_input.groups()[0].id.clone();
+                let options = app.send_command_group_target_options();
+                assert_eq!(options[0].2, 2);
+                SendCommandTarget::Group(group)
+            } else {
+                SendCommandTarget::AllSessions
+            };
+            app.set_send_command_target(target, cx);
+            let expected = if grouped { &ids[..2] } else { &ids[..] };
+            for active in [ids[0].as_str(), ids[1].as_str(), "fixture"] {
+                app.session.select_active_session(active);
+                assert_eq!(app.send_command_target_session_ids(), expected);
+            }
+            app.send_command.apply_draft("AT".into());
+            app.send_command
+                .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+            app.send_bottom_command(false, cx);
+        });
+        // A broadcast can exhaust the UI time slice between targets and yield
+        // to a timer. Drive that timer before enqueueing the wire end markers.
+        for _ in 0..100 {
+            fixture.cx.run_until_parked();
+            if !fixture
+                .app
+                .read_with(&fixture.cx, |app, _| app.send_command.is_sending())
+            {
+                break;
+            }
+            fixture
+                .cx
+                .executor()
+                .advance_clock(Duration::from_millis(5));
+        }
+        assert!(
+            !fixture
+                .app
+                .read_with(&fixture.cx, |app, _| app.send_command.is_sending())
+        );
+        fixture.assert_wire(0, b"AT\r");
+        fixture.assert_wire(1, b"AT\r\n");
+        fixture.assert_wire(2, if grouped { b"" } else { b"AT\r" });
+    }
+}
+
+#[test]
+fn command_send_tab_switch_preserves_wire_target_and_clears_only_source() {
+    let mut fixture = WireFixture::new(2);
+    let ids = fixture.ids.clone();
+    let (source, other) = fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.settings.set_send_command_clear_after_send(true);
+        let source = app.send_command.active_id();
+        app.send_command.apply_draft("first\nsecond".into());
+        app.send_bottom_command(false, cx);
+        let other = app.send_command.add_tab(cx);
+        app.send_command.apply_draft("keep me".into());
+        app.session.select_active_session(&ids[1]);
+        (source, other)
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"first\r");
+    fixture.assert_wire(1, b"");
+    fixture.advance();
+    fixture.assert_wire(0, b"second\r");
+    fixture.assert_wire(1, b"");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(!app.send_command.is_sending());
+        assert_eq!(app.send_command.active_id(), other);
+        assert_eq!(app.send_command.presentation(cx).draft, "keep me");
+        app.send_command.switch_tab(source);
+        assert_eq!(app.send_command.presentation(cx).draft, "");
+    });
+}
+
+#[test]
+fn command_send_stop_only_affects_active_tab_and_keeps_run_owned_until_cleanup() {
+    let mut fixture = WireFixture::new(1);
+    let source = fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let source = app.send_command.active_id();
+        app.send_command.apply_draft("tick".into());
+        app.send_command.apply_control_input(
+            crate::send_command::SendCommandControlFocus::Count,
+            "∞".into(),
+        );
+        app.send_bottom_command(false, cx);
+        app.send_command.add_tab(cx);
+        source
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"tick\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(!app.send_command.can_close_tabs(&[source]));
+        app.stop_send_command(cx);
+        assert!(app.send_command.tab_is_sending(source));
+        app.send_command.switch_tab(source);
+        app.stop_send_command(cx);
+        assert!(app.send_command.is_sending());
+        assert!(!app.send_command.can_close_tabs(&[source]));
+    });
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(!app.send_command.is_sending());
+        assert!(app.send_command.can_close_tabs(&[source]));
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"");
+}
+
+#[test]
+fn command_send_concurrent_tabs_deliver_to_same_or_different_targets_and_clear_independently() {
+    for same_target in [false, true] {
+        let mut fixture = WireFixture::new(2);
+        let ids = fixture.ids.clone();
+        let (first, second) = fixture.cx.update_entity(&fixture.app, |app, cx| {
+            app.settings.set_send_command_clear_after_send(true);
+            let first = app.send_command.active_id();
+            app.send_command.apply_draft("a1\na2".into());
+            app.send_bottom_command(false, cx);
+            let second = app.send_command.add_tab(cx);
+            if !same_target {
+                app.session.select_active_session(&ids[1]);
+            }
+            app.send_command.apply_draft("b1\nb2\nb3".into());
+            app.send_bottom_command(false, cx);
+            assert!(app.send_command.tab_is_sending(first));
+            assert!(app.send_command.tab_is_sending(second));
+            // Neither the visible editor nor subsequent terminal focus routes callbacks.
+            app.send_command.switch_tab(first);
+            app.session.select_active_session(&ids[1]);
+            (first, second)
+        });
+        fixture.cx.run_until_parked();
+        if same_target {
+            fixture.assert_wire_lines(0, &["a1", "b1"]);
+            fixture.assert_wire(1, b"");
+        } else {
+            fixture.assert_wire(0, b"a1\r");
+            fixture.assert_wire(1, b"b1\r");
+        }
+        fixture.advance();
+        if same_target {
+            fixture.assert_wire_lines(0, &["a2", "b2"]);
+        } else {
+            fixture.assert_wire(0, b"a2\r");
+            fixture.assert_wire(1, b"b2\r");
+        }
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            assert!(!app.send_command.tab_is_sending(first));
+            assert!(app.send_command.tab_is_sending(second));
+            assert!(app.send_command.presentation(cx).draft.is_empty());
+            app.send_command.switch_tab(second);
+            let presentation = app.send_command.presentation(cx);
+            assert_eq!(presentation.draft, "b1\nb2\nb3");
+            assert_eq!(presentation.completed, 2);
+            assert_eq!(presentation.total, 3);
+        });
+        fixture.advance();
+        fixture.assert_wire(if same_target { 0 } else { 1 }, b"b3\r");
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            assert!(!app.send_command.is_sending());
+            assert!(app.send_command.presentation(cx).draft.is_empty());
+        });
+    }
+}
+
+#[test]
+fn command_send_concurrent_overlapping_targets_stop_only_the_selected_run() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandSelection, SendCommandTarget};
+    let mut fixture = WireFixture::new(3);
+    let ids = fixture.ids.clone();
+    let (first, second) = fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let first = app.send_command.active_id();
+        for (index, targets) in [[0, 1], [1, 2]].into_iter().enumerate() {
+            if index == 1 {
+                app.send_command.add_tab(cx);
+            }
+            app.send_command
+                .set_target(SendCommandTarget::Sessions(SendCommandSelection::default()));
+            for target in targets {
+                app.send_command.toggle_target_session(
+                    ids[target].clone(),
+                    nyaterm_transport::SessionKind::RawTcp,
+                );
+            }
+            app.send_command
+                .apply_control_input(SendCommandControlFocus::Count, "∞".into());
+            app.send_command.apply_control_input(
+                SendCommandControlFocus::Interval,
+                if index == 0 { "60" } else { "1" }.into(),
+            );
+            app.send_command
+                .apply_draft(if index == 0 { "a" } else { "b" }.into());
+            app.send_bottom_command(false, cx);
+        }
+        (first, app.send_command.active_id())
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"a\r");
+    fixture.assert_wire_lines(1, &["a", "b"]);
+    fixture.assert_wire(2, b"b\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.send_command.switch_tab(first);
+        // Same shortcut as starting: it cancels only the current tab.
+        app.send_bottom_command(false, cx);
+        assert!(!app.send_command.can_close_tabs(&[first]));
+    });
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(app.send_command.can_close_tabs(&[first]));
+        assert!(!app.send_command.can_close_tabs(&[second]));
+        assert!(app.send_command.tab_is_sending(second));
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"");
+    fixture.assert_wire(1, b"b\r");
+    fixture.assert_wire(2, b"b\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.send_command.switch_tab(second);
+        app.stop_send_command(cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(!app.send_command.is_sending())
+    });
+}
+
+#[test]
+fn command_send_competing_input_or_disconnect_interrupts_all_shared_runs() {
+    for disconnect in [false, true] {
+        let mut fixture = WireFixture::new(1);
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            for index in 0..2 {
+                if index > 0 {
+                    app.send_command.add_tab(cx);
+                }
+                app.send_command.apply_draft("first\nlast".into());
+                app.send_bottom_command(false, cx);
+            }
+        });
+        fixture.cx.run_until_parked();
+        fixture.assert_wire(0, b"first\rfirst\r");
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            if disconnect {
+                app.mark_session_disconnected(&fixture.ids[0], cx);
+            } else {
+                assert!(app.send_terminal_input(b"manual".to_vec(), cx));
+            }
+        });
+        fixture.cx.run_until_parked();
+        fixture.cx.update_entity(&fixture.app, |app, _| {
+            assert!(!app.send_command.is_sending())
+        });
+        if !disconnect {
+            fixture.advance();
+            fixture.assert_wire(0, b"manual");
+        }
+    }
+}
+
+#[test]
+fn command_send_concurrent_hex_runs_yield_and_cancel_without_starving_the_peer() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandDataType, SendCommandMode};
+    let mut fixture = WireFixture::new(1);
+    let (first, second) = fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let first = app.send_command.active_id();
+        for index in 0..2 {
+            if index > 0 {
+                app.send_command.add_tab(cx);
+            }
+            app.send_command.set_data_type(SendCommandDataType::Hex);
+            app.send_command.set_mode(SendCommandMode::Byte);
+            app.send_command
+                .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+            app.send_command
+                .presentation(cx)
+                .hex
+                .update(cx, |hex, cx| hex.set_bytes(vec![b'x'; 48 * 1024], cx));
+            app.send_bottom_command(false, cx);
+        }
+        (first, app.send_command.active_id())
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, &vec![b'x'; 32 * 1024]);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert_eq!(app.send_command.presentation(cx).completed, 16 * 1024);
+        app.send_command.switch_tab(first);
+        assert_eq!(app.send_command.presentation(cx).completed, 16 * 1024);
+        app.stop_send_command(cx);
+    });
+    fixture.cx.run_until_parked();
+    // Advancing the clock can service multiple ready batches. Check the complete
+    // remainder rather than assuming one write per clock advance.
+    fixture.advance();
+    fixture.advance();
+    fixture.assert_wire(0, &vec![b'x'; 32 * 1024]);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(!app.send_command.is_sending());
+        assert_eq!(app.send_command.presentation(cx).completed, 16 * 1024);
+        app.send_command.switch_tab(second);
+        assert_eq!(app.send_command.presentation(cx).completed, 48 * 1024);
+    });
 }

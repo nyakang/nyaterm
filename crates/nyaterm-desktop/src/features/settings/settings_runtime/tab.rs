@@ -268,12 +268,23 @@ mod tests {
                 Some(WorkspaceTabId::settings_key())
             );
         });
+        vcx.update(|window, cx| {
+            assert!(
+                !app.read(cx).settings_draft_dirty(),
+                "switching tabs must not turn a clean draft into a discard confirmation"
+            );
+            assert!(!window.has_active_nya_dialog(cx));
+        });
         let settings_close = vcx
             .debug_bounds("settings-tab-close")
             .expect("the settings tab paints its close control");
         vcx.simulate_click(settings_close.center(), gpui::Modifiers::default());
         draw(vcx);
-        vcx.update(|_, cx| {
+        vcx.update(|window, cx| {
+            assert!(
+                !window.has_active_nya_dialog(cx),
+                "closing a clean settings tab must not open a discard confirmation"
+            );
             assert!(
                 !app.read(cx)
                     .workspace_tab_ids()

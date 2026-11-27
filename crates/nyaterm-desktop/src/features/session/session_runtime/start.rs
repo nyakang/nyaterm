@@ -133,7 +133,7 @@ impl SshSessionConfigBuildContext {
                 destinations.push(destination);
                 routes.len() - 1
             };
-            *relay = Some(routes[index].endpoint.clone());
+            *relay = Some(routes[index].endpoint.clone().into());
         }
         self.attempt.check()?;
         Ok(routes)
@@ -997,11 +997,12 @@ impl NyaTermApp {
                 }
                 let session = nyaterm_remote_desktop::spice::protocol::SpiceSessionConfig {
                     session_id: nyaterm_core::uuid(),
-                    endpoint,
+                    endpoint: endpoint.into(),
                     username: username.into(),
                     password: inline_connection_password(connection.auth.as_ref())
-                        .unwrap_or_default(),
-                    settings,
+                        .unwrap_or_default()
+                        .into(),
+                    settings: settings.into(),
                     credential_lifetime:
                         nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime::Saved,
                     tcp_relay: None,
@@ -1029,7 +1030,7 @@ impl NyaTermApp {
             } => {
                 let backend = parse_rdp_backend(&backend).map_err(|error| error.to_string())?;
                 let mut config = RdpSessionConfig {
-                    relay,
+                    relay: relay.map(Into::into),
                     backend,
                     windows_authentication: security.windows_authentication.clone(),
                     name: connection.name.clone(),
@@ -1037,7 +1038,7 @@ impl NyaTermApp {
                     port,
                     username,
                     domain,
-                    password: inline_connection_password(connection.auth.as_ref()),
+                    password: inline_connection_password(connection.auth.as_ref()).map(Into::into),
                     use_nla: security.use_nla,
                     certificate_policy: parse_rdp_certificate_policy(&security.certificate_policy),
                     administrative_session: security.administrative_session,
@@ -1067,11 +1068,11 @@ impl NyaTermApp {
             } => {
                 let config = VncSessionConfig {
                     username: username.clone(),
-                    relay,
+                    relay: relay.map(Into::into),
                     name: connection.name.clone(),
                     host,
                     port,
-                    password: inline_connection_password(connection.auth.as_ref()),
+                    password: inline_connection_password(connection.auth.as_ref()).map(Into::into),
                     security: VncSecurityConfig {
                         mode: parse_vnc_security_mode(&security.mode),
                     },

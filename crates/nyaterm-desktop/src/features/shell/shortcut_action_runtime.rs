@@ -9,10 +9,10 @@ use crate::shortcuts::{
     OpenNewSessionMenu, OpenSettings, PreviousTab, PreviousTerminalGroup, QuickSwitch, RenameFile,
     ResetZoom, ShortcutId, ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions,
     SwitchToTab, TemporarySshLink, TerminalClear, TerminalClearAll, TerminalCommandNext,
-    TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalLocalMode,
-    TerminalPaste, TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar,
-    ToggleNativeFullscreen, TogglePaneFocus, ToggleRdpFullscreen, ToggleRecording,
-    ToggleRightSidebar, UploadFile, ZoomIn, ZoomOut,
+    TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalCopyOrInterrupt,
+    TerminalFind, TerminalLocalMode, TerminalPaste, TerminalPasteSelected, TerminalSelectAll,
+    ToggleLeftSidebar, ToggleNativeFullscreen, TogglePaneFocus, ToggleRdpFullscreen,
+    ToggleRecording, ToggleRightSidebar, UploadFile, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -315,6 +315,30 @@ impl NyaTermApp {
             };
         }
 
+        let root = root.on_action(
+            cx.listener(|this, _: &TerminalCopyOrInterrupt, window, cx| {
+                if this.terminal.input_focus().is_focused(window)
+                    && this
+                        .session
+                        .active_id()
+                        .is_some_and(|id| this.terminal_has_selection_for_session(id))
+                {
+                    this.execute_shortcut_invocation(
+                        ShortcutInvocation {
+                            id: ShortcutId::TerminalCopy,
+                            tab_index: None,
+                        },
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                } else {
+                    // The keymap's NoAction guard has removed inherited UI Copy.
+                    // Propagating reaches the original KeyDown, never a synthetic SIGINT.
+                    cx.propagate();
+                }
+            }),
+        );
         root.on_action(direct_handler!(TerminalCopy, TerminalCopy))
             .on_action(direct_handler!(TerminalPaste, TerminalPaste))
             .on_action(direct_handler!(

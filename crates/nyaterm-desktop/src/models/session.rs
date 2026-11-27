@@ -228,6 +228,11 @@ impl SessionLaunchConfig {
 
 #[derive(Clone)]
 pub(crate) enum QuickSwitchItem {
+    Extension {
+        contribution: nyaterm_plugin_host::manager::Contribution,
+        title: String,
+        subtitle: String,
+    },
     Session {
         id: String,
         title: String,
@@ -254,6 +259,7 @@ pub(crate) enum QuickSwitchItem {
 impl QuickSwitchItem {
     pub(crate) fn id(&self) -> String {
         match self {
+            Self::Extension { contribution, .. } => format!("extension:{}", contribution.id),
             Self::Session { id, .. } => format!("session:{id}"),
             Self::Connection { connection, .. } => format!("connection:{}", connection.id),
             Self::Pending { request_id, .. } => format!("session:{request_id}"),
@@ -262,7 +268,8 @@ impl QuickSwitchItem {
 
     pub(crate) fn title(&self) -> &str {
         match self {
-            Self::Session { title, .. }
+            Self::Extension { title, .. }
+            | Self::Session { title, .. }
             | Self::Connection { title, .. }
             | Self::Pending { title, .. } => title,
         }
@@ -270,7 +277,8 @@ impl QuickSwitchItem {
 
     pub(crate) fn subtitle(&self) -> &str {
         match self {
-            Self::Session { subtitle, .. }
+            Self::Extension { subtitle, .. }
+            | Self::Session { subtitle, .. }
             | Self::Connection { subtitle, .. }
             | Self::Pending { subtitle, .. } => subtitle,
         }
@@ -278,6 +286,9 @@ impl QuickSwitchItem {
 
     pub(crate) fn search_text(&self) -> String {
         match self {
+            Self::Extension {
+                title, subtitle, ..
+            } => format!("{title} {subtitle}"),
             Self::Session {
                 id,
                 title,

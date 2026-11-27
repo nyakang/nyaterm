@@ -34,6 +34,7 @@ pub(super) struct StatsPaneState {
     job: RemoteJobState<StatsJobResult>,
     status: String,
     cpu_expanded: bool,
+    memory_expanded: bool,
     manual_job_id: Option<u64>,
     warmup_retry_pending: bool,
     warmup_retry_attempted: bool,
@@ -302,6 +303,11 @@ impl StatsPaneState {
         self.touch();
     }
 
+    pub(super) fn toggle_memory_expanded(&mut self) {
+        self.memory_expanded = !self.memory_expanded;
+        self.touch();
+    }
+
     pub(super) fn reset_for_session_switch(&mut self) {
         self.job.reset_for_session_switch();
         self.manual_job_id = None;
@@ -321,6 +327,7 @@ impl StatsPaneState {
             job: RemoteJobState::new(),
             status: "start an SSH session to inspect remote stats".to_string(),
             cpu_expanded: false,
+            memory_expanded: false,
             manual_job_id: None,
             warmup_retry_pending: false,
             warmup_retry_attempted: false,
@@ -377,6 +384,7 @@ impl StatsPaneState {
                 .and_then(|id| self.selected_network_interfaces.get(id))
                 .cloned(),
             cpu_expanded: self.cpu_expanded,
+            memory_expanded: self.memory_expanded,
             pending: self.is_pending(),
             error: failures > 0,
             consecutive_refresh_failures: failures,

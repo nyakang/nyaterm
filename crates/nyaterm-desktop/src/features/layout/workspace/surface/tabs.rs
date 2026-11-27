@@ -9,7 +9,7 @@ use gpui::{
     SharedString, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
+use nyaterm_ui::{NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
 
 use crate::features::NyaTermApp;
 use crate::features::shell::{
@@ -529,39 +529,7 @@ impl NyaTermApp {
             .filter(|id| self.terminal_sync_session(id))
             .cloned()
             .collect::<Vec<_>>();
-        let sync_group = terminal_ids
-            .iter()
-            .find_map(|id| self.sync_input.active_group_for_session(id));
-        let sync_paused = !self.sync_input.broadcast_to_all()
-            && terminal_ids
-                .iter()
-                .any(|id| self.sync_input.session_is_paused_in_active_group(id));
-        let show_sync_indicator = !terminal_ids.is_empty()
-            && (self.sync_input.broadcast_to_all() || sync_group.is_some());
-        let sync_checkbox = (self.sync_input.input_selection_active() && !terminal_ids.is_empty())
-            .then(|| {
-                let (checked, mixed) = self.sync_input.tab_receive_state(&terminal_ids);
-                (checked, mixed, terminal_ids)
-            });
-        let sync_indicator_color = if self.sync_input.broadcast_to_all() {
-            palette.link
-        } else {
-            sync_group.map(|group| group.color).unwrap_or(palette.link)
-        };
-        let sync_indicator_label = show_sync_indicator.then(|| {
-            let scope = if self.sync_input.broadcast_to_all() {
-                t!("menu.broadcastToAll").to_string()
-            } else {
-                sync_group
-                    .map(|group| group.name.clone())
-                    .unwrap_or_default()
-            };
-            if sync_paused {
-                format!("{scope} · {}", t!("syncGroup.paused"))
-            } else {
-                scope
-            }
-        });
+        let sync_state = self.sync_input.tab_sync_state(&terminal_ids);
         let accent_color = if is_active {
             custom_color.unwrap_or(palette.primary)
         } else if let Some(custom_color) = custom_color {
@@ -633,9 +601,8 @@ impl NyaTermApp {
             .id(SharedString::from(format!("session-tab-{session_id}")))
             .debug_selector(|| format!("session-tab-{session_id}"))
             .group(tab_group_name.clone())
-            // HoverCard adds trigger-host elements between this tab and
-            // the 36px strip. Keep the tab's old explicit strip height so
-            // those hosts cannot collapse `h_full()` to content height.
+            // Keep the strip height definite for the title's hover-card host
+            // and fixed-size trailing actions.
             .h(px(36.))
             .min_w(px(SESSION_TAB_MIN_WIDTH))
             .max_w(px(SESSION_TAB_MAX_WIDTH))
@@ -644,7 +611,7 @@ impl NyaTermApp {
             .pr_2()
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(6.))
             .relative()
             .border_r_1()
             .border_color(rgb(palette.border))
@@ -782,110 +749,62 @@ impl NyaTermApp {
             .child(
                 div()
                     .min_w(px(12.))
-                    .text_size(px(12.))
-                    .font_weight(FontWeight(700.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight(500.))
                     .text_color(rgb(palette.text_dimmed))
                     .child(format!("{tab_number}")),
             )
             .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .max_w(px(160.))
-                    .text_size(px(12.))
-                    .font_weight(if is_active {
-                        FontWeight(700.)
-                    } else {
-                        FontWeight(500.)
-                    })
-                    .text_color(if is_disconnected {
-                        rgb(palette.text_dimmed)
-                    } else if is_active {
-                        rgb(palette.text)
-                    } else {
-                        rgb(palette.text_muted)
-                    })
-                    .overflow_hidden()
-                    // Without this the title wraps inside the tab and the
-                    // strip shows whichever line happens to land on the
-                    // one row of height it has — "ste", out of "System32".
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(tab_title.clone()),
+                NyaHoverCard::new(
+                    hover_card_id,
+                    div()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .min_w_0()
+                        .flex_1()
+                        .max_w(px(160.))
+                        .text_size(px(12.))
+                        .font_weight(if is_active {
+                            FontWeight(700.)
+                        } else {
+                            FontWeight(500.)
+                        })
+                        .text_color(if is_disconnected {
+                            rgb(palette.text_dimmed)
+                        } else if is_active {
+                            rgb(palette.text)
+                        } else {
+                            rgb(palette.text_muted)
+                        })
+                        .overflow_hidden()
+                        // Without this the title wraps inside the tab and the
+                        // strip shows whichever line happens to land on the
+                        // one row of height it has — "ste", out of "System32".
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(tab_title.clone()),
+                    hover_card,
+                )
+                .placement(NyaPopoverPlacement::Bottom)
+                .align(NyaPopoverAlign::Start)
+                .flexible_trigger()
+                .suspended(
+                    self.session.dialog_tab_actions_target().is_some()
+                        || self.session.tab_drag_is_pending(),
+                ),
             )
-            .when_some(sync_indicator_label, |this, label| {
-                this.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "session-tab-sync-{close_session_id}"
-                        )))
-                        .tooltip(move |window, cx| {
-                            nyaterm_ui::NyaTooltip::new(label.clone()).build(window, cx)
-                        })
-                        .size(px(12.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .opacity(if sync_paused { 0.4 } else { 1. })
-                        .child(
-                            svg()
-                                .size(px(10.))
-                                .path("icons/sync.svg")
-                                .text_color(rgb(sync_indicator_color)),
-                        ),
-                )
-            })
-            .when_some(sync_checkbox, |this, (checked, mixed, session_ids)| {
-                this.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "session-tab-sync-receive-{close_session_id}"
-                        )))
-                        .debug_selector(|| "session-tab-sync-receive".to_string())
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
-                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .tooltip(move |window, cx| {
-                            nyaterm_ui::NyaTooltip::new(if mixed {
-                                t!("syncGroup.receiveInputMixed").to_string()
-                            } else {
-                                t!("syncGroup.receiveInput").to_string()
-                            })
-                            .build(window, cx)
-                        })
-                        .child(
-                            NyaCheckbox::new(SharedString::from(format!(
-                                "session-tab-sync-receive-box-{close_session_id}"
-                            )))
-                            .checked(checked)
-                            .on_click(cx.listener(
-                                move |this, receive: &bool, _, cx| {
-                                    cx.stop_propagation();
-                                    this.set_sessions_receive_sync_input(
-                                        &session_ids,
-                                        *receive,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .when(mixed, |this| {
-                            this.child(
-                                div()
-                                    .text_size(px(9.))
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(t!("syncGroup.partial").to_string()),
-                            )
-                        }),
-                )
+            .when_some(sync_state, |this, state| {
+                this.child(self.sync_input_tab_button(close_session_id.clone(), state, cx))
             })
             .when(has_unread && !is_active, |this| {
-                this.child(div().size(px(7.)).rounded_full().bg(rgb(palette.success)))
+                this.child(
+                    div()
+                        .size(px(6.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(rgb(palette.success)),
+                )
             })
             .child(
                 div()
@@ -958,13 +877,7 @@ impl NyaTermApp {
                     }
                 }),
             );
-        NyaHoverCard::new(hover_card_id, tab, hover_card)
-            .anchor(Anchor::TopLeft)
-            .suspended(
-                self.session.dialog_tab_actions_target().is_some()
-                    || self.session.tab_drag_is_pending(),
-            )
-            .into_any_element()
+        tab.into_any_element()
     }
 
     pub(in crate::features) fn session_tab_strip(
@@ -1435,13 +1348,13 @@ mod tests {
     use super::{tab_drop_insert_after, tab_scroll_x, tab_strip_overflows};
 
     #[test]
-    fn checkbox_click_keeps_the_active_tab_and_terminal_focus() {
+    fn sync_button_keeps_focus_isolates_mouse_actions_and_preserves_geometry() {
         use crate::features::NyaTermApp;
         use crate::features::test_support::app_with_visible_local_session;
         use crate::test_support::{TestAppCleanup, TestConfigDir};
         use gpui::{
-            AppContext as _, Entity, IntoElement, Modifiers, Render, TestAppContext, div,
-            prelude::*, px, size,
+            AppContext as _, Entity, IntoElement, Modifiers, MouseButton, MouseDownEvent,
+            MouseMoveEvent, MouseUpEvent, Render, TestAppContext, div, point, prelude::*, px, size,
         };
 
         struct Host(Entity<NyaTermApp>);
@@ -1465,7 +1378,7 @@ mod tests {
                 })
             }
         }
-        let root = TestConfigDir::new("nyaterm-sync-checkbox-focus");
+        let root = TestConfigDir::new("nyaterm-sync-button-focus");
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "active");
@@ -1480,7 +1393,10 @@ mod tests {
                 cx,
             );
         });
-        let (_, vcx) = cx.add_window_view(|_, _| Host(app.clone()));
+        let (_, vcx) = cx.add_window_view(|_, cx| {
+            cx.observe(&app, |_, _, cx| cx.notify()).detach();
+            Host(app.clone())
+        });
         vcx.simulate_resize(size(px(480.), px(100.)));
         vcx.update(|window, cx| {
             let focus = app.read(cx).terminal.input_focus().clone();
@@ -1488,15 +1404,149 @@ mod tests {
             _ = window.draw(cx);
         });
         vcx.run_until_parked();
-        let checkbox = vcx.debug_bounds("session-tab-sync-receive").unwrap();
-        vcx.simulate_click(checkbox.center(), Modifiers::default());
+        let button = vcx.debug_bounds("session-tab-sync-receive").unwrap();
+        let tab = vcx.debug_bounds("session-tab-other").unwrap();
+        assert_eq!(button.size, size(px(24.), px(24.)));
+        assert_eq!(tab.size.height, px(36.));
+        let revision = vcx.update(|_, cx| app.read(cx).sync_input.revision());
+        vcx.simulate_click(button.center(), Modifiers::default());
         vcx.update(|window, cx| {
             let app = app.read(cx);
             assert!(!app.sync_input.session_receives_input("other"));
+            assert_eq!(app.sync_input.revision(), revision + 1);
             assert_eq!(app.session.active_id(), Some("active"));
             assert!(app.terminal.input_focus().is_focused(window));
             assert!(!app.session.tab_drag_source_is("other"));
         });
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(vcx.debug_bounds("session-tab-other").unwrap(), tab);
+        assert_eq!(
+            vcx.debug_bounds("session-tab-sync-receive").unwrap(),
+            button
+        );
+        vcx.simulate_event(MouseMoveEvent {
+            position: button.center(),
+            ..Default::default()
+        });
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(vcx.debug_bounds("session-tab-other").unwrap(), tab);
+        vcx.simulate_click(button.center(), Modifiers::default());
+        vcx.update(|_, cx| assert!(app.read(cx).sync_input.session_receives_input("other")));
+
+        // A middle press must not reach the tab's configurable close action.
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Middle,
+            position: button.center(),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        vcx.simulate_event(MouseUpEvent {
+            button: MouseButton::Middle,
+            position: button.center(),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        });
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            assert!(app.session.metadata("other").is_some());
+            assert!(app.sync_input.session_receives_input("other"));
+            assert_eq!(app.session.active_id(), Some("active"));
+            assert!(app.terminal.input_focus().is_focused(window));
+        });
+
+        // Starting a drag on the button must not initiate a tab reorder.
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: button.center(),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        let outside = button.center() + point(px(100.), px(40.));
+        vcx.simulate_event(MouseMoveEvent {
+            position: outside,
+            pressed_button: Some(MouseButton::Left),
+            ..Default::default()
+        });
+        vcx.update(|_, cx| {
+            assert!(!cx.has_active_drag());
+            assert!(!app.read(cx).session.tab_drag_source_is("other"));
+        });
+        vcx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: outside,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        });
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Right,
+            position: button.center(),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+            assert!(nyaterm_ui::nya_popup_menu_is_active(window, cx));
+            let app = app.read(cx);
+            assert!(app.session.dialog_tab_actions_target().is_none());
+            assert_eq!(app.session.active_id(), Some("active"));
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            assert!(!nyaterm_ui::nya_popup_menu_is_active(window, cx));
+            assert!(app.read(cx).terminal.input_focus().is_focused(window));
+        });
+
+        for (theme, dark) in [
+            ("one-dark-pro", true),
+            ("one-light", false),
+            ("nord-light", false),
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.settings.set_appearance_theme(theme.into());
+                    assert_eq!(app.theme_palette().is_dark(), dark);
+                    nyaterm_ui::apply_component_theme(
+                        app.theme_palette(),
+                        gpui::font("Arial"),
+                        px(12.),
+                        cx,
+                    );
+                    cx.notify();
+                })
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            assert_eq!(
+                vcx.debug_bounds("session-tab-sync-receive").unwrap().size,
+                size(px(24.), px(24.))
+            );
+            assert_eq!(
+                vcx.debug_bounds("session-tab-other").unwrap().size,
+                tab.size
+            );
+        }
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.sync_input.toggle_broadcast_to_all();
+                cx.notify();
+            })
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert!(vcx.debug_bounds("session-tab-sync-receive").is_none());
     }
 
     #[test]

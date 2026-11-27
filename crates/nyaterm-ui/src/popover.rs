@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Focusable as _, InteractiveElement as _, IntoElement,
@@ -53,6 +53,41 @@ impl From<NyaPopoverAlign> for gpui_base::Align {
 struct NyaPopoverAnchorState {
     bounds: Bounds<Pixels>,
     captured: bool,
+    open: bool,
+    content_bounds: Option<Bounds<Pixels>>,
+}
+
+/// Related side-positioned surfaces share their outside-click boundary.
+/// Only weak geometry handles are retained; selection and open state stay with callers.
+#[derive(Clone, Default)]
+pub struct NyaPopoverGroup(Rc<RefCell<Vec<gpui::WeakEntity<NyaPopoverAnchorState>>>>);
+
+impl NyaPopoverGroup {
+    fn register(&self, state: &gpui::Entity<NyaPopoverAnchorState>) {
+        let mut members = self.0.borrow_mut();
+        members.retain(|member| member.upgrade().is_some());
+        if !members
+            .iter()
+            .any(|member| member.entity_id() == state.entity_id())
+        {
+            members.push(state.downgrade());
+        }
+    }
+
+    fn contains(&self, position: gpui::Point<Pixels>, cx: &App) -> bool {
+        self.0
+            .borrow()
+            .iter()
+            .filter_map(|member| member.upgrade())
+            .any(|member| {
+                let member = member.read(cx);
+                member.open
+                    && (member.bounds.contains(&position)
+                        || member
+                            .content_bounds
+                            .is_some_and(|bounds| bounds.contains(&position)))
+            })
+    }
 }
 
 #[derive(IntoElement)]
@@ -93,6 +128,8 @@ pub struct NyaPopover {
     trigger_click: bool,
     on_open_change: Option<NyaPopoverOpenHandler>,
     on_click_outside: Option<NyaPopoverOutsideHandler>,
+    dismissal_group: Option<NyaPopoverGroup>,
+    dismissal_group_root: bool,
 }
 
 impl NyaPopover {
@@ -115,6 +152,8 @@ impl NyaPopover {
             trigger_click: true,
             on_open_change: None,
             on_click_outside: None,
+            dismissal_group: None,
+            dismissal_group_root: false,
         }
     }
 
@@ -164,6 +203,19 @@ impl NyaPopover {
         self
     }
 
+    /// Keep related side-positioned popovers open when clicking any member.
+    pub fn dismissal_group(mut self, group: &NyaPopoverGroup) -> Self {
+        self.dismissal_group = Some(group.clone());
+        self
+    }
+
+    /// Root of a related surface tree; discard geometry from children no longer rendered.
+    pub fn dismissal_group_root(mut self, group: &NyaPopoverGroup) -> Self {
+        self.dismissal_group = Some(group.clone());
+        self.dismissal_group_root = true;
+        self
+    }
+
     pub fn on_open_change(
         mut self,
         handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
@@ -199,6 +251,18 @@ impl RenderOnce for NyaPopover {
             NyaPopoverAnchorState::default()
         });
         let open = state.read(cx).is_open();
+        anchor_state.update(cx, |anchor, _| {
+            anchor.open = open;
+            if !open {
+                anchor.content_bounds = None;
+            }
+        });
+        if let Some(group) = &self.dismissal_group {
+            if self.dismissal_group_root {
+                group.0.borrow_mut().clear();
+            }
+            group.register(&anchor_state);
+        }
         let parent_view_id = window.current_view();
         let mut root = div()
             .id(id)
@@ -257,12 +321,34 @@ impl RenderOnce for NyaPopover {
                     .shadow(gpui_base::Theme::global(cx).tokens.shadow.md)
                     .p_3()
             })
-            .child(self.content);
+            .relative()
+            .child(self.content)
+            .child(
+                canvas(
+                    {
+                        let anchor_state = anchor_state.clone();
+                        move |bounds, _, cx| {
+                            anchor_state
+                                .update(cx, |anchor, _| anchor.content_bounds = Some(bounds));
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            );
         if self.overlay_closable {
             let on_click_outside = self.on_click_outside.clone();
+            let group = self.dismissal_group.clone();
             content = content.on_mouse_down_out({
                 let state = state.clone();
-                move |_, window, cx| {
+                move |event, window, cx| {
+                    if group
+                        .as_ref()
+                        .is_some_and(|group| group.contains(event.position, cx))
+                    {
+                        return;
+                    }
                     state.update(cx, |state, cx| state.dismiss(window, cx));
                     if let Some(on_click_outside) = on_click_outside.as_ref() {
                         on_click_outside(window, cx);
@@ -618,5 +704,101 @@ mod tests {
         cx.simulate_click(point(px(4.), px(4.)), Modifiers::default());
         draw(cx);
         assert!(cx.debug_bounds("anchored-popover-content").is_none());
+    }
+    struct NestedPopoverFixture {
+        group: super::NyaPopoverGroup,
+        parent_open: bool,
+        child_open: bool,
+        clicks: usize,
+    }
+    impl Render for NestedPopoverFixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+            let child = NyaPopover::new(
+                "nested-child",
+                div().w(px(120.)).h(px(28.)),
+                div()
+                    .id("nested-child-body")
+                    .debug_selector(|| "nested-child-body".into())
+                    .w(px(160.))
+                    .h(px(80.))
+                    .on_click(cx.listener(|this, _, _, _| this.clicks += 1)),
+            )
+            .placement(NyaPopoverPlacement::Right)
+            .align(NyaPopoverAlign::Start)
+            .appearance(false)
+            .trigger_click(false)
+            .dismissal_group(&self.group)
+            .open(self.child_open)
+            .on_open_change(cx.listener(|this, open, _, cx| {
+                this.child_open = *open;
+                cx.notify();
+            }));
+            div().size_full().p_20().child(
+                NyaPopover::new(
+                    "nested-parent",
+                    div().w(px(120.)).h(px(28.)),
+                    div()
+                        .debug_selector(|| "nested-parent-body".into())
+                        .w(px(120.))
+                        .h(px(100.))
+                        .child(child),
+                )
+                .placement(NyaPopoverPlacement::Bottom)
+                .align(NyaPopoverAlign::Start)
+                .appearance(false)
+                .trigger_click(false)
+                .dismissal_group_root(&self.group)
+                .open(self.parent_open)
+                .on_open_change(cx.listener(|this, open, _, cx| {
+                    this.parent_open = *open;
+                    if !open {
+                        this.child_open = false;
+                    }
+                    cx.notify();
+                })),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn nested_popovers_share_click_boundary_and_forget_closed_children(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, _| NestedPopoverFixture {
+            group: Default::default(),
+            parent_open: true,
+            child_open: true,
+            clicks: 0,
+        });
+        for _ in 0..4 {
+            draw(cx);
+        }
+        let child = cx.debug_bounds("nested-child-body").unwrap();
+        cx.simulate_click(child.center(), Modifiers::default());
+        draw(cx);
+        fixture.read_with(cx, |fixture, _| {
+            assert_eq!(fixture.clicks, 1);
+            assert!(fixture.parent_open && fixture.child_open);
+        });
+        let parent = cx.debug_bounds("nested-parent-body").unwrap();
+        cx.simulate_click(parent.origin + point(px(4.), px(90.)), Modifiers::default());
+        draw(cx);
+        fixture.read_with(cx, |fixture, _| {
+            assert!(fixture.parent_open && fixture.child_open)
+        });
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::default());
+        draw(cx);
+        fixture.read_with(cx, |fixture, _| {
+            assert!(!fixture.parent_open && !fixture.child_open)
+        });
+        fixture.update(cx, |fixture, cx| {
+            fixture.parent_open = true;
+            cx.notify();
+        });
+        for _ in 0..3 {
+            draw(cx);
+        }
+        cx.simulate_click(child.center(), Modifiers::default());
+        draw(cx);
+        fixture.read_with(cx, |fixture, _| assert!(!fixture.parent_open));
     }
 }

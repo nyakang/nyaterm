@@ -37,7 +37,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a>
+  <a href="./docs-site/i18n/README.zh-CN.md">简体中文</a> · <a href="./docs-site/i18n/README.pt-BR.md">Português (Brasil)</a>
 </p>
 
 ---

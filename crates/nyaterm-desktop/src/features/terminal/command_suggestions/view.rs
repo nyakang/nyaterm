@@ -117,7 +117,7 @@ impl NyaTermApp {
                 menu_size: (menu_w, menu_h),
             },
             SuggestionOverlayPolicy::BelowFirst {
-                minimum_height: command_suggestion_desired_height(state.items.len().min(2)),
+                minimum_height: command_suggestion_desired_height(1),
             },
         ) else {
             return div().into_any_element();
@@ -866,7 +866,7 @@ mod overlay_position_tests {
                 menu_size: (380.0, command_suggestion_desired_height(item_count)),
             },
             SuggestionOverlayPolicy::BelowFirst {
-                minimum_height: command_suggestion_desired_height(item_count.min(2)),
+                minimum_height: command_suggestion_desired_height(1),
             },
         )
     }
@@ -892,11 +892,11 @@ mod overlay_position_tests {
 
     #[test]
     fn command_overlay_flips_only_below_minimum_height() {
-        let at_minimum = command_placement((1024.0, 650.0), (26, 4), 12).unwrap();
-        assert_eq!(at_minimum.height, 106.0);
+        let at_minimum = command_placement((1024.0, 622.0), (26, 4), 12).unwrap();
+        assert_eq!(at_minimum.height, 78.0);
         assert_eq!(at_minimum.direction, SuggestionOverlayDirection::Below);
 
-        let below_minimum = command_placement((1024.0, 649.0), (26, 4), 12).unwrap();
+        let below_minimum = command_placement((1024.0, 621.0), (26, 4), 12).unwrap();
         assert_eq!(below_minimum.direction, SuggestionOverlayDirection::Above);
         assert_eq!(below_minimum.y + below_minimum.height, 512.0);
     }
@@ -916,7 +916,7 @@ mod overlay_position_tests {
         assert_eq!(placement.direction, SuggestionOverlayDirection::Above);
         assert_eq!(placement.y, 100.0);
         assert_eq!(placement.height, 156.0);
-        assert!(command_placement((1024.0, 300.0), (6, 4), 12).is_none());
+        assert!(command_placement((1024.0, 250.0), (4, 4), 12).is_none());
     }
 
     #[test]

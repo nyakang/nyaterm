@@ -132,6 +132,7 @@ impl NyaTermApp {
                 return moved;
             }
             A::ToggleCpu => self.toggle_stats_cpu_expanded(cx),
+            A::ToggleMemory => self.remote_ops.toggle_stats_memory_expanded(),
             A::ToggleNetworkInterfaces => {
                 if let Some(id) = self.session.active_id().map(str::to_string) {
                     self.remote_ops.toggle_stats_network_interfaces(&id);
@@ -793,6 +794,105 @@ mod tests {
             assert_eq!(state.network_traffic().unwrap().rx_bytes_per_sec, 10.);
             assert_eq!(network_select.read(cx).selected_value(), Some("all"));
         });
+    }
+
+    #[test]
+    fn cpu_and_memory_details_toggle_from_card_headers() {
+        use nyaterm_remote_ops::stats::{CpuCoreUsage, MemoryInfo, RemoteStats};
+
+        let test_dir = TestConfigDir::new("nyaterm-stats-details");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        activate_ssh_session(&app, &mut cx);
+        let panel = cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            let mut stats = RemoteStats::default();
+            stats.cpu.cores = 2;
+            stats.cpu.per_core = vec![
+                CpuCoreUsage { id: 0, usage: 10. },
+                CpuCoreUsage { id: 1, usage: 20. },
+            ];
+            stats.memory = MemoryInfo {
+                used: 1024,
+                available: 2048,
+                free: Some(1024),
+                buffers: Some(64),
+                shared: Some(32),
+                swap_total: Some(0),
+                swap_used: Some(0),
+                ..Default::default()
+            };
+            let ticket = app
+                .remote_ops
+                .begin_stats_job("remote-panel-test".into(), false);
+            app.remote_ops.apply_stats_event(
+                crate::features::runtime_jobs::StatsJobResult {
+                    users_revision: 0,
+                    job_id: ticket.job_id,
+                    session_id: "remote-panel-test".into(),
+                    result: Ok(stats),
+                },
+                Some("remote-panel-test"),
+            );
+            app.flush_remote_panel_snapshots(cx);
+            app.remote_panels.entity(RemoteMonitorKind::Stats).clone()
+        });
+        let (_, vcx) = cx.add_window_view(move |_, _| PanelHost {
+            panels: vec![panel],
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        for theme in ["dark", "light"] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.settings.set_appearance_theme(theme.to_string());
+                    app.sync_component_theme(cx);
+                    app.flush_remote_panel_snapshots(cx);
+                });
+            });
+            for width in [280., 400.] {
+                vcx.simulate_resize(gpui::size(gpui::px(width), gpui::px(1600.)));
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+                for (trigger, body, details) in [
+                    (
+                        "stats-cpu-cores-toggle-trigger",
+                        "stats-cpu-body",
+                        "stats-cpu-details",
+                    ),
+                    (
+                        "stats-memory-toggle-trigger",
+                        "stats-memory-body",
+                        "stats-memory-details",
+                    ),
+                ] {
+                    let bounds = vcx.debug_bounds(trigger).unwrap();
+                    let body_bounds = vcx.debug_bounds(body).unwrap();
+                    assert_eq!(
+                        bounds.right(),
+                        body_bounds.right(),
+                        "{theme}: {trigger} at {width}"
+                    );
+                    assert!(bounds.bottom() <= body_bounds.top());
+                    assert!(vcx.debug_bounds(details).is_none());
+                    vcx.simulate_click(bounds.center(), gpui::Modifiers::default());
+                    vcx.run_until_parked();
+                    vcx.update(|window, cx| {
+                        _ = window.draw(cx);
+                    });
+                    assert!(vcx.debug_bounds(details).is_some());
+                    let bounds = vcx.debug_bounds(trigger).unwrap();
+                    vcx.simulate_click(bounds.center(), gpui::Modifiers::default());
+                    vcx.run_until_parked();
+                    vcx.update(|window, cx| {
+                        _ = window.draw(cx);
+                    });
+                    assert!(vcx.debug_bounds(details).is_none());
+                }
+            }
+        }
     }
 
     #[test]
@@ -1747,28 +1847,30 @@ mod isolation_tests {
                 .entity(RemoteMonitorKind::Stats)
                 .clone()
         });
-        let before = vcx.update(|_, cx| panel.read(cx).snapshot_revision());
+        for action in [
+            nyaterm_remote_monitor_gpui::actions::RemoteMonitorAction::ToggleCpu,
+            nyaterm_remote_monitor_gpui::actions::RemoteMonitorAction::ToggleMemory,
+        ] {
+            let before = vcx.update(|_, cx| panel.read(cx).snapshot_revision());
 
-        vcx.update(|_, cx| {
-            panel.update(cx, |panel, cx| {
-                panel.test_dispatch(
-                    nyaterm_remote_monitor_gpui::actions::RemoteMonitorAction::ToggleCpu,
-                    cx,
-                );
-                assert_eq!(
-                    panel.snapshot_revision(),
-                    before,
-                    "the snapshot must remain unchanged until the panel lease is released"
-                );
+            vcx.update(|_, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.test_dispatch(action, cx);
+                    assert_eq!(
+                        panel.snapshot_revision(),
+                        before,
+                        "the snapshot must remain unchanged until the panel lease is released"
+                    );
+                });
             });
-        });
-        vcx.run_until_parked();
+            vcx.run_until_parked();
 
-        let after = vcx.update(|_, cx| panel.read(cx).snapshot_revision());
-        assert!(
-            after > before,
-            "the deferred interaction flush must publish the changed stats state"
-        );
+            let after = vcx.update(|_, cx| panel.read(cx).snapshot_revision());
+            assert!(
+                after > before,
+                "the deferred interaction flush must publish the changed stats state"
+            );
+        }
     }
 
     /// A GPU mutation must not re-render Stats or NPU.

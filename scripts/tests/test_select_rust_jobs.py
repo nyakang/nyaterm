@@ -445,6 +445,9 @@ class WorkflowWiringTests(unittest.TestCase):
         jobs = workflow_jobs("rust.yml")
         self.assertIn("cargo clippy --workspace --all-targets --locked -- -D warnings", jobs["lint"])
         self.assertIn("cargo test --workspace --locked --no-fail-fast", jobs["test"])
+        self.assertIn("      - name: Test SSH detached close lifecycle\n        run:", jobs["test"])
+        self.assertIn("          repeated_detached_close_releases_shared_and_independent_ssh_owners\n"
+                      "          --locked -- --ignored --test-threads=1", jobs["test"])
         self.assertIn("cargo test -p nyaterm-transport --lib real_tmux --locked -- --ignored", jobs["tmux-compatibility"])
         self.assertEqual(re.findall(r"^            tmux: (.+)$", jobs["tmux-compatibility"], flags=re.M), ["3.2a", "'3.4'", "'3.8'", "system"])
 

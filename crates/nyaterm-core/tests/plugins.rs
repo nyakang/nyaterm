@@ -7,11 +7,11 @@ use nyaterm_core::plugins::template::{expand, validate_template};
 use nyaterm_core::plugins::{ErrorCode, validate_id, validate_resource_path};
 
 const HOST: &str = "2.0.0-preview.4";
-const V1: &str = include_str!("fixtures/plugins/plugin-v1.toml");
+const V2: &str = include_str!("fixtures/plugins/plugin-v2.toml");
 
 #[test]
-fn v1_fixture_loads_and_versions_are_separate() {
-    let manifest = PluginManifest::parse(V1, HOST).unwrap();
+fn v2_fixture_loads_and_versions_are_separate() {
+    let manifest = PluginManifest::parse(V2, HOST).unwrap();
     assert_eq!(
         manifest.contribution_id(&manifest.actions[0]),
         "diagnostics:inspect"
@@ -21,12 +21,12 @@ fn v1_fixture_loads_and_versions_are_separate() {
     preferences.validate().unwrap();
     assert!(preferences.plugins["diagnostics"].enabled);
     for (from, to) in [
-        ("schema_version = 1", "schema_version = 2"),
-        ("api_version = \"1.0.0\"", "api_version = \"2.0.0\""),
+        ("schema_version = 2", "schema_version = 1"),
+        ("api_version = \"2.0.0\"", "api_version = \"1.0.0\""),
         (">=2.0.0-preview.4", ">=3.0.0"),
     ] {
         assert_eq!(
-            PluginManifest::parse(&V1.replace(from, to), HOST)
+            PluginManifest::parse(&V2.replace(from, to), HOST)
                 .unwrap_err()
                 .code,
             ErrorCode::Incompatible
@@ -36,18 +36,18 @@ fn v1_fixture_loads_and_versions_are_separate() {
 
 #[test]
 fn unknown_fields_capabilities_duplicates_and_bad_metadata_are_rejected() {
-    assert!(PluginManifest::parse(&format!("unknown = true\n{V1}"), HOST).is_err());
+    assert!(PluginManifest::parse(&format!("unknown = true\n{V2}"), HOST).is_err());
     assert!(
         PluginManifest::parse(
-            &V1.replace(
-                "api_version = \"1.0.0\"",
-                "api_version = \"1.0.0\"\ncapabilities = [\"network\"]"
+            &V2.replace(
+                "api_version = \"2.0.0\"",
+                "api_version = \"2.0.0\"\ncapabilities = [\"unknown_capability\"]"
             ),
             HOST
         )
         .is_err()
     );
-    let mut manifest = PluginManifest::parse(V1, HOST).unwrap();
+    let mut manifest = PluginManifest::parse(V2, HOST).unwrap();
     manifest.actions.push(manifest.actions[0].clone());
     assert_eq!(
         manifest.validate(HOST).unwrap_err().code,
@@ -88,7 +88,7 @@ fn paths_reject_cross_platform_traversal_aliases_and_devices() {
 
 #[test]
 fn templates_have_explicit_quoting_and_no_implicit_evaluation() {
-    let manifest = PluginManifest::parse(V1, HOST).unwrap();
+    let manifest = PluginManifest::parse(V2, HOST).unwrap();
     let action = &manifest.actions[0];
     let mut input = ActionInput::default();
     input

@@ -436,7 +436,7 @@ pub(crate) fn resolve_helper(package: &str, env_var: &str) -> Result<PathBuf, St
         // Debug builds only produce the helper when its package is built too, so
         // name the command instead of leaving a bare missing-file error.
         Err(format!(
-            "{filename} is missing beside NyaTerm ({}); build it with `cargo build -p {package}`",
+            "{filename} is missing beside NyaTerm ({}); install it in Plugins or run `cargo build -p {package}` in nyaterm-plugins/native",
             path.display()
         ))
     }
@@ -548,7 +548,11 @@ mod tests {
     };
 
     fn packet(version: u32) -> crate::Packet {
-        encode_control(&RdpControlMessage::ClientHello { version }).expect("small control packet")
+        encode_control(&RdpControlMessage::ClientHello {
+            version,
+            frame_update_complete: false,
+        })
+        .expect("small control packet")
     }
 
     fn mailbox_writer() -> IpcWriter {

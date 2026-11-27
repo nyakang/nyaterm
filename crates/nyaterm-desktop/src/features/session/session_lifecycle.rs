@@ -72,7 +72,7 @@ impl NyaTermApp {
 
         match metadata.launch_config_for_restart() {
             SessionLaunchConfig::AdbShell(config) => {
-                self.open_android_view(
+                self.request_android_view(
                     config,
                     nyaterm_core::models::android::AndroidViewKind::Shell,
                     SavedConnectionStartOptions {
@@ -92,7 +92,7 @@ impl NyaTermApp {
                     }
                     _ => nyaterm_core::models::android::AndroidViewKind::Screen,
                 };
-                self.open_android_view(
+                self.request_android_view(
                     config,
                     kind,
                     SavedConnectionStartOptions {
@@ -383,6 +383,9 @@ impl NyaTermApp {
         };
         if update.already_disconnected {
             return;
+        }
+        if self.android.kind(session_id).is_some() {
+            self.sync_android_discovery();
         }
         self.close_terminal_executions_for_session(session_id, cx);
         if self

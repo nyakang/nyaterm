@@ -25,7 +25,7 @@ import spice_associations
 import spice_release
 import spice_unix
 
-BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-android-helper", "nyaterm-spice-helper")
+BINARIES = ("nyaterm", "nyaterm-mcp")
 ANDROID_LIBRARIES = {"libavcodec.so.62", "libavformat.so.62", "libavutil.so.60", "libswscale.so.9"}
 LIMITS = {"GLIBC": (2, 31), "GLIBCXX": (3, 4, 28), "CXXABI": (1, 3, 12)}
 # These SONAMEs are supplied by the documented focal desktop. No newer SSL/FFI,
@@ -249,7 +249,7 @@ def create_deb(stage, output, version):
             Depends: bash, {}
             Recommends: libvulkan1 | mesa-vulkan-drivers
             Description: NyaTerm Ubuntu 20.04 compatibility build with GPU rendering and a CPU fallback
-             Includes MCP/RDP/VNC/Android/SPICE helpers, ADB, FFmpeg and private SPICE/Mesa runtimes.
+             Includes MCP and private Mesa runtime; native protocol components are installed separately.
              Requires X11. Does not replace libc or system graphics drivers.
             """).format(version.replace("-", "~"), dependencies), encoding="utf-8")
         linux_icons.normalize_permissions(root)
@@ -312,8 +312,8 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         for name in BINARIES:
             shutil.copy2(binary_dir / name, stage / name)
             (stage / name).chmod(0o755)
-        android_reports = stage_android(binary_dir, stage)
-        spice_reports = stage_spice(binary_dir, stage)
+        android_reports = []
+        spice_reports = []
         reports = [audit(stage / name, android=name == "nyaterm-android-helper") for name in BINARIES]
         # Portable mode keeps all data beside the application, without touching
         # installed NyaTerm data or depending on a fixed installation prefix.

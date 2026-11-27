@@ -91,7 +91,7 @@ pub enum ShellInputLineKind {
 
 pub use graphics::{
     GraphicsEvent, GraphicsImageSnapshot, GraphicsIngress, GraphicsPlacement, GraphicsProtocol,
-    GraphicsScreenKind, GraphicsSegment, GraphicsSegmentRef, KittyDeleteMode,
+    GraphicsScreenKind, GraphicsSegment, GraphicsSegmentRef, GraphicsSourceRect, KittyDeleteMode,
     TerminalGraphicsState,
 };
 
@@ -1828,7 +1828,7 @@ impl TerminalCore {
                         self.cell_height_px,
                     );
                     if let Some(motion) = result.cursor_motion {
-                        // Kitty C=1: move past image via relative CSI (CUD + CHA).
+                        // Apply Kitty's cursor movement policy via CUD and CHA.
                         let ansi = motion.to_ansi();
                         self.sidecar.advance(&ansi);
                         self.parser.advance(&mut self.term, &ansi);

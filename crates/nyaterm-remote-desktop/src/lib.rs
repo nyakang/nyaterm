@@ -45,13 +45,13 @@ pub use protocol::{
     RdpRuntimeEvent, RdpServerCapabilities, RdpSessionConfig, RdpSessionDrain, RdpSessionState,
     RemoteCursorEvent, RemoteDesktopError, RemoteDesktopErrorCategory, RemoteDesktopViewState,
     RemoteFrameEvent, RemotePoint, RemotePointerButton, RemotePointerEvent, RemoteWheelAxis,
-    VncClipboardConfig, VncControlMessage, VncDisplayConfig, VncError, VncErrorKind, VncInputEvent,
-    VncReconnectConfig, VncRuntimeEvent, VncScaleMode, VncSecurityConfig, VncSecurityMode,
-    VncServerCapabilities, VncServerKeyRequest, VncSessionConfig, VncSessionDrain, VncSessionState,
-    parse_rdp_audio_mode, parse_rdp_backend, parse_rdp_certificate_policy,
-    parse_rdp_clipboard_mode, parse_rdp_display_mode, parse_rdp_drive_letters,
-    parse_vnc_scale_mode, parse_vnc_security_mode, toggle_rdp_drive_letter,
-    validate_committed_text,
+    VNC_PROTOCOL_VERSION, VncClipboardConfig, VncControlMessage, VncDisplayConfig, VncError,
+    VncErrorKind, VncInputEvent, VncReconnectConfig, VncRuntimeEvent, VncScaleMode,
+    VncSecurityConfig, VncSecurityMode, VncServerCapabilities, VncServerKeyRequest,
+    VncSessionConfig, VncSessionDrain, VncSessionState, parse_rdp_audio_mode, parse_rdp_backend,
+    parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
+    parse_rdp_drive_letters, parse_vnc_scale_mode, parse_vnc_security_mode,
+    toggle_rdp_drive_letter, validate_committed_text,
 };
 pub use session::{RdpSessionManager, resolve_helper_path};
 pub use vnc::{VncSessionManager, validate_vnc_config};

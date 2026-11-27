@@ -536,6 +536,9 @@ pub(in crate::features) struct SettingsPanel {
         super::workspace::theme_designer::ThemePickerControls,
     pub(in crate::features::pages::settings) keyword_color_pickers:
         super::terminal::keywords::KeywordColorPickerControls,
+    pub(in crate::features::pages::settings) connection_type_drop_target:
+        Option<super::workspace::connection_types::ConnectionTypeDropTarget>,
+    pub(in crate::features::pages::settings) connection_type_drop_clock_armed: bool,
     selects: SelectRegistry,
     select_subscriptions: Vec<Subscription>,
     ui_font_select_options: FontSelectOptionCache,
@@ -619,6 +622,8 @@ impl SettingsPanel {
             ],
             theme_picker_controls: Default::default(),
             keyword_color_pickers: Default::default(),
+            connection_type_drop_target: None,
+            connection_type_drop_clock_armed: false,
             selects: SelectRegistry::default(),
             select_subscriptions: Vec::new(),
             ui_font_select_options: FontSelectOptionCache::empty(),
@@ -1986,7 +1991,7 @@ forward_app_action!(
     prompt_diagnostics_export,
     prompt_keyword_highlight_import,
     reset_all_keybindings,
-    reset_remote_monitoring_intervals,
+    reset_remote_monitoring,
     reveal_log_dir,
     run_provider_cloud_sync_test,
     start_github_gist_auth,
@@ -2008,6 +2013,7 @@ forward_app_action!(
     toggle_interaction_alternate_scroll,
     toggle_disable_alternate_screen,
     toggle_interaction_copy_on_select,
+    toggle_interaction_free_type,
     toggle_mouse_events_require_alt,
     toggle_keyword_highlights,
     toggle_line_role_highlights,
@@ -2037,6 +2043,7 @@ forward_app_action!(
     toggle_terminal_zoom_enabled,
     toggle_file_manager_auto_collapse,
     toggle_transfer_ask_save_location,
+    toggle_transfer_external_editor_auto_upload,
     toggle_transfer_preserve_timestamps,
     toggle_transfer_resume_broken,
 );

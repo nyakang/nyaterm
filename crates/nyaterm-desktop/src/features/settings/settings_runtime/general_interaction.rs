@@ -18,6 +18,7 @@ pub(in crate::features) enum SettingsSaveKind {
     QuickCommands,
     Appearance,
     UiLayout,
+    HeaderStatus,
     Keybindings,
     FileExplorer,
 }
@@ -36,6 +37,7 @@ impl SettingsSaveKind {
             Self::QuickCommands => SettingsPersistenceDomain::QuickCommands,
             Self::Appearance => SettingsPersistenceDomain::Appearance,
             Self::UiLayout => SettingsPersistenceDomain::UiLayout,
+            Self::HeaderStatus => SettingsPersistenceDomain::HeaderStatus,
             Self::Keybindings => SettingsPersistenceDomain::Keybindings,
             Self::FileExplorer => SettingsPersistenceDomain::FileExplorer,
         }
@@ -54,6 +56,7 @@ impl SettingsSaveKind {
             Self::QuickCommands => "quick command UI settings",
             Self::Appearance => "appearance settings",
             Self::UiLayout => "UI layout settings",
+            Self::HeaderStatus => "header status settings",
             Self::Keybindings => "keybindings",
             Self::FileExplorer => "file explorer settings",
         }
@@ -94,6 +97,17 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.settings.move_connection_type(kind, down) {
+            self.save_general_settings(cx);
+        }
+    }
+
+    pub(in crate::features) fn move_connection_type_to(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        target_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.move_connection_type_to(kind, target_index) {
             self.save_general_settings(cx);
         }
     }
@@ -285,6 +299,18 @@ impl NyaTermApp {
         self.queue_settings_save(SettingsSaveKind::General, cx);
     }
 
+    pub(in crate::features) fn toggle_interaction_free_type(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_interaction_free_type();
+        self.sync_terminal_free_type_policy();
+        self.save_interaction_settings(cx);
+    }
+
+    pub(in crate::features) fn sync_terminal_free_type_policy(&mut self) {
+        if !self.settings.summary().interaction_free_type_enabled {
+            self.terminal.clear_free_type_interactions();
+        }
+    }
+
     pub(in crate::features) fn toggle_interaction_copy_on_select(
         &mut self,
         cx: &mut Context<Self>,
@@ -457,7 +483,7 @@ impl NyaTermApp {
         kind: SettingsSaveKind,
         cx: &mut Context<Self>,
     ) {
-        if self.shell.has_settings_draft() {
+        if self.shell.has_settings_draft() && !matches!(kind, SettingsSaveKind::UiLayout) {
             self.settings.mark_draft_domain_dirty(kind.domain());
             self.settings
                 .update_store_status(format!("{} changes staged", kind.label()), true);
@@ -492,7 +518,8 @@ impl NyaTermApp {
             SettingsSaveKind::Terminal => store.save_terminal_settings(&snapshot),
             SettingsSaveKind::QuickCommands => store.save_quick_command_ui_settings(&snapshot),
             SettingsSaveKind::Appearance => store.save_appearance_settings(&snapshot),
-            SettingsSaveKind::UiLayout => store.save_ui_layout_settings(&snapshot),
+            SettingsSaveKind::UiLayout => store.save_workspace_layout_settings(&snapshot),
+            SettingsSaveKind::HeaderStatus => store.save_header_status_settings(&snapshot),
             SettingsSaveKind::Keybindings => store.save_keybindings(&snapshot.keybindings),
             SettingsSaveKind::FileExplorer => store.save_file_explorer_favorite_dirs(&snapshot),
         };
@@ -522,10 +549,17 @@ impl NyaTermApp {
                 let completion =
                     this.settings
                         .finish_persistence(kind.domain(), event.generation, succeeded);
+                // Layout is already live. Reapplying a full store summary here
+                // could roll back a draft or a newer, still-debouncing layout.
                 if completion.apply_result
+                    && !matches!(kind, SettingsSaveKind::UiLayout)
                     && let Ok(settings) = event.outcome.as_ref()
                 {
-                    this.apply_gpui_settings(settings.clone(), cx);
+                    // The header setter already applied its values. Its completion
+                    // may arrive after a draft opens, so never reapply its snapshot.
+                    if !matches!(kind, SettingsSaveKind::HeaderStatus) {
+                        this.apply_gpui_settings(settings.clone(), cx);
+                    }
                     this.publish_shared_settings(settings.clone(), cx);
                 }
                 if completion.report_result {

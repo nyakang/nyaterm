@@ -10,8 +10,11 @@ impl NyaTermApp {
         state: &SendCommandBarViewState,
     ) -> gpui::AnyElement {
         NyaHexEditor::new(&state.send.hex, state.palette)
-            .id("send-command.hex")
-            .compact(state.density == SendCommandDensity::Compact)
+            .id(state.send.tab_id.input_id("hex"))
+            .compact(matches!(
+                state.density,
+                SendCommandDensity::Compact | SendCommandDensity::Minimal
+            ))
             .placeholder(state.input_hint.clone())
             .menu_labels([
                 t!("serialSend.copyHex").into(),

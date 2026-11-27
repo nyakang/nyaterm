@@ -481,6 +481,11 @@ impl ConnectionStore {
                 &["interaction", "copy_on_select"],
                 false,
             ),
+            interaction_free_type_enabled: json_bool(
+                &value,
+                &["interaction", "free_type_enabled"],
+                true,
+            ),
             interaction_allow_osc52_clipboard_write: json_bool(
                 &value,
                 &["interaction", "allow_osc52_clipboard_write"],
@@ -597,6 +602,11 @@ impl ConnectionStore {
             transfer_ask_save_location: json_bool(
                 &value,
                 &["transfer", "ask_save_location"],
+                false,
+            ),
+            transfer_external_editor_auto_upload: json_bool(
+                &value,
+                &["transfer", "external_editor_auto_upload"],
                 false,
             ),
             transfer_duplicate_strategy: normalize_transfer_duplicate_strategy(&json_string(
@@ -921,6 +931,11 @@ impl ConnectionStore {
             &["transfer", "ask_save_location"],
             serde_json::Value::Bool(settings.transfer_ask_save_location),
         );
+        set_nested_json_value(
+            &mut value,
+            &["transfer", "external_editor_auto_upload"],
+            serde_json::Value::Bool(settings.transfer_external_editor_auto_upload),
+        );
         set_nested_json_string(
             &mut value,
             &["transfer", "duplicate_strategy"],
@@ -1058,6 +1073,22 @@ impl ConnectionStore {
     pub fn save_ui_layout_settings(
         &self,
         settings: &AppSettingsSummary,
+    ) -> Result<AppSettingsSummary, StorageError> {
+        self.save_layout_settings(settings, true)
+    }
+
+    /// Workspace debounce writes must not commit a Settings header-status preview.
+    pub fn save_workspace_layout_settings(
+        &self,
+        settings: &AppSettingsSummary,
+    ) -> Result<AppSettingsSummary, StorageError> {
+        self.save_layout_settings(settings, false)
+    }
+
+    fn save_layout_settings(
+        &self,
+        settings: &AppSettingsSummary,
+        include_header_status: bool,
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
         set_nested_json_value(
@@ -1225,16 +1256,20 @@ impl ConnectionStore {
                 serde_json::Value::Null,
             ),
         }
-        set_nested_json_string(
-            &mut value,
-            &["ui", "header_status_mode"],
-            normalize_header_status_mode(&settings.ui_header_status_mode),
-        );
-        set_nested_json_bool(
-            &mut value,
-            &["ui", "header_status_visible"],
-            settings.ui_header_status_visible,
-        );
+        if include_header_status {
+            write_header_status_settings(&mut value, settings);
+        }
+        self.save_settings_value(&value)?;
+        self.load_app_settings_summary()
+    }
+
+    /// Header preferences share the legacy UI document, but own no workspace layout.
+    pub fn save_header_status_settings(
+        &self,
+        settings: &AppSettingsSummary,
+    ) -> Result<AppSettingsSummary, StorageError> {
+        let mut value = self.load_settings_value()?;
+        write_header_status_settings(&mut value, settings);
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
     }
@@ -1643,6 +1678,11 @@ impl ConnectionStore {
         );
         set_nested_json_value(
             &mut value,
+            &["interaction", "free_type_enabled"],
+            serde_json::Value::Bool(settings.interaction_free_type_enabled),
+        );
+        set_nested_json_value(
+            &mut value,
             &["interaction", "allow_osc52_clipboard_write"],
             serde_json::Value::Bool(settings.interaction_allow_osc52_clipboard_write),
         );
@@ -1806,12 +1846,12 @@ impl ConnectionStore {
             serde_json::to_value(&settings.connection_type_layout)?,
         );
         // UI language lives under ui.language (Tauri UiConfig.language).
-        let language = match settings.language.as_str() {
-            "zh-CN" | "zh" => "zh-CN",
-            "zh-TW" => "zh-TW",
-            "ja" => "ja",
-            _ => "en",
-        };
+        // Persist the caller's id verbatim instead of whitelisting a few locales:
+        // that whitelist silently rewrote every newly shipped language to `en`,
+        // so selecting pt-BR looked correct until the next startup reloaded `en`.
+        // Aliases are resolved when the setting is read and applied by the UI.
+        let language = settings.language.trim();
+        let language = if language.is_empty() { "en" } else { language };
         set_nested_json_string(&mut value, &["ui", "language"], language.to_string());
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
@@ -2744,6 +2784,19 @@ fn remove_nested_json_value(value: &mut serde_json::Value, path: &[&str]) {
     if let Some(object) = current.as_object_mut() {
         object.remove(*last);
     }
+}
+
+fn write_header_status_settings(value: &mut serde_json::Value, settings: &AppSettingsSummary) {
+    set_nested_json_string(
+        value,
+        &["ui", "header_status_mode"],
+        normalize_header_status_mode(&settings.ui_header_status_mode),
+    );
+    set_nested_json_bool(
+        value,
+        &["ui", "header_status_visible"],
+        settings.ui_header_status_visible,
+    );
 }
 
 /// The title bar's centre reading, defaulting to the session it always showed.
