@@ -32,6 +32,7 @@ pub enum RouteConnectError {
 }
 
 pub struct NetworkRoute {
+    config: NetworkRouteConfig,
     pub endpoint: RelayEndpoint,
     cancel: ConnectionAttempt,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -46,8 +47,42 @@ impl Drop for NetworkRoute {
 }
 
 impl NetworkRoute {
+    /// Creates a new authenticated relay using this route's resolved proxy and SSH chain.
+    /// Call off the UI thread; the original relay and its cancellation remain independent.
+    pub fn retarget(
+        &self,
+        host: String,
+        port: u16,
+        connect_hosts: Vec<String>,
+    ) -> anyhow::Result<Arc<Self>> {
+        anyhow::ensure!(
+            !host.is_empty()
+                && host.len() <= 253
+                && port != 0
+                && !host
+                    .chars()
+                    .any(|character| character.is_whitespace() || character.is_control()),
+            "invalid route destination"
+        );
+        anyhow::ensure!(
+            connect_hosts.len() <= 16
+                && connect_hosts.iter().all(|host| {
+                    !host.is_empty()
+                        && host.len() <= 253
+                        && !host
+                            .chars()
+                            .any(|character| character.is_whitespace() || character.is_control())
+                }),
+            "invalid route dial addresses"
+        );
+        let mut config = self.config.clone();
+        config.host = host;
+        config.port = port;
+        Self::spawn(config, ConnectionAttempt::default(), None, connect_hosts)
+    }
+
     pub fn start(config: NetworkRouteConfig) -> anyhow::Result<Arc<Self>> {
-        Self::spawn(config, ConnectionAttempt::default(), None)
+        Self::spawn(config, ConnectionAttempt::default(), None, Vec::new())
     }
 
     /// Establish one authenticated relay AND its remote stream before handing
@@ -59,7 +94,7 @@ impl NetworkRoute {
     ) -> Result<(std::net::TcpStream, Arc<Self>), RouteConnectError> {
         attempt.check().map_err(|_| RouteConnectError::Cancelled)?;
         let (ready, result) = oneshot::channel();
-        let route = Self::spawn(config, attempt.clone(), Some(ready))
+        let route = Self::spawn(config, attempt.clone(), Some(ready), Vec::new())
             .map_err(RouteConnectError::Establish)?;
         let connect = || -> Result<_, RouteConnectError> {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -118,6 +153,7 @@ impl NetworkRoute {
         mut config: NetworkRouteConfig,
         cancel: ConnectionAttempt,
         ready: Option<ReadySender>,
+        connect_hosts: Vec<String>,
     ) -> anyhow::Result<Arc<Self>> {
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
         listener.set_nonblocking(true)?;
@@ -125,6 +161,7 @@ impl NetworkRoute {
             address: listener.local_addr()?,
             token: uuid::Uuid::new_v4().simple().to_string().into(),
         };
+        let retained_config = config.clone();
         if let Some(jump) = config.jump.as_mut() {
             jump.bind_attempt(cancel.clone());
         }
@@ -157,7 +194,7 @@ impl NetworkRoute {
                             // A terminal owns exactly one route. Closing the listener
                             // also prevents reconnects from reusing a stale relay.
                             drop(listener);
-                            forward(local, config, stop, Some(ready)).await;
+                            forward(local, config, stop, Some(ready), connect_hosts).await;
                             return;
                         }
                     }
@@ -172,11 +209,12 @@ impl NetworkRoute {
                             continue;
                         }
                         let config = config.clone();
+                        let connect_hosts = connect_hosts.clone();
                         let token = token.clone();
                         let stop = stop.clone();
                         tasks.spawn(async move {
                             if authenticate(&mut local, &token, &stop).await {
-                                forward(local, config, stop, None).await;
+                                forward(local, config, stop, None, connect_hosts).await;
                             }
                         });
                     }
@@ -185,6 +223,7 @@ impl NetworkRoute {
                 });
             })?;
         Ok(Arc::new(Self {
+            config: retained_config,
             endpoint,
             cancel,
             worker: Mutex::new(Some(worker)),
@@ -220,10 +259,13 @@ async fn forward(
     config: NetworkRouteConfig,
     stop: ConnectionAttempt,
     ready: Option<ReadySender>,
+    connect_hosts: Vec<String>,
 ) {
     // Preserve interactive terminal latency across the extra loopback hop.
     let _ = local.set_nodelay(true);
-    let opened = stop.until_cancelled(open_stream(config)).await;
+    let opened = stop
+        .until_cancelled(open_routed_destination(config, connect_hosts))
+        .await;
     let (mut remote, owners) = match opened {
         Ok(Ok(stream)) => stream,
         error => {
@@ -248,6 +290,26 @@ async fn forward(
         .await;
     drop(remote);
     drop(owners);
+}
+
+/// Alternate dial addresses retain the same proxy/SSH chain and destination port.
+async fn open_routed_destination(
+    config: NetworkRouteConfig,
+    connect_hosts: Vec<String>,
+) -> anyhow::Result<(Stream, Option<crate::SshHandleChain>)> {
+    if connect_hosts.is_empty() {
+        return open_stream(config).await;
+    }
+    let mut last_error = None;
+    for host in connect_hosts {
+        let mut candidate = config.clone();
+        candidate.host = host;
+        match open_stream(candidate).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("nonempty dial address list"))
 }
 
 async fn open_stream(

@@ -624,6 +624,13 @@ impl NyaTermApp {
                     if let RdpSessionState::Failed(error) = &state {
                         session.error = Some(error.clone().into());
                     }
+                    if matches!(
+                        view_state,
+                        RemoteDesktopViewState::Failed | RemoteDesktopViewState::Disconnected
+                    ) {
+                        session.redirection.cancel();
+                        session.certificate_request = None;
+                    }
                     session.server_capabilities = server_capabilities;
                     session.state = view_state;
                 }
@@ -724,6 +731,9 @@ impl NyaTermApp {
                 }
                 self.defer_transfer_panel_snapshot_flush(cx);
             }
+            RdpRuntimeEvent::RedirectRequest(request) => {
+                self.handle_rdp_redirect_request(session_id, request, cx);
+            }
             RdpRuntimeEvent::CertificateRequest(request) => {
                 self.handle_rdp_certificate_request(session_id, request, cx);
             }
@@ -752,6 +762,8 @@ impl NyaTermApp {
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.error = Some(error.clone().into());
                     if fatal {
+                        session.redirection.cancel();
+                        session.certificate_request = None;
                         session.keys = Default::default();
                         session.modifiers = Default::default();
                         session.server_capabilities = None;

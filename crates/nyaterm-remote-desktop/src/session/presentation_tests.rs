@@ -216,6 +216,7 @@ fn rdp_pipeline_negotiates_completion_and_rejects_messages_without_support() {
             version: crate::PROTOCOL_VERSION,
             capabilities: crate::RdpServerCapabilities {
                 frame_update_complete: true,
+                server_redirection: false,
                 ..Default::default()
             },
         },

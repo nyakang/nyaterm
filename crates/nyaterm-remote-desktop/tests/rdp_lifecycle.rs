@@ -38,6 +38,7 @@ fn client_hello() -> RdpControlMessage {
     RdpControlMessage::ClientHello {
         version: PROTOCOL_VERSION,
         frame_update_complete: false,
+        server_redirection: false,
     }
 }
 
@@ -50,6 +51,7 @@ fn assert_server_hello(message: RdpControlMessage) {
                 committed_unicode_text: true,
                 secure_attention: true,
                 frame_update_complete: true,
+                server_redirection: false,
             },
         }
     ));
@@ -377,6 +379,7 @@ fn repeated_hello_wrong_version_and_helper_only_messages_fail_closed() {
     assert_helper_rejects(vec![RdpControlMessage::ClientHello {
         version: PROTOCOL_VERSION - 1,
         frame_update_complete: false,
+        server_redirection: false,
     }]);
     assert_helper_rejects(vec![client_hello(), client_hello()]);
     for message in helper_only_messages() {
@@ -452,6 +455,7 @@ fn older_and_newer_helpers_are_explicitly_incompatible_with_version_thirteen() {
         assert_helper_rejects(vec![RdpControlMessage::ClientHello {
             version,
             frame_update_complete: false,
+            server_redirection: false,
         }]);
     }
     assert_helper_rejects(vec![RdpControlMessage::Ping { sequence: 1 }]);
@@ -509,6 +513,7 @@ fn mismatched_client_receives_actual_helper_version_before_exit() {
             &RdpControlMessage::ClientHello {
                 version,
                 frame_update_complete: false,
+                server_redirection: false,
             },
         );
         assert_server_hello(recv(&mut stdout));
