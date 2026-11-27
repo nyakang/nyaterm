@@ -2446,3 +2446,29 @@ fn alternate_screen_policy_is_loaded_before_first_output_and_saved_independently
         assert!(!saved.interaction_alternate_scroll);
     });
 }
+
+#[test]
+fn wrap_changes_invalidate_retained_and_cached_history_even_when_text_is_identical() {
+    for enabled in [true, false] {
+        let mut view = TerminalViewState::new();
+        view.screen = TerminalScreen::new(10, 4);
+        view.screen.set_logical_line_snapshots(!enabled);
+        view.screen
+            .advance("一二三四五六七八abcdef\r\n".repeat(100).as_bytes());
+        let offset = 80;
+        let old = Arc::new(view.screen.viewport_snapshot_with_window(offset, 100, 100));
+        view.scrollback_snapshots.insert(offset, old.clone());
+        view.screen.set_logical_line_snapshots(enabled);
+        view.frame_snapshot = Some(Arc::new(view.screen.snapshot()));
+        assert!(!super::terminal_cached_snapshot_is_current(&view, &old));
+        assert!(
+            terminal_paint_window_snapshot_for_view(Some(&view), offset, 4, Some(old)).is_none()
+        );
+        let new = Arc::new(view.screen.viewport_snapshot_with_window(offset, 100, 100));
+        view.scrollback_snapshots.insert(offset, new.clone());
+        assert!(Arc::ptr_eq(
+            &terminal_paint_window_snapshot_for_view(Some(&view), offset, 4, None).unwrap(),
+            &new
+        ));
+    }
+}

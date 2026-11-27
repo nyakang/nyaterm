@@ -368,6 +368,7 @@ fn output_frame_with_sizes(
     skipped_output_bytes: usize,
 ) -> TerminalFrameOutputEvent {
     TerminalFrameOutputEvent {
+        layout_generation: Default::default(),
         session_id: "s1".to_string(),
         visible_text: "x".to_string(),
         recording_text_bytes: 1,
@@ -1351,6 +1352,7 @@ fn the_drain_tasks_frame_interest_mask_covers_every_reply_kind() {
 
     let screen = TerminalScreen::default();
     queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+        layout_generation: Default::default(),
         session_id: "s1".to_string(),
         offset: 1,
         snapshot: Arc::new(screen.snapshot()),
@@ -1379,6 +1381,7 @@ fn terminal_frame_event_queue_keeps_snapshot_wake_armed_across_output() {
 
     let screen = TerminalScreen::default();
     queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+        layout_generation: Default::default(),
         session_id: "s1".to_string(),
         offset: 1,
         snapshot: Arc::new(screen.snapshot()),
@@ -3066,6 +3069,7 @@ fn terminal_frame_event_queue_delivers_snapshot_reply_after_critical_pressure() 
         let screen = TerminalScreen::default();
         let outcome =
             producer_queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+                layout_generation: Default::default(),
                 session_id: "s1".to_string(),
                 offset: 0,
                 snapshot: Arc::new(screen.snapshot()),

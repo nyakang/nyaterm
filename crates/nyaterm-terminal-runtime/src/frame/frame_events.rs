@@ -293,6 +293,7 @@ pub(super) fn push_terminal_frame_worker_event(
 
 #[derive(Clone, Debug)]
 pub struct TerminalFrameOutputEvent {
+    pub layout_generation: super::frame_pipeline::TerminalLayoutGeneration,
     pub session_id: String,
     pub visible_text: String,
     pub recording_text_bytes: usize,
@@ -313,6 +314,7 @@ pub struct TerminalFrameOutputEvent {
 
 #[derive(Clone, Debug)]
 pub struct TerminalFrameSnapshotEvent {
+    pub layout_generation: super::frame_pipeline::TerminalLayoutGeneration,
     pub session_id: String,
     pub offset: usize,
     pub snapshot: Arc<TerminalSnapshot>,

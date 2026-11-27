@@ -41,6 +41,7 @@ pub struct TerminalFrameSession {
     pub(super) output_decoder: TerminalOutputDecoder,
     pub(super) recording_decoder: TerminalOutputDecoder,
     pub(super) revision: u64,
+    pub(super) layout_generation: super::frame_pipeline::TerminalLayoutGeneration,
     find_viewport: usize,
     /// When false, output frames omit full viewport_snapshot (hidden tabs).
     pub(super) include_live_snapshot: bool,
@@ -77,6 +78,7 @@ impl TerminalFrameSession {
             output_decoder,
             recording_decoder,
             revision: 0,
+            layout_generation: Default::default(),
             find_viewport: 0,
             // New sessions start high-priority until UI reports visibility.
             include_live_snapshot: true,
@@ -147,6 +149,7 @@ impl TerminalFrameSession {
         let (snapshot, snapshot_duration, snapshot_stats) =
             terminal_frame_snapshot_with_scroll_window_and_stats(&self.screen, 0, false);
         TerminalFrameSnapshotEvent {
+            layout_generation: self.layout_generation,
             session_id,
             offset: 0,
             snapshot,
@@ -219,6 +222,7 @@ impl TerminalFrameSession {
             (None, Duration::ZERO, TerminalSnapshotBuildStats::default())
         };
         TerminalFrameOutputEvent {
+            layout_generation: self.layout_generation,
             session_id,
             visible_text: batch.visible_text,
             recording_text_bytes: batch.recording_text_bytes,
@@ -278,6 +282,7 @@ impl TerminalFrameSession {
             self.action_link_cache.clone_from(&action_links);
         }
         TerminalFrameSnapshotEvent {
+            layout_generation: self.layout_generation,
             session_id,
             offset: snapshot.display_offset,
             snapshot,
@@ -478,6 +483,7 @@ pub(super) fn run_terminal_frame_processor(
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
     let mut color_palette = TerminalColorPalette::default();
     let mut logical_line_snapshots = false;
+    let mut layout_generation = super::frame_pipeline::TerminalLayoutGeneration::default();
     let mut ignore_alternate_screen = false;
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
     let mut rekeyed_old_order = VecDeque::new();
@@ -560,9 +566,14 @@ pub(super) fn run_terminal_frame_processor(
                 }
             }
 
-            TerminalFrameCommand::SetLogicalLineSnapshots { enabled } => {
+            TerminalFrameCommand::SetLogicalLineSnapshots {
+                enabled,
+                generation,
+            } => {
+                layout_generation = generation;
                 logical_line_snapshots = enabled;
                 for (session_id, session) in &mut sessions {
+                    session.layout_generation = generation;
                     session.screen.set_logical_line_snapshots(enabled);
                     session.revision = session.revision.saturating_add(1);
                     session.action_link_cache = None;
@@ -597,6 +608,7 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session.layout_generation = layout_generation;
                 session
                     .screen
                     .set_ignore_alternate_screen(ignore_alternate_screen);
@@ -629,6 +641,7 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session.layout_generation = layout_generation;
                 session
                     .screen
                     .set_ignore_alternate_screen(ignore_alternate_screen);
@@ -841,6 +854,7 @@ pub(super) fn run_terminal_frame_processor(
                     session
                         .screen
                         .set_logical_line_snapshots(logical_line_snapshots);
+                    session.layout_generation = layout_generation;
                     session
                         .screen
                         .set_ignore_alternate_screen(ignore_alternate_screen);
@@ -895,6 +909,7 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session.layout_generation = layout_generation;
                 session
                     .screen
                     .set_ignore_alternate_screen(ignore_alternate_screen);

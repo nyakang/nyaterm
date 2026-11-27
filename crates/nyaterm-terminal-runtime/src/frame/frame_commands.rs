@@ -28,6 +28,7 @@ pub(super) enum TerminalFrameCommand {
     },
     SetLogicalLineSnapshots {
         enabled: bool,
+        generation: super::frame_pipeline::TerminalLayoutGeneration,
     },
     SetIgnoreAlternateScreen {
         enabled: bool,
@@ -533,6 +534,7 @@ pub(super) fn terminal_frame_command_is_fence(_command: &TerminalFrameCommand) -
         TerminalFrameCommand::RekeySession { .. }
             | TerminalFrameCommand::SetColorPalette { .. }
             | TerminalFrameCommand::SetCollapsedCommands { .. }
+            | TerminalFrameCommand::SetLogicalLineSnapshots { .. }
             | TerminalFrameCommand::NavigateCommand { .. }
             | TerminalFrameCommand::CommandInput { .. }
     ) {

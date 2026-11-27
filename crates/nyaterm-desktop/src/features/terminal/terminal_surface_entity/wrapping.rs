@@ -11,6 +11,45 @@ use nyaterm_ui::NyaHorizontalScrollbar;
 use super::{TerminalSurface, terminal_surface_visible_rows_for_viewport};
 
 impl TerminalSurface {
+    pub(in crate::features) fn wrap_layout_pending(&self) -> bool {
+        self.wrap_layout_pending
+    }
+
+    /// Retain the last complete picture until the replacement frame arrives.
+    /// The returned physical offset identifies its top content, not its display row.
+    pub(in crate::features) fn begin_wrap_layout_change(
+        &mut self,
+    ) -> (nyaterm_terminal::TerminalHistoryState, usize) {
+        let state = self
+            .pending_local_scroll_sync
+            .as_ref()
+            .map(|pending| pending.state.clone())
+            .unwrap_or_else(|| self.current_scroll_visual_state());
+        let mut offset = state.scroll_offset;
+        if offset > 0
+            && !self.wrap_layout_pending
+            && let Some(snapshot) = self.snapshot.as_ref()
+        {
+            let anchor = state.history.scrollback_len.saturating_sub(offset);
+            let top = if let Some(rows) = snapshot.display_rows.as_ref() {
+                rows.source_row(rows.top(offset, state.viewport_rows))
+            } else if let Some(index) = snapshot.logical_lines.as_ref() {
+                index.physical_row(
+                    index
+                        .logical_row(anchor)
+                        .min(index.logical_rows().saturating_sub(state.viewport_rows)),
+                )
+            } else {
+                anchor
+            };
+            offset = state.history.scrollback_len.saturating_sub(top);
+        }
+        self.wrap_layout_pending = true;
+        self.pending_local_scroll_sync = None;
+        self.scroll_interaction_generation = self.scroll_interaction_generation.wrapping_add(1);
+        (state.history, offset)
+    }
+
     pub(in crate::features) fn suggestion_cursor_cell(&self) -> Option<(usize, usize)> {
         let snapshot = self.snapshot.as_ref()?;
         if !self.snapshot_has_current_coordinates(snapshot) {

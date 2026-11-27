@@ -279,6 +279,9 @@ impl NyaTermApp {
         // Install host policy before the bridge can enqueue the first output.
         terminal_frame_pipeline
             .set_ignore_alternate_screen(settings.interaction_disable_alternate_screen);
+        terminal_frame_pipeline.set_logical_line_snapshots(
+            settings.terminal_wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None,
+        );
         let system_appearance =
             crate::features::shell::system_theme::system_appearance(cx.window_appearance());
         let terminal_colors =

@@ -19,15 +19,27 @@ use nyaterm_core::ActionLinksMatcherSettings;
 use nyaterm_core::keyword_highlight_presets::ResolvedKeywordHighlightRule;
 use nyaterm_recording::pipeline::{ExecutionRecordingEvent, RecordingWriteHandle};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+/// Identifies a display policy, independently of content revisions and VT modes.
+/// Non-default values are unique across pipelines so transferred replies cannot
+/// accidentally match a destination window's unrelated policy change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalLayoutGeneration(u64);
+
+#[derive(Debug, Default)]
+pub(super) struct LogicalLineSnapshotPolicy {
+    enabled: bool,
+    generation: TerminalLayoutGeneration,
+}
+
 #[derive(Debug)]
 pub struct TerminalFramePipeline {
     pub(super) keyword_rules: Arc<Mutex<Arc<Vec<ResolvedKeywordHighlightRule>>>>,
-    pub(super) logical_line_snapshots: Arc<AtomicBool>,
+    pub(super) logical_line_snapshots: Arc<Mutex<LogicalLineSnapshotPolicy>>,
     pub(super) ignore_alternate_screen: Arc<AtomicBool>,
     pub(super) recording_writer: RecordingWriteHandle,
     pub(super) command_tx: TerminalFrameCommandSender,
@@ -118,7 +130,7 @@ impl TerminalFramePipeline {
             .expect("failed to spawn terminal frame processor");
         Self {
             keyword_rules: Arc::new(Mutex::new(Arc::new(Vec::new()))),
-            logical_line_snapshots: Arc::new(AtomicBool::new(false)),
+            logical_line_snapshots: Arc::new(Mutex::new(LogicalLineSnapshotPolicy::default())),
             ignore_alternate_screen: Arc::new(AtomicBool::new(false)),
             recording_writer,
             command_tx,
@@ -129,13 +141,36 @@ impl TerminalFramePipeline {
         }
     }
 
-    pub fn set_logical_line_snapshots(&self, enabled: bool) {
-        if self.logical_line_snapshots.swap(enabled, Ordering::Relaxed) != enabled {
+    pub fn layout_generation(&self) -> TerminalLayoutGeneration {
+        self.logical_line_snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .generation
+    }
+
+    /// Serialize policy changes and their commands across cloned handles.
+    pub fn set_logical_line_snapshots(&self, enabled: bool) -> TerminalLayoutGeneration {
+        static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+        let mut policy = self
+            .logical_line_snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if policy.enabled != enabled {
             self.arm_event_wakes();
-            let _ = self
+            let generation =
+                TerminalLayoutGeneration(NEXT_GENERATION.fetch_add(1, Ordering::Relaxed));
+            if self
                 .command_tx
-                .send(TerminalFrameCommand::SetLogicalLineSnapshots { enabled });
+                .send(TerminalFrameCommand::SetLogicalLineSnapshots {
+                    enabled,
+                    generation,
+                })
+            {
+                policy.enabled = enabled;
+                policy.generation = generation;
+            }
         }
+        policy.generation
     }
 
     /// Draw full-screen programs on the primary screen so their output reaches

@@ -71,13 +71,17 @@ fn terminal_paint_snapshot_for_view(
 }
 
 /// Cached and retained scroll snapshots may only be reused while their shared
-/// rows still match the live frame; in-place output keeps history coordinates unchanged.
+/// rows and layout still match the live frame. Mode changes and folding can
+/// change presentation without changing the history coordinates or row text.
 pub(super) fn terminal_cached_snapshot_is_current(
     view: &TerminalViewState,
     snapshot: &TerminalSnapshot,
 ) -> bool {
     view.frame_snapshot.as_ref().is_none_or(|live| {
-        std::ptr::eq(live.as_ref(), snapshot) || snapshot.content_agrees_with(live)
+        std::ptr::eq(live.as_ref(), snapshot)
+            || (snapshot.logical_lines.is_some() == live.logical_lines.is_some()
+                && snapshot.display_rows == live.display_rows
+                && snapshot.content_agrees_with(live))
     })
 }
 
@@ -125,12 +129,6 @@ fn terminal_retained_snapshot_matches_view(
     view.history_state()
         .preserves_coordinates_from(snapshot.history)
         && terminal_cached_snapshot_is_current(view, snapshot)
-        // Folding changes presentation without changing VT history or row text.
-        // Once the worker publishes the new layout, a retained surface frame
-        // must not take precedence over its replacement scroll snapshot.
-        && view.frame_snapshot.as_ref().is_none_or(|live| {
-            snapshot.display_rows == live.display_rows
-        })
         && terminal_snapshot_matches_grid_geometry(snapshot, view.screen.cols(), view.screen.rows())
         && snapshot.scrollback_len == scrollback_len
         && terminal_snapshot_covers_display_offset(
@@ -866,13 +864,6 @@ impl NyaTermApp {
         if session_id.is_empty() {
             return false;
         }
-        self.terminal
-            .view
-            .frame_pipeline
-            .set_logical_line_snapshots(
-                self.settings.summary().terminal_wrap_mode
-                    == nyaterm_core::models::settings::TerminalWrapMode::None,
-            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return false;
@@ -1166,13 +1157,6 @@ impl NyaTermApp {
         let is_active = self.session.active_id() == Some(session_id);
         let paint_started_at = Instant::now();
         self.ensure_paint_theme_caches();
-        self.terminal
-            .view
-            .frame_pipeline
-            .set_logical_line_snapshots(
-                self.settings.summary().terminal_wrap_mode
-                    == nyaterm_core::models::settings::TerminalWrapMode::None,
-            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         // Read only the lightweight row/column pair for the active surface; no
         // snapshot is cloned, and inactive surfaces do not need this check.
@@ -1350,6 +1334,7 @@ impl NyaTermApp {
             .cell_metrics
             .unwrap_or(((font_size * 0.6).max(6.0), (font_size * 1.35).max(12.0)));
         let Some(snapshot) = snapshot else {
+            self.request_terminal_live_snapshot(session_id);
             if let Some(request_offset) = terminal_scroll_snapshot_request_offset(
                 scroll_offset,
                 scroll_residual_lines,
@@ -1380,6 +1365,9 @@ impl NyaTermApp {
                         "terminal scrolled paint retained current surface while waiting for snapshot"
                     );
                 }
+            }
+            if surface.read(cx).wrap_layout_pending() {
+                return;
             }
             let scroll_state = TerminalScrollVisualState {
                 history,
@@ -1800,14 +1788,17 @@ impl NyaTermApp {
         if session_id.is_empty() {
             return;
         }
-        let notify_started_at = Instant::now();
-        self.terminal
+        if self
+            .terminal
             .view
-            .frame_pipeline
-            .set_logical_line_snapshots(
-                self.settings.summary().terminal_wrap_mode
-                    == nyaterm_core::models::settings::TerminalWrapMode::None,
-            );
+            .surfaces
+            .get(session_id)
+            .is_some_and(|surface| surface.read(cx).wrap_layout_pending())
+        {
+            self.sync_terminal_surface_paint(session_id, cx);
+            return;
+        }
+        let notify_started_at = Instant::now();
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;
@@ -1949,14 +1940,17 @@ impl NyaTermApp {
         if session_id.is_empty() {
             return;
         }
-        let notify_started_at = Instant::now();
-        self.terminal
+        if self
+            .terminal
             .view
-            .frame_pipeline
-            .set_logical_line_snapshots(
-                self.settings.summary().terminal_wrap_mode
-                    == nyaterm_core::models::settings::TerminalWrapMode::None,
-            );
+            .surfaces
+            .get(session_id)
+            .is_some_and(|surface| surface.read(cx).wrap_layout_pending())
+        {
+            self.sync_terminal_surface_paint(session_id, cx);
+            return;
+        }
+        let notify_started_at = Instant::now();
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;

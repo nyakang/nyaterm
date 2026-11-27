@@ -13,6 +13,7 @@ pub(in crate::features) use scroll::{
 };
 mod sessions;
 mod view_io;
+mod wrapping;
 pub(in crate::features) use view_io::{
     StagedCommandInput, StagedQuickCommandWriteError, TerminalMouseReportRequest,
 };

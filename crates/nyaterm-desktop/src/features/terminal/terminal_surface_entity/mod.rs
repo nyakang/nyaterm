@@ -453,6 +453,7 @@ pub(in crate::features) struct TerminalSurface {
     wheel_zoom: TerminalWheelZoom,
     display_offset: usize,
     scroll_snapshot_pending: bool,
+    wrap_layout_pending: bool,
     scrollback_len: usize,
     viewport_rows: usize,
     has_new_while_scrolled: bool,
@@ -550,6 +551,7 @@ impl TerminalSurface {
             wheel_zoom: TerminalWheelZoom::default(),
             display_offset: 0,
             scroll_snapshot_pending: false,
+            wrap_layout_pending: false,
             scrollback_len: 0,
             viewport_rows: 1,
             has_new_while_scrolled: false,
@@ -659,6 +661,9 @@ impl TerminalSurface {
         viewport_rows: usize,
         scrollback_len: usize,
     ) -> Option<Arc<TerminalSnapshot>> {
+        if self.wrap_layout_pending {
+            return None;
+        }
         self.snapshot
             .as_ref()
             .filter(|snapshot| {
@@ -701,6 +706,9 @@ impl TerminalSurface {
         viewport_rows: usize,
         scrollback_len: usize,
     ) -> Option<Arc<TerminalSnapshot>> {
+        if self.wrap_layout_pending {
+            return None;
+        }
         self.snapshot
             .as_ref()
             .filter(|snapshot| {
@@ -863,10 +871,11 @@ impl TerminalSurface {
         let desired_show_cursor = show_cursor
             && !terminal_visual_scroll_active_for_state(scroll_offset, scroll_residual_lines);
         self.advance_history(history);
-        let retained_rows_should_reset = self
-            .snapshot
-            .as_ref()
-            .is_some_and(|old| old.display_rows != snapshot.display_rows)
+        let retained_rows_should_reset = self.wrap_layout_pending
+            || self.snapshot.as_ref().is_some_and(|old| {
+                old.display_rows != snapshot.display_rows
+                    || old.logical_lines.is_some() != snapshot.logical_lines.is_some()
+            })
             || self.retained_rows_should_reset(
                 snapshot.as_ref(),
                 history,
@@ -896,6 +905,7 @@ impl TerminalSurface {
         {
             return false;
         }
+        self.wrap_layout_pending = false;
         if retained_rows_should_reset {
             self.clear_retained_scroll_state();
         }
@@ -2522,6 +2532,9 @@ impl TerminalSurface {
         &mut self,
         state: TerminalScrollVisualState,
     ) -> bool {
+        if self.wrap_layout_pending {
+            return false;
+        }
         self.advance_history(state.history);
         if state.history.preserves_coordinates_from(self.history)
             && self.has_snapshot_covering_display_offset(
@@ -2751,6 +2764,9 @@ impl TerminalSurface {
     }
 
     fn can_handle_scroll_wheel_locally(&self) -> bool {
+        if self.wrap_layout_pending {
+            return false;
+        }
         self.local_mode_cursor.is_some()
             || (!self.protocol_state.mouse_reporting
                 && self.protocol_state.alternate_scroll_payload(1).is_none())

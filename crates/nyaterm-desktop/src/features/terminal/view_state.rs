@@ -212,7 +212,8 @@ impl TerminalFeatureState {
                 self.selection.click_anchor = None;
                 self.selection.selection = Some(selection);
             }
-            if let Some(view) = entry.view {
+            if let Some(mut view) = entry.view {
+                view.invalidate_wrap_layout();
                 self.view.views.insert(entry.session_id, view);
             }
         }

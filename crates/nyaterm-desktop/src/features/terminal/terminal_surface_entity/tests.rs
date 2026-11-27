@@ -5464,3 +5464,53 @@ fn repeated_tab_close_releases_parser_surface_and_snapshot_owners() {
         }
     }
 }
+
+#[test]
+fn wrap_transition_keeps_the_old_picture_but_excludes_it_from_scroll_cache_reuse() {
+    let mut surface = TerminalSurface::new("s1");
+    let mut screen = TerminalScreen::new(12, 4);
+    screen.advance(b"abcdefghijklmnopqrstuvwx\r\n");
+    let old = Arc::new(screen.viewport_snapshot(0));
+    let state = TerminalScrollVisualState {
+        history: old.history,
+        session_id: "s1".into(),
+        scroll_offset: 0,
+        scroll_residual_lines: 0.0,
+        display_offset: 0,
+        scrollback_len: old.history.scrollback_len,
+        viewport_rows: 4,
+        has_new_while_scrolled: false,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    };
+    surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+        old.clone(),
+        state.clone(),
+    ));
+    surface.begin_wrap_layout_change();
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &old));
+    assert!(surface.wrap_layout_pending());
+    assert!(!surface.can_handle_scroll_wheel_locally());
+    assert!(
+        surface
+            .snapshot_covering_display_offset(0, 4, old.history.scrollback_len)
+            .is_none()
+    );
+    assert!(
+        surface
+            .retained_snapshot_covering_display_offset(0, 4, old.history.scrollback_len)
+            .is_none()
+    );
+    screen.set_logical_line_snapshots(true);
+    let new = Arc::new(screen.viewport_snapshot(0));
+    surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(new.clone(), state));
+    assert!(!surface.wrap_layout_pending());
+    assert!(surface.can_handle_scroll_wheel_locally());
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &new));
+    assert!(
+        surface
+            .retained_snapshots
+            .iter()
+            .all(|snapshot| snapshot.logical_lines.is_some())
+    );
+}

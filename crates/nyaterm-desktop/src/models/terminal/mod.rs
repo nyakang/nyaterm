@@ -741,6 +741,38 @@ impl TerminalViewState {
         ));
     }
 
+    pub(crate) fn apply_output_from_previous_layout(
+        &mut self,
+        text: &str,
+        protocol: TerminalProtocolState,
+        accepted: usize,
+        skipped: usize,
+        revision: u64,
+    ) {
+        append_terminal_ui_output_tail(&mut self.output, text);
+        if revision >= self.screen_revision {
+            self.protocol_state = protocol;
+            self.screen_revision = revision;
+        }
+        if accepted > 0 {
+            self.output_burst_bytes = self.output_burst_bytes.saturating_add(accepted);
+            self.enter_render_degraded_mode();
+            self.last_screen_change_at = Instant::now();
+            self.has_new_while_scrolled |= self.scroll_offset > 0;
+        }
+        if skipped > 0 {
+            self.note_skipped_output(skipped);
+        }
+    }
+
+    /// Discard presentation data without losing the history anchor or protocol state.
+    pub(crate) fn invalidate_wrap_layout(&mut self) {
+        self.detached_history = Some(self.history_state());
+        self.frame_snapshot = None;
+        self.frame_action_links = None;
+        self.clear_scrollback_query_caches();
+    }
+
     pub(crate) fn clear_scrollback_query_caches(&mut self) {
         self.scrollback_snapshots.clear();
         self.scrollback_action_links.clear();

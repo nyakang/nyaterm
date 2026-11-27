@@ -10,7 +10,9 @@ pub use frame_events::{
     TerminalFrameEvent, TerminalFrameOutputEvent, TerminalFrameSearchEvent,
     TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
 };
-pub use frame_pipeline::{TerminalFrameOutputSubmission, TerminalFramePipeline};
+pub use frame_pipeline::{
+    TerminalFrameOutputSubmission, TerminalFramePipeline, TerminalLayoutGeneration,
+};
 pub use frame_search::{
     TerminalFrameSearchKey, TerminalFrameSearchPurpose, TerminalFrameSearchResult,
     terminal_frame_search_result_is_current,
@@ -53,3 +55,6 @@ mod tests;
 
 #[cfg(test)]
 mod selection_text_tests;
+
+#[cfg(test)]
+mod wrapping_tests;

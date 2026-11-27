@@ -708,3 +708,73 @@ fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_vi
     app.update(&mut cx, |app, cx| app.cancel_settings(cx));
     assert_eq!(ask(), initial);
 }
+
+#[test]
+fn wrap_changes_reject_late_frames_without_completing_new_requests_or_losing_output() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::TerminalFrameEvent;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::TestAppContext;
+    use nyaterm_core::models::settings::TerminalWrapMode;
+
+    let dir = TestConfigDir::new("nyaterm-wrap-late-frame");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    app.update(&mut cx, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.terminal.view.frame_pipeline.submit_output(
+            "s1",
+            b"queued text".to_vec(),
+            "UTF-8",
+            1000,
+        );
+        app.terminal
+            .view
+            .frame_pipeline
+            .request_snapshot("s1", 0, false, Default::default());
+        app.terminal
+            .view
+            .frame_pipeline
+            .finish_pending_output()
+            .unwrap();
+        let events = app
+            .terminal
+            .view
+            .frame_pipeline
+            .take_events_for_transfer(&["s1".into()]);
+        let old_snapshot = events
+            .iter()
+            .find_map(|event| match event {
+                TerminalFrameEvent::Snapshot(frame) => Some(frame.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let old_output = events
+            .into_iter()
+            .find_map(|event| match event {
+                TerminalFrameEvent::Output(frame) => Some(frame),
+                _ => None,
+            })
+            .unwrap();
+        for mode in [
+            TerminalWrapMode::None,
+            TerminalWrapMode::Character,
+            TerminalWrapMode::None,
+        ] {
+            app.set_terminal_wrap_mode(mode, cx);
+        }
+        let view = app.terminal.view.views.get_mut("s1").unwrap();
+        view.pending_snapshot_offsets.insert(0);
+        view.priority_pending_snapshot_offsets.insert(0);
+        let before_output = view.output.clone();
+        app.apply_terminal_snapshot_frame(old_snapshot, cx);
+        assert!(app.terminal.view.views["s1"].frame_snapshot.is_none());
+        app.apply_terminal_output_frame(old_output, cx);
+        let view = &app.terminal.view.views["s1"];
+        assert!(view.pending_snapshot_offsets.contains(&0));
+        assert!(view.priority_pending_snapshot_offsets.contains(&0));
+        assert!(view.frame_snapshot.is_none());
+        assert_eq!(view.output, format!("{before_output}queued text"));
+    });
+}

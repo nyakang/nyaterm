@@ -895,6 +895,10 @@ impl NyaTermApp {
                 result,
                 frame,
             } => {
+                if frame.layout_generation != self.terminal.view.frame_pipeline.layout_generation()
+                {
+                    return TerminalFrameApplyResult::default();
+                }
                 let stale = self
                     .terminal
                     .view
@@ -967,6 +971,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> TerminalFrameApplyResult {
         let TerminalFrameOutputEvent {
+            layout_generation,
             session_id,
             visible_text,
             recording_text_bytes,
@@ -985,6 +990,12 @@ impl NyaTermApp {
         if !self.session.has_session(&session_id) {
             return TerminalFrameApplyResult::default();
         }
+        // Output effects and text remain ordered even when their picture predates
+        // the current preview. Only presentation data is rejected.
+        let layout_current =
+            layout_generation == self.terminal.view.frame_pipeline.layout_generation();
+        let snapshot = snapshot.filter(|_| layout_current);
+        let action_links = action_links.filter(|_| layout_current);
         let snapshot = if !self.settings.summary().terminal_show_command_blocks
             || self
                 .terminal
@@ -1053,7 +1064,16 @@ impl NyaTermApp {
                     view.screen.rows(),
                 )
             });
-            if is_visible {
+            if !layout_current {
+                view.apply_output_from_previous_layout(
+                    &visible_text,
+                    protocol_state,
+                    accepted_bytes,
+                    skipped_output_bytes,
+                    revision,
+                );
+                need_live_snapshot = is_visible;
+            } else if is_visible {
                 if let Some(snapshot) = snapshot {
                     shell_edit_snapshot_available = true;
                     view.apply_terminal_frame_parts(TerminalFrameParts {
@@ -1247,6 +1267,10 @@ impl NyaTermApp {
         mut frame: TerminalFrameSnapshotEvent,
         cx: &mut Context<Self>,
     ) -> TerminalFrameApplyResult {
+        // Check before completing an offset: an old reply must not clear a new request.
+        if frame.layout_generation != self.terminal.view.frame_pipeline.layout_generation() {
+            return TerminalFrameApplyResult::default();
+        }
         if !self.settings.summary().terminal_show_command_blocks
             || self
                 .terminal
@@ -2249,6 +2273,7 @@ mod frame_event_queue_tests {
             for enabled in [false, true] {
                 app.settings.set_terminal_command_blocks(enabled);
                 app.apply_terminal_snapshot_frame(TerminalFrameSnapshotEvent {
+                    layout_generation: Default::default(),
                     session_id: "s1".into(),
                     offset: 0,
                     snapshot: snapshot.clone(),
@@ -2369,6 +2394,7 @@ mod frame_event_queue_tests {
             view.screen_revision = 2;
             view.scroll_offset = 4;
             let frame = TerminalFrameSnapshotEvent {
+                layout_generation: Default::default(),
                 session_id: "s1".into(),
                 offset: result.display_offset,
                 snapshot,
@@ -2429,6 +2455,7 @@ mod frame_event_queue_tests {
             view.scroll_offset = 42;
             let event = |snapshot: Arc<nyaterm_terminal::TerminalSnapshot>, offset| {
                 crate::models::TerminalFrameSnapshotEvent {
+                    layout_generation: Default::default(),
                     session_id: "s1".into(),
                     offset,
                     snapshot,
@@ -2488,6 +2515,7 @@ mod frame_event_queue_tests {
 
     fn output_frame(session_id: &str, revision: u64) -> TerminalFrameEvent {
         TerminalFrameEvent::Output(TerminalFrameOutputEvent {
+            layout_generation: Default::default(),
             session_id: session_id.to_string(),
             visible_text: format!("rev-{revision}"),
             recording_text_bytes: 0,
@@ -2533,6 +2561,7 @@ mod frame_event_queue_tests {
 
     fn snapshot_frame(session_id: &str, offset: usize) -> TerminalFrameEvent {
         TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+            layout_generation: Default::default(),
             session_id: session_id.to_string(),
             offset,
             snapshot: std::sync::Arc::new(
