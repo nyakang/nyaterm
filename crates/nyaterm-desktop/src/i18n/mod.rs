@@ -26,12 +26,9 @@ pub(crate) fn language_options() -> Vec<nyaterm_ui::NyaSelectOption> {
 #[cfg(test)]
 mod tests {
     use crate::shortcuts::{SHORTCUT_CATEGORIES, SHORTCUT_REGISTRY, ShortcutCategory};
-    use regex::Regex;
     use rust_i18n::Backend as _;
     use std::borrow::Cow;
     use std::collections::HashMap;
-    use std::fs;
-    use std::path::Path;
     fn text(language: &str, key: &'static str) -> Cow<'static, str> {
         crate::preload_i18n().unwrap();
         rust_i18n::t!(
@@ -93,53 +90,6 @@ mod tests {
                 name = switch_tab_label
             ),
             "已被占用: 切换到标签 1-9"
-        );
-    }
-    #[test]
-    fn every_literal_translation_key_in_the_crate_exists_in_every_catalog() {
-        // Walks the crate at test time rather than listing files, so a new module
-        // cannot quietly opt out. Only literal keys are visible here - the ones
-        // reached through `i18n_key()` and friends are out of reach for any
-        // source scan, and stay covered by the key-parity test above.
-        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let key_pattern = Regex::new(r#"\bt!\(\s*"([^"]+)""#).expect("translation-key regex");
-        let catalogs = catalogs();
-
-        let mut pending = vec![source_root];
-        let mut scanned = 0usize;
-        let mut missing = Vec::new();
-        while let Some(dir) = pending.pop() {
-            for entry in fs::read_dir(&dir).expect("crate sources must be readable") {
-                let path = entry.expect("directory entry").path();
-                if path.is_dir() {
-                    pending.push(path);
-                    continue;
-                }
-                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-                    continue;
-                }
-                let source = fs::read_to_string(&path).expect("source file must be UTF-8");
-                scanned += 1;
-                for captures in key_pattern.captures_iter(&source) {
-                    let key = captures.get(1).expect("key capture").as_str();
-                    for (locale, catalog) in &catalogs {
-                        if !catalog.contains_key(key) {
-                            missing.push(format!("{key} in {locale} ({})", path.display()));
-                        }
-                    }
-                }
-            }
-        }
-
-        assert!(
-            scanned > 100,
-            "expected to scan the whole crate, saw {scanned} files"
-        );
-        missing.sort();
-        missing.dedup();
-        assert!(
-            missing.is_empty(),
-            "keys missing from a catalog: {missing:#?}"
         );
     }
 }

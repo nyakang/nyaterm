@@ -9,6 +9,10 @@ rust_i18n::i18n!(
 fn shared_backend_preserves_caller_macros_fallback_interpolation_and_global_locale() {
     preload().unwrap();
     preload().unwrap();
+    // The consumer's lazy backend also writes rust-i18n's global locale.
+    // Initialize it before changing that locale, so a parallel explicit-locale
+    // lookup cannot overwrite this test's selection during initialization.
+    let _ = rust_i18n::available_locales!();
     let previous = rust_i18n::locale().to_string();
     apply_locale("zh_Hans");
     assert_eq!(rust_i18n::t!("language.name"), "中文 (简体)");

@@ -7459,6 +7459,7 @@ version = "2.0.8"
 dependencies = [
  "regex",
  "rust-i18n",
+ "serde",
  "serde_json",
 ]
 

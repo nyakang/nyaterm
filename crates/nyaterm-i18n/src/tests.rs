@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use regex::Regex;
-use serde_json::Value;
 
-use super::{CANONICAL_LOCALES, Cow, available_locales, locale_display_name, normalize_locale};
+use crate::catalog::CATALOGS;
+use crate::{available_locales, locale_display_name, normalize_locale};
 
 /// Translate against an explicit language instead of the process-wide locale,
 /// so no test has to touch `rust_i18n::set_locale` and race the others.
@@ -12,55 +13,18 @@ fn text(language: &str, key: &'static str) -> Cow<'static, str> {
     rust_i18n::t!(key, locale = locale.as_ref())
 }
 
-// The English catalog is the single schema every other catalog is measured
-// against. It is always shipped, so it always compiles in.
-const EN_JSON: &str = include_str!("../locales/en.json");
-const ZH_CN_JSON: &str = include_str!("../locales/zh-CN.json");
+fn catalog_source(locale: &str) -> &'static str {
+    CATALOGS
+        .iter()
+        .find(|(id, _)| *id == locale)
+        .expect("registered catalog")
+        .1
+}
 
-// Every shipped catalog is included explicitly so the structural tests
-// below validate the exact bytes compiled by rust-i18n.
-const ZH_TW_JSON: &str = include_str!("../locales/zh-TW.json");
-const JA_JSON: &str = include_str!("../locales/ja.json");
-const KO_JSON: &str = include_str!("../locales/ko.json");
-const FR_JSON: &str = include_str!("../locales/fr.json");
-const PT_BR_JSON: &str = include_str!("../locales/pt-BR.json");
+mod catalog;
 
-/// Every catalog currently shipped, paired with its canonical id. The
-/// structural tests below iterate this table, so extending it is the only
-/// change a new language's catalog needs to be fully validated.
-const CATALOGS: &[(&str, &str)] = &[
-    ("en", EN_JSON),
-    ("zh-CN", ZH_CN_JSON),
-    ("zh-TW", ZH_TW_JSON),
-    ("ja", JA_JSON),
-    ("ko", KO_JSON),
-    ("fr", FR_JSON),
-    ("pt-BR", PT_BR_JSON),
-];
-
-/// Mirror of the flattening `rust_i18n` applies to a version-1 locale file, so
-/// these tests can reason about the on-disk files rather than the loaded catalog.
 fn flatten(json: &str) -> HashMap<String, String> {
-    fn walk(prefix: Option<&str>, value: &Value, output: &mut HashMap<String, String>) {
-        let Value::Object(entries) = value else {
-            return;
-        };
-        for (name, value) in entries {
-            let key = prefix.map_or_else(|| name.clone(), |prefix| format!("{prefix}.{name}"));
-            match value {
-                Value::String(text) => {
-                    output.insert(key, text.clone());
-                }
-                Value::Object(_) => walk(Some(&key), value, output),
-                _ => {}
-            }
-        }
-    }
-
-    let value: Value = serde_json::from_str(json).expect("locale JSON must be valid");
-    let mut output = HashMap::new();
-    walk(None, &value, &mut output);
-    output
+    catalog::parse(json).expect("catalog must contain unique string translations")
 }
 
 /// The set of `%{name}` placeholders a translation references.
@@ -77,7 +41,7 @@ fn placeholder_names(value: &str) -> BTreeSet<String> {
 #[test]
 fn every_android_label_and_error_is_translated_in_all_seven_catalogs() {
     crate::preload().unwrap();
-    let english = flatten(EN_JSON);
+    let english = flatten(catalog_source("en"));
     let keys: Vec<_> = english
         .keys()
         .filter(|key| key.starts_with("android."))
@@ -188,7 +152,7 @@ fn every_canonical_locale_normalizes_to_itself() {
     crate::preload().unwrap();
     // A canonical id must be a fixed point of normalization, or storing the
     // value the picker offers would silently rewrite it to something else.
-    for canonical in CANONICAL_LOCALES {
+    for (canonical, _) in CATALOGS {
         assert_eq!(
             normalize_locale(canonical),
             *canonical,
@@ -204,7 +168,11 @@ fn available_locales_follow_the_canonical_menu_order() {
     // product-defined order, rather than rust-i18n's unspecified order.
     let available = available_locales();
     assert_eq!(
-        available, CANONICAL_LOCALES,
+        available,
+        CATALOGS
+            .iter()
+            .map(|(locale, _)| *locale)
+            .collect::<Vec<_>>(),
         "language picker catalogs changed"
     );
 
@@ -212,14 +180,32 @@ fn available_locales_follow_the_canonical_menu_order() {
         .into_iter()
         .map(|locale| locale.into_owned())
         .collect::<HashSet<_>>();
-    let canonical = CANONICAL_LOCALES
+    let canonical = CATALOGS
         .iter()
-        .map(|locale| (*locale).to_string())
+        .map(|(locale, _)| (*locale).to_string())
         .collect::<HashSet<_>>();
+    assert_eq!(canonical.len(), CATALOGS.len(), "duplicate catalog ids");
     assert_eq!(
         loaded, canonical,
         "rust-i18n loaded an unexpected catalog set"
     );
+}
+
+#[test]
+fn shared_backend_matches_every_source_translation_without_fallback() {
+    use rust_i18n::Backend;
+
+    crate::preload().unwrap();
+    for (locale, json) in CATALOGS {
+        let source = flatten(json);
+        let loaded = crate::SharedCatalogBackend
+            .messages_for_locale(locale)
+            .expect("registered catalog")
+            .into_iter()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(loaded, source, "compiled catalog differs for {locale}");
+    }
 }
 
 /// Entries whose `{{..}}` is literal text rather than an i18n slot.
@@ -263,7 +249,7 @@ fn every_shipped_locale_names_itself_for_the_language_pickers() {
 #[test]
 fn brazilian_portuguese_catalog_keeps_technical_terms_and_curations() {
     crate::preload().unwrap();
-    let catalog = flatten(PT_BR_JSON);
+    let catalog = flatten(catalog_source("pt-BR"));
     // A literal machine translation of these words would change the meaning
     // of connection, sync and shell actions (Port->Porto, Apply->inscrever).
     for (key, expected) in [
@@ -321,7 +307,7 @@ fn every_catalog_agrees_with_english_on_placeholders() {
     crate::preload().unwrap();
     // A translation that drops or renames a placeholder leaves the argument
     // unsubstituted for that locale only, which no other test would catch.
-    let english = flatten(EN_JSON);
+    let english = flatten(catalog_source("en"));
     let mut mismatched = Vec::new();
     for (locale, json) in CATALOGS {
         if *locale == "en" {
@@ -351,7 +337,9 @@ fn every_catalog_agrees_with_english_on_placeholders() {
 #[test]
 fn every_catalog_has_the_same_keys_as_english() {
     crate::preload().unwrap();
-    let english = flatten(EN_JSON).into_keys().collect::<HashSet<_>>();
+    let english = flatten(catalog_source("en"))
+        .into_keys()
+        .collect::<HashSet<_>>();
     for (locale, json) in CATALOGS {
         if *locale == "en" {
             continue;
