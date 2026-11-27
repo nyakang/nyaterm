@@ -227,28 +227,36 @@ def elf_dependencies(path, prefix=None):
     return [(name, resolved[name]) for name in needed if name not in SYSTEM_ELF]
 
 
-def macho_dependencies(path):
+def macho_dependencies(path, prefix):
+    """Resolve non-system dylibs to files in the private source-build prefix.
+
+    libvpx's macOS Makefile emits a bare ``libvpx.12.dylib`` install name
+    instead of an ``@rpath`` reference. Resolve that form inside the private
+    prefix so it can be staged and rewritten to ``@loader_path`` like the rest.
+    """
     lines = output(["otool", "-L", path]).splitlines()[1:]
     identity = output(["otool", "-D", path]).splitlines()[1:]
+    load_commands = output(["otool", "-l", path])
+    rpaths = [
+        Path(rpath.replace("@loader_path", str(path.parent)))
+        for rpath in re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.+?) \(offset", load_commands)
+    ]
     dependencies = []
     for line in lines:
         name = line.strip().split(" (", 1)[0]
         if name in identity or name.startswith(("/usr/lib/", "/System/Library/")):
             continue
         if name.startswith("@loader_path/"):
-            resolved = path.parent / name[len("@loader_path/"):]
+            candidates = [path.parent / name[len("@loader_path/"):]]
         elif name.startswith("@rpath/"):
             relative = name[len("@rpath/"):]
-            candidates = [path.parent / relative]
-            load_commands = output(["otool", "-l", path])
-            for rpath in re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.+?) \(offset", load_commands):
-                candidates.append(Path(rpath.replace("@loader_path", str(path.parent))) / relative)
-            resolved = next((p for p in candidates if p.is_file()), None)
-            if resolved is None:
-                raise ValueError("Unresolved SPICE Mach-O rpath: " + name)
+            candidates = [path.parent / relative, *(rpath / relative for rpath in rpaths)]
+        elif Path(name).is_absolute():
+            candidates = [Path(name)]
         else:
-            resolved = Path(name)
-        if not resolved.is_absolute() or not resolved.is_file():
+            candidates = [path.parent / name, prefix / "lib" / name]
+        resolved = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if resolved is None:
             raise ValueError("Unresolved SPICE Mach-O dependency: " + name)
         dependencies.append((name, resolved))
     return dependencies
@@ -301,7 +309,7 @@ def collect_libraries(staging, prefix, target):
         shutil.copy2(real, destination)
         destination.chmod(0o755)
         origins[name] = {"path": str(real), "sha256": common.sha256(real.read_bytes())}
-        dependencies = macho_dependencies(real) if macos else elf_dependencies(real, prefix)
+        dependencies = macho_dependencies(real, prefix) if macos else elf_dependencies(real, prefix)
         for reference, dependency in dependencies:
             library_name = Path(reference).name
             pending.append((dependency, library_name))

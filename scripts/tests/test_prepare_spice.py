@@ -35,6 +35,34 @@ class SpiceRuntimeTests(unittest.TestCase):
                 self.assertIn("-mmacosx-version-min=12.0", configure.kwargs["env"]["LDFLAGS"])
                 self.assertEqual(configure.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"], "12.0")
 
+    def test_macho_dependencies_resolves_bare_libvpx_name_in_private_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "prefix"
+            library = prefix / "lib" / "libvpx.12.dylib"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"dylib")
+            loader = root / "libgstvpx.dylib"
+            loader.write_bytes(b"plugin")
+
+            def otool(args, **_):
+                if args[1] == "-L":
+                    return (
+                        f"{loader}:\n"
+                        "\tlibvpx.12.dylib (compatibility version 12.0.0, current version 12.0.0)\n"
+                        "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)"
+                    )
+                return ""
+
+            with mock.patch.object(spice_unix, "output", side_effect=otool):
+                self.assertEqual(
+                    spice_unix.macho_dependencies(loader, prefix),
+                    [("libvpx.12.dylib", library)],
+                )
+                library.unlink()
+                with self.assertRaisesRegex(ValueError, "libvpx\\.12\\.dylib"):
+                    spice_unix.macho_dependencies(loader, prefix)
+
     def test_source_extraction_rejects_links_and_traversal_before_writing(self):
         for name, kind in (("../outside", tarfile.REGTYPE), ("source/link", tarfile.SYMTYPE),
                            ("source/hardlink", tarfile.LNKTYPE), ("source/device", tarfile.CHRTYPE)):
