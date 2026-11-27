@@ -15534,7 +15534,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "zmodem2"
 version = "0.7.3"
-source = "git+https://github.com/nyakang/zmodem2?rev=87a80216179f29d90e0b8c06ee5b4a6a0132c763#87a80216179f29d90e0b8c06ee5b4a6a0132c763"
+source = "git+https://github.com/nyakang/zmodem2?rev=54ab0fb6451b0afca0af216267dce3c3ccf0ff97#54ab0fb6451b0afca0af216267dce3c3ccf0ff97"
 dependencies = [
  "bitflags 2.13.2",
  "hex",

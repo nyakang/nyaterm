@@ -17,7 +17,10 @@ fn main() -> anyhow::Result<()> {
     let size: usize = value("--bytes", "8388608").parse()?;
     let rtt_ms: u64 = value("--rtt-ms", "50").parse()?;
     let label = value("--label", "optimized");
-    let window: usize = value("--window", "256").parse()?;
+    let default_window = ZmodemTransferOptions::reliable_transport()
+        .streaming_window
+        .to_string();
+    let window: usize = value("--window", &default_window).parse()?;
     let nonstop = value("--receive", "nonstop") == "nonstop";
     let options = ZmodemTransferOptions {
         nonstop_receive: nonstop,

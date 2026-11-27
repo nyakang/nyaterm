@@ -66,6 +66,11 @@ fn later_file_is_revalidated_when_opened_after_preflight() {
 #[test]
 fn corrupted_data_is_retransmitted_with_buffered_seek() {
     round_trip_fault(64, true, 4);
+    round_trip_fault(
+        ZmodemTransferOptions::reliable_transport().streaming_window,
+        true,
+        4,
+    );
 }
 
 fn round_trip(window: usize, nonstop: bool, fail_flush: bool) {
@@ -81,7 +86,13 @@ fn round_trip_fault(window: usize, nonstop: bool, fault: u8) {
     std::fs::create_dir(&dst).unwrap();
     let payloads = [
         vec![],
-        (0..if fault == 2 { 600_003 } else { 80_003 })
+        (0..if window >= 1024 {
+            1_100_003
+        } else if fault == 2 {
+            600_003
+        } else {
+            80_003
+        })
             .map(|i| (i % 256) as u8)
             .collect::<Vec<_>>(),
         b"last".to_vec(),

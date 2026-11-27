@@ -189,7 +189,7 @@ unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
 vte = "0.14"
 zeroize = "1"
-zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "87a80216179f29d90e0b8c06ee5b4a6a0132c763" }
+zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "54ab0fb6451b0afca0af216267dce3c3ccf0ff97" }
 zed_reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = [
     "blocking",
     "json",

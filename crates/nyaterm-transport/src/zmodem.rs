@@ -9,6 +9,8 @@ macro_rules! zmodem_log {
 use serde::Serialize;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
+#[cfg(all(test, unix))]
+mod lrzsz_tests;
 pub mod runtime;
 #[cfg(test)]
 mod transfer_tests;
@@ -38,7 +40,10 @@ impl ZmodemTransferOptions {
     pub fn reliable_transport() -> Self {
         Self {
             nonstop_receive: true,
-            streaming_window: 256,
+            // One MiB between ACK waits when the peer advertises nonstop I/O.
+            // Bounded peers retain their negotiated window; runtime turns and
+            // the transport mailbox still bound memory and cancellation work.
+            streaming_window: 1024,
             buffered_files: true,
         }
     }
@@ -72,7 +77,6 @@ const ZMODEM_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 const CANCEL_SEQ_LEN: usize = 5;
 
 const ZMODEM_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
-const ZMODEM_PROGRESS_BYTES: u64 = 256 * 1024;
 
 /// Direction of the ZMODEM transfer from the **local** perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -476,9 +480,6 @@ pub struct ZmodemTransfer {
     progress_throttle: ProgressThrottle,
     /// Scratch buffer for file bytes handed to a `zmodem2::Sender`.
     send_buf: Vec<u8>,
-    /// Scratch buffer for received file bytes staged out of a `zmodem2::Receiver`
-    /// poll before they are written to disk.
-    file_buf: Vec<u8>,
     options: ZmodemTransferOptions,
     consumed: usize,
     wire_budget: Option<usize>,
@@ -549,10 +550,10 @@ impl ProgressThrottle {
     fn should_emit_at(&mut self, bytes_transferred: u64, force: bool, now: Instant) -> bool {
         if force
             || self.last_emit_at.is_none()
-            || bytes_transferred.saturating_sub(self.last_emit_bytes) >= ZMODEM_PROGRESS_BYTES
-            || self
-                .last_emit_at
-                .is_some_and(|last| now.duration_since(last) >= ZMODEM_PROGRESS_INTERVAL)
+            || (bytes_transferred != self.last_emit_bytes
+                && self
+                    .last_emit_at
+                    .is_some_and(|last| now.duration_since(last) >= ZMODEM_PROGRESS_INTERVAL))
         {
             self.last_emit_at = Some(now);
             self.last_emit_bytes = bytes_transferred;
@@ -582,7 +583,6 @@ impl ZmodemTransfer {
             file_count: 0,
             progress_throttle: ProgressThrottle::new(),
             send_buf: Vec::new(),
-            file_buf: Vec::new(),
             options,
             consumed: 0,
             wire_budget: None,
@@ -704,7 +704,7 @@ impl ZmodemTransfer {
         self.more = false;
         let actions = self.feed_inner(data);
         ZmodemAdvance {
-            actions: coalesce_wire(actions),
+            actions,
             consumed: self.consumed,
             more: self.more,
         }
@@ -807,8 +807,8 @@ impl ZmodemTransfer {
     /// Drains everything the receiver has queued — wire responses, file data and
     /// events — until it reports [`zmodem2::Action::Idle`].
     ///
-    /// `poll` borrows the state machine for as long as the action it returns is
-    /// alive, so each action is copied out before it is acted on. Returns `false`
+    /// Write borrowed payloads before acknowledging them to the state machine,
+    /// avoiding an intermediate allocation or file-data copy. Returns `false`
     /// once the transfer has reached a terminal state, in which case the closing
     /// event has already been pushed.
     fn pump_receiver(&mut self, actions: &mut Vec<ZmodemAction>) -> bool {
@@ -830,12 +830,8 @@ impl ZmodemTransfer {
             };
 
             let step = match receiver.poll() {
-                zmodem2::Action::WriteWire(bytes) => ReceiverStep::WriteWire(bytes.to_vec()),
-                zmodem2::Action::WriteFile(bytes) => {
-                    self.file_buf.clear();
-                    self.file_buf.extend_from_slice(bytes);
-                    ReceiverStep::WriteFile
-                }
+                zmodem2::Action::WriteWire(bytes) => ReceiverStep::WriteWire(bytes),
+                zmodem2::Action::WriteFile(bytes) => ReceiverStep::WriteFile(bytes),
                 zmodem2::Action::Event(zmodem2::Event::FileStarted(info)) => {
                     ReceiverStep::FileStarted {
                         name: sanitize_filename(&String::from_utf8_lossy(info.name)),
@@ -858,10 +854,10 @@ impl ZmodemTransfer {
                 ReceiverStep::WriteWire(bytes) => {
                     let len = bytes.len();
                     self.wire_produced += len;
-                    actions.push(ZmodemAction::SendToRemote(bytes));
+                    append_wire(actions, bytes);
                     receiver.wire_written(len);
                 }
-                ReceiverStep::WriteFile => {
+                ReceiverStep::WriteFile(bytes) => {
                     let Some(rf) = current_file.as_mut() else {
                         // File data before any file header: the remote is not
                         // following the protocol.
@@ -872,7 +868,7 @@ impl ZmodemTransfer {
                         }));
                         return false;
                     };
-                    if let Err(e) = rf.file.write_all(&self.file_buf) {
+                    if let Err(e) = rf.file.write_all(bytes) {
                         zmodem_log!("Failed to write file data: {e}");
                         self.state = TransferState::Done;
                         actions.push(ZmodemAction::SendToRemote(cancel_sequence()));
@@ -881,7 +877,7 @@ impl ZmodemTransfer {
                         }));
                         return false;
                     }
-                    let written = self.file_buf.len();
+                    let written = bytes.len();
                     rf.written += written as u64;
                     if self.progress_throttle.should_emit(rf.written, false) {
                         actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Progress {
@@ -1054,7 +1050,7 @@ impl ZmodemTransfer {
             };
 
             let step = match sender.poll() {
-                zmodem2::Action::WriteWire(bytes) => SenderStep::WriteWire(bytes.to_vec()),
+                zmodem2::Action::WriteWire(bytes) => SenderStep::WriteWire(bytes),
                 zmodem2::Action::ReadFile { offset, max_len } => SenderStep::ReadFile {
                     offset: u64::from(offset.get()),
                     max_len,
@@ -1071,7 +1067,7 @@ impl ZmodemTransfer {
                 SenderStep::WriteWire(bytes) => {
                     let len = bytes.len();
                     self.wire_produced += len;
-                    actions.push(ZmodemAction::SendToRemote(bytes));
+                    append_wire(actions, bytes);
                     sender.wire_written(len);
                 }
 
@@ -1130,11 +1126,10 @@ impl ZmodemTransfer {
                     sf.sent = sf.sent.max(offset + read as u64);
                     sf.position += read as u64;
                     let sent = sf.sent;
-                    let file_name = sf.name.clone();
                     let total_size = sf.size;
                     if self.progress_throttle.should_emit(sent, false) {
                         actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Progress {
-                            file_name,
+                            file_name: sf.name.clone(),
                             bytes_transferred: sent,
                             total_size,
                             direction: ZmodemDirection::Upload,
@@ -1323,44 +1318,38 @@ fn failed_actions(reason: String) -> Vec<ZmodemAction> {
     ]
 }
 
-fn coalesce_wire(actions: Vec<ZmodemAction>) -> Vec<ZmodemAction> {
-    let mut result = Vec::new();
-    for action in actions {
-        match action {
-            ZmodemAction::SendToRemote(bytes) => {
-                if let Some(ZmodemAction::SendToRemote(previous)) = result.last_mut()
-                    && previous.len() + bytes.len() <= WIRE_BATCH_SIZE
-                {
-                    previous.extend_from_slice(&bytes);
-                } else {
-                    result.push(ZmodemAction::SendToRemote(bytes));
-                }
-            }
-            event => result.push(event),
-        }
+/// Copy straight from the protocol buffer into the transport batch. Events
+/// remain ordering boundaries, and no individual wire action exceeds a batch.
+fn append_wire(actions: &mut Vec<ZmodemAction>, bytes: &[u8]) {
+    if let Some(ZmodemAction::SendToRemote(previous)) = actions.last_mut()
+        && previous.len() + bytes.len() <= WIRE_BATCH_SIZE
+    {
+        previous.extend_from_slice(bytes);
+    } else {
+        let capacity = if bytes.len() >= 1024 {
+            WIRE_BATCH_SIZE.max(bytes.len())
+        } else {
+            bytes.len()
+        };
+        let mut batch = Vec::with_capacity(capacity);
+        batch.extend_from_slice(bytes);
+        actions.push(ZmodemAction::SendToRemote(batch));
     }
-    result
 }
 
-/// One unit of work taken out of a [`zmodem2::Receiver`] poll, with the payload
-/// copied out: `poll` borrows the state machine for as long as the action it
-/// returns is alive, and every handler needs to call back into it.
-enum ReceiverStep {
-    WriteWire(Vec<u8>),
-    /// File bytes staged in `ZmodemTransfer::file_buf`.
-    WriteFile,
-    FileStarted {
-        name: String,
-        size: u64,
-    },
+/// Payload borrows end before acknowledging the completed I/O to the decoder.
+enum ReceiverStep<'a> {
+    WriteWire(&'a [u8]),
+    WriteFile(&'a [u8]),
+    FileStarted { name: String, size: u64 },
     FileCompleted,
     SessionCompleted,
     Aborted,
 }
 
 /// The sending counterpart of [`ReceiverStep`].
-enum SenderStep {
-    WriteWire(Vec<u8>),
+enum SenderStep<'a> {
+    WriteWire(&'a [u8]),
     ReadFile { offset: u64, max_len: usize },
     FileCompleted,
     SessionCompleted,
@@ -1373,11 +1362,11 @@ enum SenderStep {
 fn flush_receiver_wire(receiver: &mut zmodem2::Receiver, actions: &mut Vec<ZmodemAction>) {
     loop {
         let payload = match receiver.poll() {
-            zmodem2::Action::WriteWire(bytes) => bytes.to_vec(),
+            zmodem2::Action::WriteWire(bytes) => bytes,
             _ => return,
         };
         let len = payload.len();
-        actions.push(ZmodemAction::SendToRemote(payload));
+        append_wire(actions, payload);
         receiver.wire_written(len);
     }
 }
@@ -1386,11 +1375,11 @@ fn flush_receiver_wire(receiver: &mut zmodem2::Receiver, actions: &mut Vec<Zmode
 fn flush_sender_wire(sender: &mut zmodem2::Sender, actions: &mut Vec<ZmodemAction>) {
     loop {
         let payload = match sender.poll() {
-            zmodem2::Action::WriteWire(bytes) => bytes.to_vec(),
+            zmodem2::Action::WriteWire(bytes) => bytes,
             _ => return,
         };
         let len = payload.len();
-        actions.push(ZmodemAction::SendToRemote(payload));
+        append_wire(actions, payload);
         sender.wire_written(len);
     }
 }
@@ -1441,9 +1430,9 @@ fn modification_time_seconds(modified: std::io::Result<std::time::SystemTime>) -
 #[cfg(test)]
 mod tests {
     use super::{
-        ProgressThrottle, ZMODEM_PROGRESS_BYTES, ZMODEM_PROGRESS_INTERVAL, ZmodemAction,
-        ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
-        cancel_sequence, modification_time_seconds, upload_modification_time,
+        ProgressThrottle, ZMODEM_PROGRESS_INTERVAL, ZmodemAction, ZmodemDetectResult,
+        ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer, cancel_sequence,
+        modification_time_seconds, upload_modification_time,
     };
     use std::time::{Duration, Instant};
 
@@ -1875,21 +1864,23 @@ mod tests {
     }
 
     #[test]
-    fn progress_throttle_respects_time_and_byte_thresholds() {
+    fn progress_throttle_caps_fast_transfers_and_still_reports_slow_progress() {
         let mut throttle = ProgressThrottle::new();
         let start = Instant::now();
         assert!(throttle.should_emit_at(0, false, start));
-        assert!(!throttle.should_emit_at(1, false, start + Duration::from_millis(10)));
-        assert!(throttle.should_emit_at(
-            ZMODEM_PROGRESS_BYTES,
-            false,
-            start + Duration::from_millis(20)
-        ));
-        assert!(throttle.should_emit_at(
-            ZMODEM_PROGRESS_BYTES + 1,
-            false,
-            start + ZMODEM_PROGRESS_INTERVAL + Duration::from_millis(30)
-        ));
+        for millis in 1..100 {
+            assert!(!throttle.should_emit_at(
+                millis * 1024 * 1024,
+                false,
+                start + Duration::from_millis(millis)
+            ));
+        }
+        let bytes = 100 * 1024 * 1024;
+        assert!(throttle.should_emit_at(bytes, false, start + ZMODEM_PROGRESS_INTERVAL));
+        assert!(!throttle.should_emit_at(bytes, false, start + ZMODEM_PROGRESS_INTERVAL * 2));
+        assert!(throttle.should_emit_at(bytes + 1, false, start + ZMODEM_PROGRESS_INTERVAL * 2));
+        throttle.reset();
+        assert!(throttle.should_emit_at(0, false, start + ZMODEM_PROGRESS_INTERVAL * 2));
     }
 
     #[test]
