@@ -35,15 +35,6 @@ impl NyaTermApp {
         }
         cx.notify();
     }
-    pub(in crate::features) fn apply_android_adb_path(
-        &mut self,
-        text: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings.set_android_adb_path(text);
-        self.save_general_settings(cx);
-        cx.notify();
-    }
     /// Apply an edit from the X11 display box.
     pub(in crate::features) fn apply_terminal_x11_display(
         &mut self,

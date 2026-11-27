@@ -203,7 +203,6 @@ impl NyaTermApp {
         self.android
             .pending
             .insert(key.clone(), options.request_id.clone().unwrap());
-        let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let name = connection.name.clone();
         let task_key = key.clone();
@@ -222,15 +221,11 @@ impl NyaTermApp {
             };
             check_cancelled()?;
             let client = AdbClient::local(Some(
-                if custom.is_empty() {
-                    component
-                        .root
-                        .join("adb")
-                        .join(if cfg!(windows) { "adb.exe" } else { "adb" })
-                } else {
-                    std::path::PathBuf::from(&custom)
-                }
-                .as_path(),
+                component
+                    .root
+                    .join("adb")
+                    .join(if cfg!(windows) { "adb.exe" } else { "adb" })
+                    .as_path(),
             ))?
             .with_component(component)
             .with_server_manager(tracker.server_manager());
@@ -431,12 +426,10 @@ impl NyaTermApp {
                 }
                 match result {
                     Ok(component) => {
-                        if app.settings.summary().android_adb_path.is_empty() {
-                            config.client.executable = component
-                                .root
-                                .join("adb")
-                                .join(if cfg!(windows) { "adb.exe" } else { "adb" });
-                        }
+                        config.client.executable = component
+                            .root
+                            .join("adb")
+                            .join(if cfg!(windows) { "adb.exe" } else { "adb" });
                         config.client.component = Some(component);
                         app.open_android_view(config, kind, options, cx);
                     }
@@ -849,23 +842,17 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let job_ticket = ticket.clone();
-        let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let task = self
             .blocking_jobs
             .submit_task("android-discovery", move |_| {
                 job_ticket.check()?;
                 let client = AdbClient::local(Some(
-                    if custom.is_empty() {
-                        component.root.join("adb").join(if cfg!(windows) {
-                            "adb.exe"
-                        } else {
-                            "adb"
-                        })
-                    } else {
-                        std::path::PathBuf::from(&custom)
-                    }
-                    .as_path(),
+                    component
+                        .root
+                        .join("adb")
+                        .join(if cfg!(windows) { "adb.exe" } else { "adb" })
+                        .as_path(),
                 ))?
                 .with_component(component)
                 .with_server_manager(tracker.server_manager());

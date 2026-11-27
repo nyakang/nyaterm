@@ -499,8 +499,7 @@
       "enable_idle_lock": "local",
       "idle_lock_minutes": "local",
       "has_master_password": "local",
-      "keybindings": "conditional:keybinding",
-      "android_adb_path": "local"
+      "keybindings": "conditional:keybinding"
     }
   },
   "AiSettings": {

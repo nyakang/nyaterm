@@ -265,10 +265,7 @@ fn changing_saved_device_selector_requires_rebind_without_reusing_the_old_shell_
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
     app.update(&mut cx, |app, cx| {
-        // Binding must stop before network discovery; this is a different synthetic device.
-        let mut settings = app.settings.summary().clone();
-        settings.android_adb_path = root.path().join("missing-adb").to_string_lossy().into_owned();
-        app.settings.replace_summary(settings);
+        // The fixture component has no ADB, so binding stops before network discovery.
         let connection = serde_json::from_value(serde_json::json!({
             "id":"android-device", "name":"Changed device", "type":"adb", "device":{"kind":"usb", "serial":"other-synthetic"}
         })).unwrap();
@@ -628,13 +625,6 @@ fn android_bind_failure_stays_in_its_workspace_tab_and_retries_the_same_view() {
         let _cleanup = TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
         let (request, placement) = app.update(&mut cx, |app, cx| {
-            let mut settings = app.settings.summary().clone();
-            settings.android_adb_path = root
-                .path()
-                .join("missing-adb")
-                .to_string_lossy()
-                .into_owned();
-            app.settings.replace_summary(settings);
             let connection = missing_adb_connection();
             app.connection_state
                 .replace_loaded(vec![connection.clone()], Vec::new());
@@ -704,13 +694,6 @@ fn closing_android_bind_allows_a_new_attempt_and_ignores_the_old_result() {
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
     let next_request = app.update(&mut cx, |app, cx| {
-        let mut settings = app.settings.summary().clone();
-        settings.android_adb_path = root
-            .path()
-            .join("missing-adb")
-            .to_string_lossy()
-            .into_owned();
-        app.settings.replace_summary(settings);
         app.start_android_connection(missing_adb_connection(), Default::default(), None, cx);
         let request = app
             .session

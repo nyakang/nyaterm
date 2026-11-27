@@ -91,11 +91,10 @@ and outstanding platform/performance acceptance.
 
 ## Bundled dependencies
 
-Release packages include ADB, its companions, the Android helper and LGPL dynamic
-FFmpeg libraries. `android.adb_path` is a device-local setting that overrides the
-bundled executable; an invalid explicit path is an error. Debug builds can use
-PATH or SDK discovery when the bundle is absent. Existing compatible ADB servers
-are reused. When no server is reachable, NyaTerm starts the configured ADB in
+The independently installed Android component includes ADB, its companions, the
+Android helper and LGPL dynamic FFmpeg libraries. The application always uses
+that component's ADB executable. Existing compatible ADB servers are reused.
+When no server is reachable, NyaTerm starts the component's ADB in
 foreground mode on the existing default port (5037), retaining its process handle.
 After all workspace users stop, application exit cancels discovery and terminates
 only the foreground processes it owns, with a bounded background cleanup. A server

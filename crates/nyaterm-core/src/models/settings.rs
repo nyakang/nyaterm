@@ -410,8 +410,6 @@ pub enum RecordingRotationPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettingsSummary {
-    #[serde(default)]
-    pub android_adb_path: String,
     pub theme: String,
     #[serde(default)]
     pub theme_mode: crate::themes::appearance::ThemeMode,
@@ -847,7 +845,6 @@ impl Default for AppSettingsSummary {
             terminal_font_weight: default_terminal_font_weight(),
             terminal_font_weight_bold: default_terminal_font_weight_bold(),
             bold_default_foreground: false,
-            android_adb_path: String::new(),
             x11_display: String::new(),
             x11_mode: Default::default(),
             x11_clipboard: false,

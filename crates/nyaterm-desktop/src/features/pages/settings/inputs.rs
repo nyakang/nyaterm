@@ -133,14 +133,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         match tab {
-            SettingsTab::General => {
-                self.ensure_text_input(
-                    "settings.android.adb-path",
-                    &self.settings.summary().android_adb_path.clone(),
-                    TextInputSetup::placeholder(rust_i18n::t!("android.bundledAdb")),
-                    cx,
-                );
-            }
+            SettingsTab::General => {}
             SettingsTab::Appearance => self.ensure_appearance_inputs(cx),
             SettingsTab::Interaction => self.ensure_interaction_inputs(cx),
             SettingsTab::Keybindings => self.ensure_keybinding_inputs(cx),
