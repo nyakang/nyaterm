@@ -9,8 +9,7 @@ use nyaterm_ui::{NyaAppMenuBar, NyaDialogWindowExt as _, NyaMenuItem};
 use super::definition::{TitleMenuCommand, TitleMenuDefinition, TitleMenuKind};
 use crate::features::NyaTermApp;
 use crate::models::{
-    ActivityBarEntry, ActivityBarZone, HeaderStatusMode, NavItem, PanelOpenMode, PanelSide,
-    SmartSplitMode, TitleMenu,
+    ActivityBarEntry, ActivityBarZone, NavItem, PanelOpenMode, PanelSide, SmartSplitMode, TitleMenu,
 };
 
 impl NyaTermApp {
@@ -161,7 +160,11 @@ impl NyaTermApp {
             }
             TitleMenuCommand::SetLanguage(locale) => self.update_ui_language(locale, cx),
             TitleMenuCommand::HideHeaderStatus => self.open_header_status_hide_confirm(window, cx),
+            TitleMenuCommand::ShowHeaderStatus => self.set_header_status_visible(true, cx),
             TitleMenuCommand::SetHeaderStatus(mode) => self.set_header_status_mode(*mode, cx),
+            TitleMenuCommand::SessionToolbarAction { session_id, action } => {
+                self.execute_session_toolbar_action(session_id, *action, window, cx);
+            }
             TitleMenuCommand::TogglePanelFloating => {
                 let mode = if self.shell.panel_open_mode().is_floating() {
                     PanelOpenMode::Docked
@@ -321,9 +324,6 @@ impl NyaTermApp {
             .terminal_theme
             .as_deref()
             .unwrap_or("");
-        let current_header_status =
-            HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode);
-        let header_status_visible = self.settings.summary().ui_header_status_visible;
         vec![
             TitleMenuDefinition::submenu(t!("menu.theme"), self.title_theme_menu_items(cx))
                 .icon("icons/menu/palette.svg"),
@@ -336,11 +336,7 @@ impl NyaTermApp {
                 .icon("icons/translation.svg"),
             TitleMenuDefinition::submenu(
                 t!("menu.headerStatus"),
-                self.title_header_status_menu_items(
-                    current_header_status,
-                    header_status_visible,
-                    cx,
-                ),
+                self.title_header_status_menu_items(),
             )
             .icon("icons/menu/info.svg"),
             TitleMenuDefinition::submenu(t!("menu.panels"), self.title_panels_menu_items(cx))
@@ -533,22 +529,19 @@ impl NyaTermApp {
             .collect()
     }
 
-    fn title_header_status_menu_items(
-        &self,
-        current: HeaderStatusMode,
-        visible: bool,
-        _cx: &App,
-    ) -> Vec<TitleMenuDefinition> {
+    fn title_header_status_menu_items(&self) -> Vec<TitleMenuDefinition> {
+        let visible = self.settings.summary().ui_header_status_visible;
         let mut items = vec![
-            TitleMenuDefinition::action(t!("headerStatus.hidden"))
-                .checked(!visible)
-                .command(TitleMenuCommand::HideHeaderStatus),
+            TitleMenuDefinition::action(t!("headerStatus.show"))
+                .checked(visible)
+                .command(if visible {
+                    TitleMenuCommand::HideHeaderStatus
+                } else {
+                    TitleMenuCommand::ShowHeaderStatus
+                }),
+            TitleMenuDefinition::separator(),
         ];
-        items.extend(HeaderStatusMode::ALL.into_iter().map(|mode| {
-            TitleMenuDefinition::action(t!(mode.i18n_key()))
-                .checked(visible && current == mode)
-                .command(TitleMenuCommand::SetHeaderStatus(mode))
-        }));
+        items.extend(self.session_toolbar_menu_definitions());
         items
     }
 
@@ -1087,7 +1080,7 @@ mod tests {
         assert!(labels.contains(&"Theme"));
         assert!(labels.contains(&"Terminal Theme"));
         assert!(labels.contains(&"Language"));
-        assert!(labels.contains(&"Header Status"));
+        assert!(labels.contains(&"Session Toolbar"));
         assert!(labels.contains(&"Panels"));
         assert!(labels.contains(&"Zoom In"));
         assert!(labels.contains(&"Zoom Out"));

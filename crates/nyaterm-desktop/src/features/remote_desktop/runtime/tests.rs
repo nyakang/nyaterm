@@ -24,6 +24,92 @@ use super::{
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
 #[test]
+fn session_toolbar_remote_actions_follow_runtime_state_and_backend_capabilities() {
+    use crate::features::layout::title_bar::definition::TitleMenuCommand;
+    use crate::features::layout::title_bar::session_toolbar::SessionToolbarAction;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    let root = TestConfigDir::new("nyaterm-session-toolbar-remote-states");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "remote");
+    app.update(&mut cx, |app, cx| {
+        let fullscreen = TitleMenuCommand::SessionToolbarAction {
+            session_id: "remote".into(),
+            action: SessionToolbarAction::Fullscreen,
+        };
+        let reconnect = TitleMenuCommand::SessionToolbarAction {
+            session_id: "remote".into(),
+            action: SessionToolbarAction::Reconnect,
+        };
+        let vnc = VncSessionConfig {
+            username: String::new(),
+            relay: None,
+            name: "VNC fixture".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            password: None,
+            security: Default::default(),
+            display: Default::default(),
+            clipboard: Default::default(),
+            reconnect: Default::default(),
+            shared: true,
+            view_only: true,
+        };
+        for config in [
+            SessionLaunchConfig::Rdp(fit_window_rdp_config("RDP fixture")),
+            SessionLaunchConfig::Vnc(vnc),
+        ] {
+            let is_rdp = matches!(config, SessionLaunchConfig::Rdp(_));
+            app.session.metadata_mut("remote").unwrap().launch_config = config;
+            app.remote_desktop.insert_disconnected("remote".into());
+            for state in [
+                RemoteDesktopViewState::Connecting,
+                RemoteDesktopViewState::Connected,
+                RemoteDesktopViewState::Reconnecting,
+                RemoteDesktopViewState::Disconnecting,
+                RemoteDesktopViewState::Failed,
+                RemoteDesktopViewState::Disconnected,
+            ] {
+                app.remote_desktop.sessions.get_mut("remote").unwrap().state = state;
+                assert_eq!(
+                    app.title_menu_command_enabled(&reconnect, cx),
+                    matches!(
+                        state,
+                        RemoteDesktopViewState::Failed | RemoteDesktopViewState::Disconnected
+                    ),
+                    "{state:?}"
+                );
+                assert_eq!(
+                    app.title_menu_command_enabled(&fullscreen, cx),
+                    is_rdp && state == RemoteDesktopViewState::Connected,
+                    "{state:?}"
+                );
+            }
+            app.remote_desktop
+                .helper_launches
+                .insert("remote".into(), "pending".into());
+            assert!(!app.title_menu_command_enabled(&reconnect, cx));
+            app.remote_desktop.helper_launches.clear();
+            app.remote_desktop.remove_session("remote");
+            assert!(!app.title_menu_command_enabled(&reconnect, cx));
+            assert!(!app.title_menu_command_enabled(&fullscreen, cx));
+        }
+        app.session.metadata_mut("remote").unwrap().launch_config =
+            SessionLaunchConfig::Rdp(fit_window_rdp_config("RDP fixture"));
+        app.remote_desktop.insert_disconnected("remote".into());
+        app.remote_desktop.fullscreen_session = Some("remote".into());
+        assert!(
+            app.title_menu_command_enabled(&fullscreen, cx),
+            "exit fullscreen remains available after a disconnect"
+        );
+        app.remote_desktop.fullscreen_session = None;
+    });
+}
+
+#[test]
 fn saved_rdp_retry_rebuilds_target_and_drops_previous_inline_password() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::SessionLaunchConfig;

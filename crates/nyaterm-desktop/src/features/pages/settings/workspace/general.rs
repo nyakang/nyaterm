@@ -82,7 +82,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.headerStatus"),
-                        None,
+                        Some(t!("settings.headerStatusDesc").into()),
                         self.settings_select_control(
                             "settings.general.header-status",
                             std::iter::once(NyaSelectOption::new(

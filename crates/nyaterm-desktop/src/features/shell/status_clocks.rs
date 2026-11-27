@@ -61,9 +61,8 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn header_status_clock_should_run(&self) -> bool {
-        self.settings.summary().ui_header_status_visible
-            && HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode)
-                == HeaderStatusMode::DateTime
+        self.session_toolbar_context()
+            .displays(HeaderStatusMode::DateTime)
     }
 
     fn tick_header_status_clock(&mut self, cx: &mut Context<Self>) -> bool {

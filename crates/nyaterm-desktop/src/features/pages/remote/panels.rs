@@ -1241,9 +1241,9 @@ mod tests {
                     ssh_multiplex_key: None,
                     source_connection_id: None,
                     ai_execution_profile: nyaterm_core::AiExecutionProfile::Posix,
-                    launch_config: crate::models::SessionLaunchConfig::Local(
-                        nyaterm_transport::LocalSessionConfig::default(),
-                    ),
+                    launch_config: crate::models::SessionLaunchConfig::Ssh(Box::new(
+                        nyaterm_transport::SshSessionConfig::default(),
+                    )),
                     disconnected: false,
                 },
             );

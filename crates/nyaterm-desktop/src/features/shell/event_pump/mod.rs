@@ -562,23 +562,18 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn header_status_needs_stats(&self) -> bool {
-        self.settings.summary().ui_header_status_visible
-            && matches!(
-                HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode),
-                HeaderStatusMode::Resources | HeaderStatusMode::Host
-            )
+        let context = self.session_toolbar_context();
+        context.displays(HeaderStatusMode::Resources) || context.displays(HeaderStatusMode::Host)
     }
 
     pub(in crate::features) fn header_status_needs_gpu(&self) -> bool {
-        self.settings.summary().ui_header_status_visible
-            && HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode)
-                == HeaderStatusMode::Gpu
+        self.session_toolbar_context()
+            .displays(HeaderStatusMode::Gpu)
     }
 
     pub(in crate::features) fn header_status_needs_npu(&self) -> bool {
-        self.settings.summary().ui_header_status_visible
-            && HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode)
-                == HeaderStatusMode::Npu
+        self.session_toolbar_context()
+            .displays(HeaderStatusMode::Npu)
     }
 
     fn pending_session_auth_wait(&self) -> Option<PendingSessionAuthWait> {

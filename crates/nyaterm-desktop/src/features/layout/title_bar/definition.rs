@@ -1,6 +1,7 @@
 use gpui::{Action, Context, SharedString};
 use nyaterm_ui::NyaMenuItem;
 
+use super::session_toolbar::SessionToolbarAction;
 use crate::features::NyaTermApp;
 use crate::models::{HeaderStatusMode, SmartSplitMode};
 use crate::shortcuts;
@@ -35,7 +36,12 @@ pub(crate) enum TitleMenuCommand {
     SetTerminalTheme(Option<String>),
     SetLanguage(String),
     HideHeaderStatus,
+    ShowHeaderStatus,
     SetHeaderStatus(HeaderStatusMode),
+    SessionToolbarAction {
+        session_id: String,
+        action: SessionToolbarAction,
+    },
     TogglePanelFloating,
     TogglePanelMultiOpen,
     ResetPanelLayout,

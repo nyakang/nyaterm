@@ -15,7 +15,7 @@ use crate::features::{
     view_widgets::connection_type_icon, view_widgets::logo_mark,
     view_widgets::window_control_button,
 };
-use crate::models::HeaderStatusMode;
+use crate::models::{HeaderStatusMode, WorkspaceTabId};
 
 struct HeaderStatusContent {
     icon: Option<IconDef>,
@@ -125,7 +125,7 @@ impl NyaTermApp {
         let narrow_left = compact_layout && self.shell.viewport_size().0 < 1024.;
         let narrow_right = compact_layout && self.shell.viewport_size().0 < 768.;
         let header_status_visible = self.settings.summary().ui_header_status_visible;
-        let header_status = self.header_status_content();
+        let header_status = self.header_status_content(cx);
         // Match Tauri Header: h-10.
         div()
             .h(px(40.))
@@ -316,17 +316,10 @@ impl NyaTermApp {
     ) -> impl IntoElement {
         let palette = self.theme_palette();
         let select_label = t!("headerStatus.select");
-        let selected =
-            HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode);
-        let mut items = HeaderStatusMode::ALL
+        let mut items = self
+            .session_toolbar_menu_definitions()
             .into_iter()
-            .map(|mode| {
-                nyaterm_ui::NyaMenuItem::action(t!(mode.i18n_key()))
-                    .checked(selected == mode)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_header_status_mode(mode, cx);
-                    }))
-            })
+            .map(|item| item.into_window_item(cx))
             .collect::<Vec<_>>();
         items.extend([
             nyaterm_ui::NyaMenuItem::separator(),
@@ -375,6 +368,9 @@ impl NyaTermApp {
                         MouseButton::Left,
                         cx.listener(|_, _, _, cx| cx.stop_propagation()),
                     )
+                    .items_center()
+                    .flex()
+                    .child(self.session_toolbar_shortcuts(cx))
                     .child(
                         NyaDropdownMenu::new("header-status-menu-trigger")
                             .icon("icons/chevron-down.svg")
@@ -574,30 +570,10 @@ impl NyaTermApp {
             .into_any_element()
     }
 
-    fn header_status_content(&self) -> HeaderStatusContent {
-        let mode = HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode);
-        if matches!(
-            mode,
-            HeaderStatusMode::Resources
-                | HeaderStatusMode::Host
-                | HeaderStatusMode::Gpu
-                | HeaderStatusMode::Npu
-        ) && self
-            .session
-            .active_ssh_config()
-            .is_some_and(|config| config.ssh_compatibility_mode)
-        {
-            return HeaderStatusContent::simple(
-                header_status_mode_icon(mode),
-                t!("panel.sshCompatibilityModeUnavailable").to_string(),
-            );
-        }
+    fn header_status_content(&self, cx: &gpui::App) -> HeaderStatusContent {
+        let mode = self.session_toolbar_context().effective_mode();
         match mode {
-            HeaderStatusMode::Session => HeaderStatusContent::simple(
-                self.title_context_icon()
-                    .unwrap_or_else(|| header_status_mode_icon(mode)),
-                self.title_context_label(),
-            ),
+            HeaderStatusMode::Session => self.header_session_content(cx),
             HeaderStatusMode::DateTime => HeaderStatusContent::simple(
                 header_status_mode_icon(mode),
                 format_header_datetime(local_now(), &self.settings.summary().language),
@@ -608,6 +584,39 @@ impl NyaTermApp {
             HeaderStatusMode::Gpu => self.gpu_header_content(),
             HeaderStatusMode::Npu => self.npu_header_content(),
         }
+    }
+
+    fn header_session_content(&self, cx: &gpui::App) -> HeaderStatusContent {
+        if !self.session.start_has_active_pending()
+            && !self.session.start_has_active_failed()
+            && let Some(tab) = self.active_workspace_tab()
+        {
+            let content = match WorkspaceTabId::from_layout_key(&tab) {
+                WorkspaceTabId::FileManager(id) => Some((
+                    "icons/file-manager.svg",
+                    self.file_manager_tab_title(&id, cx),
+                )),
+                WorkspaceTabId::Settings => {
+                    Some(("icons/settings.svg", t!("settings.title").to_string()))
+                }
+                WorkspaceTabId::Editor(id) => self
+                    .transfer
+                    .editor_tab_snapshot(&id)
+                    .map(|document| ("icons/conn/file.svg", document.name.clone())),
+                WorkspaceTabId::Session(_) => None,
+            };
+            if let Some((icon, label)) = content {
+                return HeaderStatusContent::simple(
+                    IconDef::mono(icon, self.theme_palette().text_muted),
+                    label,
+                );
+            }
+        }
+        HeaderStatusContent::simple(
+            self.title_context_icon()
+                .unwrap_or_else(|| header_status_mode_icon(HeaderStatusMode::Session)),
+            self.title_context_label(),
+        )
     }
 
     /// The header shows host metrics for any live terminal: an SSH session or
@@ -924,9 +933,8 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn header_status_clock_refresh_due(&self) -> bool {
-        self.settings.summary().ui_header_status_visible
-            && HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode)
-                == HeaderStatusMode::DateTime
+        self.session_toolbar_context()
+            .displays(HeaderStatusMode::DateTime)
             && self.shell.header_status_rendered_minute() != current_unix_minute()
     }
 
@@ -951,14 +959,13 @@ impl NyaTermApp {
             return failed;
         }
         if let Some(session_id) = self.session.active_id() {
-            let tab_root = self.tab_root_for_session(session_id);
             let name = self
                 .session
-                .display_name(&tab_root)
-                .unwrap_or_else(|| short_id(&tab_root).to_string());
+                .display_name(session_id)
+                .unwrap_or_else(|| short_id(session_id).to_string());
             let has_custom_name = self
                 .session
-                .custom_name(&tab_root)
+                .custom_name(session_id)
                 .is_some_and(|value| !value.trim().is_empty());
             if !has_custom_name
                 && self

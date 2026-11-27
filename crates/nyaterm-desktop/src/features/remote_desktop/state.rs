@@ -435,6 +435,13 @@ impl RemoteDesktopFeatureState {
         self.sessions.contains_key(session_id)
     }
 
+    pub(in crate::features) fn session_view_state(
+        &self,
+        session_id: &str,
+    ) -> Option<RemoteDesktopViewState> {
+        self.sessions.get(session_id).map(|session| session.state)
+    }
+
     pub(in crate::features) fn cancel_clipboard_transfer(
         &self,
         session_id: &str,
