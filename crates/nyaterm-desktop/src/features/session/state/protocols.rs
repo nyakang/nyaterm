@@ -12,6 +12,28 @@ use nyaterm_transport::{SessionEvent, SshMultiplexHandle, SshSessionConfig};
 use std::collections::VecDeque;
 
 impl SessionFeatureState {
+    pub(in crate::features::session) fn mosh_auxiliary_candidates(&self) -> Vec<String> {
+        self.metadata
+            .iter()
+            .filter(|(id, meta)| {
+                !meta.disconnected
+                    && matches!(
+                        meta.launch_config,
+                        crate::models::SessionLaunchConfig::Mosh(_)
+                    )
+                    && !self.protocols.mosh_auxiliary.contains_key(*id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+    pub(in crate::features::session) fn register_mosh_auxiliary(
+        &mut self,
+        id: String,
+        job: crate::features::session::mosh_auxiliary::AuxiliaryJob,
+    ) {
+        self.protocols.mosh_auxiliary.insert(id, job);
+    }
+
     pub(in crate::features::session) fn start_zmodem_runtime(
         &mut self,
         session_id: &str,
@@ -30,7 +52,8 @@ impl SessionFeatureState {
         let mut retained = VecDeque::new();
         while let Some(event) = self.events.pending.pop_front() {
             let id = match &event {
-                SessionEvent::Output { session_id, .. }
+                SessionEvent::MoshFrame { session_id, .. }
+                | SessionEvent::Output { session_id, .. }
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
@@ -340,6 +363,7 @@ impl SessionFeatureState {
         }
         self.clear_pending_command_submissions(session_id);
         self.protocols.remote_files.remove(session_id);
+        self.protocols.mosh_auxiliary.remove(session_id);
         self.protocols.ssh_connections.remove(session_id);
         Some(SessionDisconnectUpdate {
             already_disconnected,
@@ -355,6 +379,7 @@ impl SessionFeatureState {
         self.remove_zmodem_session_runtime(session_id);
         self.remove_trzsz_session_runtime(session_id);
         self.remove_remote_file_service(session_id);
+        self.protocols.mosh_auxiliary.remove(session_id);
         self.protocols.ssh_connections.remove(session_id);
         self.order.retain(|id| id != session_id);
         self.active.history.retain(|id| id != session_id);

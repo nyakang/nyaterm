@@ -49,6 +49,7 @@ impl NyaTermApp {
             matches!(
                 (&connection.config, failed.pending.kind),
                 (ConnectionType::LocalTerminal { .. }, SessionKind::LocalPty)
+                    | (ConnectionType::Mosh { .. }, SessionKind::Mosh)
                     | (ConnectionType::Ssh { .. }, SessionKind::Ssh)
                     | (
                         ConnectionType::Telnet { .. },

@@ -205,6 +205,12 @@ impl BatchScopeDraft {
             }
             if self.mode(field) == BatchEditMode::Clear {
                 match field {
+                    BatchFieldKey::MoshServerPath => edit.mosh.server_path = BatchField::Clear,
+                    BatchFieldKey::MoshUdpHost => edit.mosh.udp_host = BatchField::Clear,
+                    BatchFieldKey::MoshPortStart => edit.mosh.udp_port_start = BatchField::Clear,
+                    BatchFieldKey::MoshPortEnd => edit.mosh.udp_port_end = BatchField::Clear,
+                    BatchFieldKey::MoshPrediction => edit.mosh.prediction = BatchField::Clear,
+
                     BatchFieldKey::SpiceTcpPort => edit.spice.tcp_port = BatchField::Clear,
                     BatchFieldKey::SpiceTlsPort => edit.spice.tls_port = BatchField::Clear,
                     BatchFieldKey::SpiceHttpProxy => edit.spice.proxy = BatchField::Clear,
@@ -481,6 +487,30 @@ impl BatchScopeDraft {
                 self.require_text(field)?;
             }
             match field {
+                BatchFieldKey::MoshServerPath => {
+                    edit.mosh.server_path = self.text_field(field, true)
+                }
+                BatchFieldKey::MoshUdpHost => edit.mosh.udp_host = self.text_field(field, true),
+                BatchFieldKey::MoshPortStart => {
+                    edit.mosh.udp_port_start = BatchField::Set(self.require_number::<u16>(field)?)
+                }
+                BatchFieldKey::MoshPortEnd => {
+                    edit.mosh.udp_port_end = BatchField::Set(self.require_number::<u16>(field)?)
+                }
+                BatchFieldKey::MoshPrediction => {
+                    edit.mosh.prediction =
+                        BatchField::Set(match self.values.get(&field).map(String::as_str) {
+                            Some("adaptive") => nyaterm_core::mosh::MoshPrediction::Adaptive,
+                            Some("always") => nyaterm_core::mosh::MoshPrediction::Always,
+                            Some("never") => nyaterm_core::mosh::MoshPrediction::Never,
+                            _ => {
+                                return Err(
+                                    "Mosh prediction must be adaptive, always or never".into()
+                                );
+                            }
+                        })
+                }
+
                 BatchFieldKey::SpiceTcpPort => {
                     edit.spice.tcp_port = BatchField::Set(
                         self.value(field)

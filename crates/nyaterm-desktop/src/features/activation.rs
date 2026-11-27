@@ -216,6 +216,23 @@ impl NyaTermApp {
     ) {
         self.activation.waiting_for_start = true;
         match request {
+            ExternalConnectionRequest::Mosh {
+                host,
+                port,
+                username,
+            } => {
+                let username = username.unwrap_or_else(|| "root".into());
+                self.start_external_mosh_link(
+                    TemporarySshLinkConfig {
+                        name: format!("{username}@{host}:{port}"),
+                        host,
+                        port,
+                        username,
+                    },
+                    cx,
+                );
+            }
+
             ExternalConnectionRequest::SpiceFile { path } => {
                 self.load_spice_file(path, cx);
                 return;
@@ -287,6 +304,24 @@ fn external_request_matches_connection(
             .is_some_and(|(left, right)| left == right)
     };
     match (request, connection) {
+        (
+            ExternalConnectionRequest::Mosh {
+                host,
+                port,
+                username,
+            },
+            ConnectionType::Mosh {
+                host: saved_host,
+                port: saved_port,
+                username: saved_username,
+                ..
+            },
+        ) => {
+            same_host(host, saved_host)
+                && port == saved_port
+                && username.as_ref().is_none_or(|user| user == saved_username)
+        }
+
         (
             ExternalConnectionRequest::Ssh {
                 host,

@@ -193,7 +193,7 @@ pub(super) fn set_connection_editor_select_value(
         ConnectionEditorSelect::SavedPassword => {
             if matches!(
                 editor.kind,
-                ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
             ) {
                 editor.account_id = value;
                 editor.password_id = None;
@@ -659,7 +659,7 @@ pub(super) fn set_connection_editor_kind(
         editor.focused_field = ConnectionEditorField::Name;
     }
     editor.port = match kind {
-        ConnectionKindTab::Ssh => {
+        ConnectionKindTab::Mosh | ConnectionKindTab::Ssh => {
             if editor.port.trim().is_empty() || editor.port == "23" {
                 "22".to_string()
             } else {
@@ -1123,6 +1123,30 @@ pub(super) fn editor_field_seeds(
 
     vec![
         (
+            ConnectionEditorField::MoshServerPath,
+            draft.mosh.server_path.clone(),
+            false,
+            Literal("mosh-server"),
+        ),
+        (
+            ConnectionEditorField::MoshUdpHost,
+            draft.mosh.udp_host.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::MoshPortStart,
+            draft.mosh.port_start.clone(),
+            false,
+            Literal("60000"),
+        ),
+        (
+            ConnectionEditorField::MoshPortEnd,
+            draft.mosh.port_end.clone(),
+            false,
+            Literal("61000"),
+        ),
+        (
             ConnectionEditorField::AndroidMaxSize,
             draft.android_screen.max_size.to_string(),
             false,
@@ -1518,6 +1542,10 @@ pub(super) fn set_connection_editor_field_text(
         ConnectionEditorField::NewTag => draft.new_tag = text,
         ConnectionEditorField::Description => draft.description = text,
         ConnectionEditorField::NewGroupName => draft.new_group_name = text,
+        ConnectionEditorField::MoshServerPath => draft.mosh.server_path = text,
+        ConnectionEditorField::MoshUdpHost => draft.mosh.udp_host = text,
+        ConnectionEditorField::MoshPortStart => draft.mosh.port_start = text,
+        ConnectionEditorField::MoshPortEnd => draft.mosh.port_end = text,
         ConnectionEditorField::Host => draft.host = text,
         ConnectionEditorField::Port => draft.port = text,
         ConnectionEditorField::Username => {
@@ -1527,7 +1555,10 @@ pub(super) fn set_connection_editor_field_text(
                 && draft.account_id.is_some()
                 && matches!(
                     draft.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
+                    ConnectionKindTab::Mosh
+                        | ConnectionKindTab::Ssh
+                        | ConnectionKindTab::Telnet
+                        | ConnectionKindTab::Ftp
                 )
             {
                 draft.username_source = nyaterm_core::ConnectionUsernameSource::Connection;

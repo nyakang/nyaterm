@@ -154,6 +154,9 @@ impl NyaTermApp {
                 active,
                 endpoint: self.session.metadata(&session.id).and_then(|metadata| {
                     match &metadata.launch_config {
+                        SessionLaunchConfig::Mosh(config) => {
+                            Some((config.ssh.host.as_str(), config.ssh.port))
+                        }
                         SessionLaunchConfig::Ssh(config) => {
                             Some((config.host.as_str(), config.port))
                         }

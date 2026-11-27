@@ -241,7 +241,7 @@ impl NyaTermApp {
             .session_info(session_id)
             .filter(|_| !self.session.is_disconnected(session_id))
             .map(|session| match session.kind {
-                SessionKind::Ssh => resolve_ssh_execution_profile(
+                SessionKind::Mosh | SessionKind::Ssh => resolve_ssh_execution_profile(
                     configured,
                     self.ssh_session_is_configured_network_device(session_id),
                     self.terminal_buffer_tail_for_session(session_id),
@@ -279,7 +279,7 @@ impl NyaTermApp {
             .session
             .session_info(session_id)
             .is_some_and(|session| {
-                session.kind == SessionKind::Ssh
+                matches!(session.kind, SessionKind::Ssh | SessionKind::Mosh)
                     && !ssh_allows_background_execution(
                         profile,
                         self.ssh_session_is_configured_network_device(session_id),

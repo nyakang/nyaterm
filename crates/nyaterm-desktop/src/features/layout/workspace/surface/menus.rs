@@ -68,6 +68,7 @@ fn new_session_connection_protocol(connection: &SavedConnection) -> &'static str
         ConnectionType::Serial { .. } => "serial",
         ConnectionType::Rdp { .. } => "rdp",
         ConnectionType::Ssh { .. } => "ssh",
+        ConnectionType::Mosh { .. } => "mosh",
         ConnectionType::Vnc { .. } => "vnc",
         ConnectionType::Spice { .. } => "spice",
         ConnectionType::Adb { .. } => "adb",
@@ -344,6 +345,7 @@ impl NyaTermApp {
                     || match session.kind {
                         nyaterm_transport::SessionKind::LocalPty => "Local",
                         nyaterm_transport::SessionKind::Ssh => "SSH",
+                        nyaterm_transport::SessionKind::Mosh => "Mosh",
                         nyaterm_transport::SessionKind::Telnet => "Telnet",
                         nyaterm_transport::SessionKind::Serial => "Serial",
                         nyaterm_transport::SessionKind::RawTcp => "SSH",

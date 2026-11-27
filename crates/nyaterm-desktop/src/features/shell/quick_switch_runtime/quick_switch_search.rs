@@ -238,7 +238,8 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
             endpoint.as_ref().map(|(host, port)| (host.as_str(), *port))
         }
         QuickSwitchItem::Connection { connection, .. } => match &connection.config {
-            ConnectionType::Ssh { host, port, .. }
+            ConnectionType::Mosh { host, port, .. }
+            | ConnectionType::Ssh { host, port, .. }
             | ConnectionType::Telnet { host, port, .. }
             | ConnectionType::Rdp { host, port, .. }
             | ConnectionType::Vnc { host, port, .. }

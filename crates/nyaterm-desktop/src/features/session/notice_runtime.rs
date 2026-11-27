@@ -32,6 +32,14 @@ pub(in crate::features) fn session_notice_text(kind: &SessionNoticeKind) -> (Str
             t!("sessionNotice.droppedBytes", bytes = bytes).to_string(),
         ),
         SessionNoticeKind::Transport(notice) => match notice {
+            SessionNotice::MoshNetwork { online, seconds } => (
+                "mosh.network",
+                if *online {
+                    t!("mosh.online").to_string()
+                } else {
+                    t!("mosh.waiting", seconds = seconds).to_string()
+                },
+            ),
             SessionNotice::X11PreparationFailed { error } => (
                 "x11.unavailableTitle",
                 crate::features::session::x11_service::error_message(*error),

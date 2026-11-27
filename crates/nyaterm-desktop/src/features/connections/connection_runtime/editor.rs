@@ -39,8 +39,7 @@ fn save_editor_connection(
     }
     if password_edit == Some(crate::models::ConnectionPasswordEdit::Keep)
         && let Some(auth) = persisted.auth.as_mut()
-        && (auth.mode == "password"
-            || matches!(persisted.config, nyaterm_core::ConnectionType::Ssh { .. }))
+        && (auth.mode == "password" || persisted.config.is_ssh_backed())
     {
         // Locking discards plaintext in the UI. Keep the latest stored secret,
         // including its ciphertext marker, rather than serializing the empty input.
@@ -95,6 +94,7 @@ impl NyaTermApp {
             SshAlgorithmListKind::HostKey => t!("dialog.algorithmHostKeys"),
         };
         match error {
+            ConnectionEditorValidationError::MoshInvalid(reason) => (*reason).into(),
             ConnectionEditorValidationError::MissingAccount => {
                 t!("passwordManager.missingAccount").into()
             }
@@ -241,6 +241,7 @@ impl NyaTermApp {
         connect_after_save: bool,
     ) -> ConnectionEditorState {
         ConnectionEditorState {
+            mosh: Default::default(),
             defaults_mode: false,
             android_usb: false,
             android_screen: Default::default(),
@@ -807,7 +808,9 @@ impl NyaTermApp {
                     .is_some_and(|editor| {
                         matches!(
                             editor.kind,
-                            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                            ConnectionKindTab::Mosh
+                                | ConnectionKindTab::Ssh
+                                | ConnectionKindTab::Telnet
                         )
                     }));
         let previous_account = account_selection.then(|| {
@@ -895,7 +898,7 @@ impl NyaTermApp {
         let editor = self.connection_state.active_editor_draft()?;
         if !matches!(
             editor.kind,
-            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
         ) {
             return None;
         }
@@ -932,7 +935,9 @@ impl NyaTermApp {
             return;
         }
         let id = match editor.kind {
-            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet => editor.account_id.clone(),
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet => {
+                editor.account_id.clone()
+            }
             _ => editor.password_id.clone(),
         };
         let account = id.as_ref().and_then(|id| {
@@ -1194,6 +1199,7 @@ impl NyaTermApp {
             self.connection_state.sync_editor_fields_from_draft(cx);
             let kind_label = match kind {
                 ConnectionKindTab::Ssh => "SSH",
+                ConnectionKindTab::Mosh => "Mosh",
                 ConnectionKindTab::Local => &t!("dialog.localTerminal"),
                 ConnectionKindTab::Telnet => "Telnet",
                 ConnectionKindTab::Serial => &t!("dialog.serial"),
@@ -1733,7 +1739,9 @@ impl NyaTermApp {
                                         .is_some_and(|editor| {
                                             matches!(
                                                 editor.kind,
-                                                ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                                                ConnectionKindTab::Mosh
+                                                    | ConnectionKindTab::Ssh
+                                                    | ConnectionKindTab::Telnet
                                             )
                                         }) {
                                         ConnectionEditorSelect::Account

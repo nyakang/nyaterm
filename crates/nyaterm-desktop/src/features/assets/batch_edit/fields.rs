@@ -22,6 +22,12 @@ pub(in crate::features) enum FieldBasis {
 /// a widget id that could be focused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::features) enum BatchFieldKey {
+    MoshServerPath,
+    MoshUdpHost,
+    MoshPortStart,
+    MoshPortEnd,
+    MoshPrediction,
+
     SpiceTcpPort,
     SpiceTlsPort,
     SpiceHttpProxy,
@@ -202,6 +208,12 @@ impl BatchFieldKey {
 
     pub(in crate::features) fn key(self) -> &'static str {
         match self {
+            Self::MoshServerPath => "mosh-server_path",
+            Self::MoshUdpHost => "mosh-udp_host",
+            Self::MoshPortStart => "mosh-udp_port_start",
+            Self::MoshPortEnd => "mosh-udp_port_end",
+            Self::MoshPrediction => "mosh-prediction",
+
             Self::SpiceTcpPort => "spice-tcp-port",
             Self::SpiceTlsPort => "spice-tls-port",
             Self::SpiceHttpProxy => "spice-proxy",
@@ -362,6 +374,12 @@ impl BatchFieldKey {
 
     pub(in crate::features) fn label_key(self) -> &'static str {
         match self {
+            Self::MoshServerPath => "mosh.serverPath",
+            Self::MoshUdpHost => "mosh.udpHost",
+            Self::MoshPortStart => "mosh.portStart",
+            Self::MoshPortEnd => "mosh.portEnd",
+            Self::MoshPrediction => "mosh.prediction",
+
             Self::SpiceTcpPort => "spice.tcpPort",
             Self::SpiceTlsPort => "spice.tlsPort",
             Self::SpiceHttpProxy => "spice.httpProxy",
@@ -577,7 +595,12 @@ impl BatchFieldKey {
 
 /// Fields the batch editor writes. Each one keeps its connection-editor
 /// position; the connection editor labels stay in place for the rest.
-pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 137] = [
+pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 142] = [
+    BatchFieldKey::MoshServerPath,
+    BatchFieldKey::MoshUdpHost,
+    BatchFieldKey::MoshPortStart,
+    BatchFieldKey::MoshPortEnd,
+    BatchFieldKey::MoshPrediction,
     BatchFieldKey::SpiceTcpPort,
     BatchFieldKey::SpiceTlsPort,
     BatchFieldKey::SpiceHttpProxy,
@@ -762,6 +785,11 @@ impl BatchFieldKey {
             | Self::Icon
             | Self::IconAutoDetect
             | Self::Name
+            | Self::MoshServerPath
+            | Self::MoshUdpHost
+            | Self::MoshPortStart
+            | Self::MoshPortEnd
+            | Self::MoshPrediction
             | Self::Host
             | Self::Port
             | Self::Username
@@ -938,6 +966,12 @@ impl BatchFieldKey {
     /// stores it. `None` means the field has no single scalar default.
     pub(in crate::features) fn default_value(self, kind: ConnectionKindTab) -> Option<String> {
         let value = match self {
+            Self::MoshServerPath => "mosh-server".to_string(),
+            Self::MoshUdpHost => "".to_string(),
+            Self::MoshPortStart => "60000".to_string(),
+            Self::MoshPortEnd => "61000".to_string(),
+            Self::MoshPrediction => "adaptive".to_string(),
+
             Self::SpiceTcpPort => return None,
             Self::SpiceTlsPort => return None,
             Self::SpiceHttpProxy => return None,
@@ -1081,6 +1115,50 @@ const BASIC_TAGS: BatchRowSpec = row(BatchRowLayout::Stack, &[spec(BatchFieldKey
 
 const BASIC_DESCRIPTION: BatchRowSpec =
     row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Description)]);
+
+const MOSH_BASIC: &[BatchRowSpec] = &[
+    BASIC_HEADER,
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::IconAutoDetect)],
+    ),
+    row(
+        BatchRowLayout::HostPort,
+        &[spec(BatchFieldKey::Host), spec(BatchFieldKey::Port)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Account)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Username)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::AuthMode)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Password)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SshAuthAgentEndpoint)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SshAuthAgentEnvironment)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SshAuthAgentSocket)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Key)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Otp)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::OtpAutoFill)]),
+    BASIC_TAGS,
+    BASIC_DESCRIPTION,
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::MoshServerPath)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::MoshUdpHost)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::MoshPortStart)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::MoshPortEnd)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::MoshPrediction)],
+    ),
+];
 
 const SSH_BASIC: &[BatchRowSpec] = &[
     BASIC_HEADER,
@@ -1723,13 +1801,24 @@ pub(in crate::features) fn batch_rows(
     section: ConnectionEditorSection,
 ) -> &'static [BatchRowSpec] {
     match (kind, section) {
+        (ConnectionKindTab::Mosh, ConnectionEditorSection::Basic) => MOSH_BASIC,
         (ConnectionKindTab::Ssh, ConnectionEditorSection::Basic) => SSH_BASIC,
-        (ConnectionKindTab::Ssh, ConnectionEditorSection::Network) => SSH_NETWORK,
-        (ConnectionKindTab::Ssh, ConnectionEditorSection::Terminal) => SSH_TERMINAL,
-        (ConnectionKindTab::Ssh, ConnectionEditorSection::Sftp) => SSH_SFTP,
+        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Network) => {
+            SSH_NETWORK
+        }
+        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Terminal) => {
+            SSH_TERMINAL
+        }
+        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Sftp) => {
+            SSH_SFTP
+        }
         (ConnectionKindTab::Ssh, ConnectionEditorSection::Forwarding) => SSH_FORWARDING,
-        (ConnectionKindTab::Ssh, ConnectionEditorSection::PostLogin) => SSH_POST_LOGIN,
-        (ConnectionKindTab::Ssh, ConnectionEditorSection::Algorithms) => SSH_ALGORITHMS,
+        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::PostLogin) => {
+            SSH_POST_LOGIN
+        }
+        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Algorithms) => {
+            SSH_ALGORITHMS
+        }
         (ConnectionKindTab::Local, ConnectionEditorSection::Basic) => LOCAL_BASIC,
         (ConnectionKindTab::Local, ConnectionEditorSection::Terminal) => LOCAL_TERMINAL,
         (ConnectionKindTab::Telnet, ConnectionEditorSection::Basic) => TELNET_BASIC,

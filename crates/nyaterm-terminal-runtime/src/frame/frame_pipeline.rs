@@ -79,6 +79,22 @@ pub(super) fn terminal_frame_output_commands(
 }
 
 impl TerminalFramePipeline {
+    pub fn submit_mosh_frame(
+        &self,
+        session_id: String,
+        frame: nyaterm_transport::mosh::MoshFrame,
+        scrollback_limit: usize,
+    ) {
+        self.arm_event_wakes();
+        self.recording_writer
+            .write_raw_output(&session_id, &frame.data);
+        let _ = self.command_tx.send(TerminalFrameCommand::MoshFrame {
+            session_id,
+            frame,
+            scrollback_limit,
+        });
+    }
+
     /// Update every session and the default for future or transferred sessions.
     /// The command is ordered with output so queries cannot cross a theme change.
     pub fn set_color_palette(&self, palette: nyaterm_terminal::colors::TerminalColorPalette) {

@@ -123,6 +123,23 @@ impl NyaTermApp {
                     cx,
                 );
             }
+            SessionLaunchConfig::Mosh(config) => {
+                self.begin_background_session_start(
+                    format!("{} duplicate", config.ssh.name),
+                    SessionLaunchConfig::Mosh(config),
+                    metadata.source_connection_id.clone(),
+                    metadata.ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        after_session_id: Some(source_session_id),
+                        startup_command,
+                        workspace_split: workspace_split.clone(),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
             SessionLaunchConfig::Telnet(config) => {
                 self.begin_background_session_start(
                     format!("{} duplicate", config.name),
@@ -665,6 +682,29 @@ impl NyaTermApp {
                         tab_color: custom_color,
                         locked,
                         insert_index: Some(source_index),
+                        reconnect_session_id: Some(old_id.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
+            SessionLaunchConfig::Mosh(config) => {
+                self.begin_background_session_start(
+                    format!("{} reconnect", config.ssh.name),
+                    SessionLaunchConfig::Mosh(config),
+                    source_connection_id,
+                    ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        locked,
+                        insert_index: Some(source_index),
+                        startup_command: reconnect_cwd_command.map(|command| {
+                            crate::models::StartupCommandRequest {
+                                command,
+                                delay_ms: 0,
+                            }
+                        }),
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
                     },

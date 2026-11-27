@@ -129,7 +129,50 @@ impl SessionEventQueue {
         self.shared.ready.notify_all();
     }
 
+    pub(crate) fn push_mosh_frame(
+        &self,
+        session_id: String,
+        frame: crate::mosh::MoshFrame,
+    ) -> bool {
+        let Some(_turn) = self.begin_push(&session_id) else {
+            return false;
+        };
+        let bytes = frame.byte_len();
+        let Ok(mut inner) = self.shared.inner.lock() else {
+            return false;
+        };
+        loop {
+            if !inner.accepts(&session_id) {
+                return false;
+            }
+            // One oversize frame can make progress without allowing an unbounded queue.
+            if inner.queued_output_bytes == 0
+                || (!inner.output_backpressured
+                    && inner.queued_output_bytes.saturating_add(bytes)
+                        <= SESSION_EVENT_QUEUE_OUTPUT_LIMIT)
+            {
+                inner.queued_output_bytes = inner.queued_output_bytes.saturating_add(bytes);
+                inner.peak_output_bytes = inner.peak_output_bytes.max(inner.queued_output_bytes);
+                inner.output_backpressured =
+                    inner.queued_output_bytes >= SESSION_EVENT_QUEUE_OUTPUT_LIMIT;
+                inner
+                    .events
+                    .push_back(SessionEvent::MoshFrame { session_id, frame });
+                self.shared.ready.notify_all();
+                return true;
+            }
+            let Ok(waited) = self.shared.output_space.wait(inner) else {
+                return false;
+            };
+            inner = waited;
+        }
+    }
+
     pub(super) fn push(&self, event: SessionEvent) {
+        if let SessionEvent::MoshFrame { session_id, frame } = event {
+            self.push_mosh_frame(session_id, frame);
+            return;
+        }
         let session_id = event_session_id(&event).to_string();
         let Some(_producer_order) = self.begin_push(&session_id) else {
             return;
@@ -304,6 +347,10 @@ impl SessionEventQueue {
             .events
             .iter()
             .filter_map(|event| match event {
+                SessionEvent::MoshFrame {
+                    session_id: event_session_id,
+                    frame,
+                } if event_session_id == session_id => Some(frame.byte_len()),
                 SessionEvent::Output {
                     session_id: event_session_id,
                     data,
@@ -595,6 +642,9 @@ impl SessionEventQueueInner {
         let mut stats = SessionDrainStats::default();
         for _ in 0..max_events {
             if let Some(max_output_bytes) = max_output_bytes {
+                if mosh_frame_exceeds_budget(self.events.front(), &stats, max_output_bytes) {
+                    break;
+                }
                 if stats.drained_output_bytes >= max_output_bytes
                     && stats.drained_events > 0
                     && matches!(self.events.front(), Some(SessionEvent::Output { .. }))
@@ -632,6 +682,12 @@ impl SessionEventQueueInner {
             };
             stats.drained_events = stats.drained_events.saturating_add(1);
             match &event {
+                SessionEvent::MoshFrame { frame, .. } => {
+                    stats.drained_output_bytes =
+                        stats.drained_output_bytes.saturating_add(frame.byte_len());
+                    self.queued_output_bytes =
+                        self.queued_output_bytes.saturating_sub(frame.byte_len());
+                }
                 SessionEvent::Output { data, .. } => {
                     stats.drained_output_bytes =
                         stats.drained_output_bytes.saturating_add(data.len());
@@ -675,6 +731,9 @@ impl SessionEventQueueInner {
                 break;
             };
             if let Some(max_output_bytes) = max_output_bytes {
+                if mosh_frame_exceeds_budget(self.events.get(index), &stats, max_output_bytes) {
+                    break;
+                }
                 let remaining = max_output_bytes.saturating_sub(stats.drained_output_bytes);
                 let is_output = matches!(self.events.get(index), Some(SessionEvent::Output { .. }));
                 if remaining == 0 && is_output {
@@ -705,6 +764,12 @@ impl SessionEventQueueInner {
             };
             stats.drained_events = stats.drained_events.saturating_add(1);
             match &event {
+                SessionEvent::MoshFrame { frame, .. } => {
+                    stats.drained_output_bytes =
+                        stats.drained_output_bytes.saturating_add(frame.byte_len());
+                    self.queued_output_bytes =
+                        self.queued_output_bytes.saturating_sub(frame.byte_len());
+                }
                 SessionEvent::Output { data, .. } => {
                     stats.drained_output_bytes =
                         stats.drained_output_bytes.saturating_add(data.len());
@@ -736,6 +801,7 @@ impl SessionEventQueueInner {
             .iter()
             .filter(|event| self.event_belongs_to_consumer(event, consumer_id))
             .filter_map(|event| match event {
+                SessionEvent::MoshFrame { frame, .. } => Some(frame.byte_len()),
                 SessionEvent::Output { data, .. } => Some(data.len()),
                 _ => None,
             })
@@ -746,7 +812,8 @@ impl SessionEventQueueInner {
 
 fn event_session_id(event: &SessionEvent) -> &str {
     match event {
-        SessionEvent::Output { session_id, .. }
+        SessionEvent::MoshFrame { session_id, .. }
+        | SessionEvent::Output { session_id, .. }
         | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
@@ -758,5 +825,111 @@ fn event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::Notice { session_id, .. }
         | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
+    }
+}
+
+// A frame cannot be split from its prediction. Allow one oversized frame to
+// progress, then leave subsequent output for the consumer's next turn.
+fn mosh_frame_exceeds_budget(
+    event: Option<&SessionEvent>,
+    stats: &SessionDrainStats,
+    budget: usize,
+) -> bool {
+    matches!(event, Some(SessionEvent::MoshFrame { frame, .. })
+        if budget == 0 || (stats.drained_output_bytes > 0
+            && frame.byte_len() > budget.saturating_sub(stats.drained_output_bytes)))
+}
+
+#[cfg(test)]
+mod mosh_tests {
+    use super::SessionEventQueue;
+    use crate::SessionEvent;
+    use crate::mosh::MoshFrame;
+    use nyaterm_terminal::prediction::TerminalPrediction;
+    use std::sync::Arc;
+
+    fn frame(sequence: u64, bytes: usize) -> SessionEvent {
+        SessionEvent::MoshFrame {
+            session_id: "mosh".into(),
+            frame: MoshFrame {
+                sequence,
+                cols: 80,
+                rows: 24,
+                data: vec![0; bytes],
+                prediction: Arc::new(TerminalPrediction::default()),
+            },
+        }
+    }
+
+    #[test]
+    fn mosh_frames_are_atomic_and_respect_drain_budget() {
+        let queue = SessionEventQueue::new();
+        let SessionEvent::MoshFrame { frame: sample, .. } = frame(0, 100) else {
+            unreachable!()
+        };
+        let bytes = sample.byte_len();
+        queue.push(frame(1, 100));
+        queue.push(frame(2, 100));
+        assert!(
+            queue
+                .drain_with_output_budget(10, Some(0))
+                .events
+                .is_empty()
+        );
+        let first = queue.drain_with_output_budget(10, Some(50));
+        assert_eq!(first.events.len(), 1);
+        assert_eq!(first.stats.drained_output_bytes, bytes);
+        assert_eq!(first.stats.queued_output_bytes, bytes);
+        let second = queue.drain_with_output_budget(10, Some(50));
+        assert!(
+            matches!(&second.events[..], [SessionEvent::MoshFrame { frame, .. }] if frame.sequence == 2)
+        );
+        assert_eq!(second.stats.queued_output_bytes, 0);
+    }
+    #[test]
+    fn mosh_consumer_budget_and_cancellation_release_pending_frames() {
+        let queue = SessionEventQueue::new();
+        let SessionEvent::MoshFrame { frame: sample, .. } = frame(0, 100) else {
+            unreachable!()
+        };
+        let bytes = sample.byte_len();
+        let consumer = crate::SessionEventConsumerId(42);
+        queue.assign_consumer("mosh", consumer);
+        queue.push(frame(1, 100));
+        queue.push(frame(2, 100));
+        let drained = queue.drain_blocking_for_consumer_with_output_budget(
+            consumer,
+            10,
+            Some(50),
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(drained.events.len(), 1);
+        assert_eq!(drained.stats.queued_output_bytes, bytes);
+        queue.cancel_session("mosh");
+        queue.push(frame(3, 100));
+        let drained = queue.drain(10);
+        assert!(drained.events.is_empty());
+        assert_eq!(drained.stats.queued_output_bytes, 0);
+    }
+    #[test]
+    fn cancelling_mosh_wakes_a_backpressured_producer() {
+        let queue = SessionEventQueue::new();
+        queue.push(frame(1, super::SESSION_EVENT_QUEUE_OUTPUT_LIMIT));
+        let producer = queue.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            producer.push(frame(2, 1));
+            tx.send(()).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(20))
+                .is_err()
+        );
+        queue.cancel_session("mosh");
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
+        let drained = queue.drain(10);
+        assert!(drained.events.is_empty());
+        assert_eq!(drained.stats.queued_output_bytes, 0);
     }
 }

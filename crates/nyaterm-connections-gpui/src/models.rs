@@ -1,6 +1,7 @@
 use rust_i18n::t;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionKindTab {
+    Mosh,
     Ssh,
     Local,
     Telnet,
@@ -13,8 +14,12 @@ pub enum ConnectionKindTab {
 }
 
 impl ConnectionKindTab {
-    pub const ALL: [Self; 9] = [
+    pub fn is_ssh_backed(self) -> bool {
+        matches!(self, Self::Ssh | Self::Mosh)
+    }
+    pub const ALL: [Self; 10] = [
         Self::Ssh,
+        Self::Mosh,
         Self::Local,
         Self::Telnet,
         Self::Serial,
@@ -27,6 +32,7 @@ impl ConnectionKindTab {
 
     pub const fn persistence_id(self) -> &'static str {
         match self {
+            Self::Mosh => "mosh",
             Self::Ssh => "ssh",
             Self::Local => "local",
             Self::Telnet => "telnet",
@@ -75,6 +81,7 @@ impl ConnectionKindTab {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Mosh => "Mosh",
             Self::Ssh => "SSH",
             Self::Local => "Local",
             Self::Telnet => "Telnet",
@@ -93,6 +100,7 @@ impl ConnectionKindTab {
 
     pub fn from_connection_type(config: &nyaterm_core::ConnectionType) -> Self {
         match config {
+            nyaterm_core::ConnectionType::Mosh { .. } => Self::Mosh,
             nyaterm_core::ConnectionType::Ssh { .. } => Self::Ssh,
             nyaterm_core::ConnectionType::LocalTerminal { .. } => Self::Local,
             nyaterm_core::ConnectionType::Telnet { .. } => Self::Telnet,
@@ -108,6 +116,7 @@ impl ConnectionKindTab {
     pub fn batch_kind(self) -> nyaterm_core::models::connection_batch::ConnectionBatchKind {
         use nyaterm_core::models::connection_batch::ConnectionBatchKind;
         match self {
+            Self::Mosh => ConnectionBatchKind::Mosh,
             Self::Ssh => ConnectionBatchKind::Ssh,
             Self::Local => ConnectionBatchKind::LocalTerminal,
             Self::Telnet => ConnectionBatchKind::Telnet,
@@ -125,6 +134,7 @@ impl ConnectionKindTab {
     ) -> Self {
         use nyaterm_core::models::connection_batch::ConnectionBatchKind;
         match kind {
+            ConnectionBatchKind::Mosh => Self::Mosh,
             ConnectionBatchKind::Ssh => Self::Ssh,
             ConnectionBatchKind::LocalTerminal => Self::Local,
             ConnectionBatchKind::Telnet => Self::Telnet,
@@ -156,6 +166,7 @@ mod connection_type_layout_tests {
             [
                 ConnectionKindTab::Ftp,
                 ConnectionKindTab::Local,
+                ConnectionKindTab::Mosh,
                 ConnectionKindTab::Rdp,
                 ConnectionKindTab::Spice
             ]
@@ -171,6 +182,7 @@ mod connection_type_layout_tests {
                 ConnectionKindTab::Vnc,
                 ConnectionKindTab::Ssh,
                 ConnectionKindTab::Local,
+                ConnectionKindTab::Mosh,
                 ConnectionKindTab::Rdp,
                 ConnectionKindTab::Spice
             ]
@@ -221,6 +233,14 @@ impl ConnectionEditorSection {
     fn for_kind_all_tabs(kind: ConnectionKindTab) -> &'static [Self] {
         match kind {
             ConnectionKindTab::Adb => &[Self::Basic, Self::AndroidScreen],
+            ConnectionKindTab::Mosh => &[
+                Self::Basic,
+                Self::Network,
+                Self::Terminal,
+                Self::Sftp,
+                Self::PostLogin,
+                Self::Algorithms,
+            ],
             ConnectionKindTab::Ssh => &[
                 Self::Basic,
                 Self::Network,

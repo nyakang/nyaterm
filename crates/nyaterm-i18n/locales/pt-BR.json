@@ -5208,5 +5208,20 @@
     "installAction": "Instalar e iniciar",
     "continueWithout": "Continuar sem X11",
     "independentConnection": "Esta sessão X11 usa uma conexão SSH independente."
+  },
+  "mosh": {
+    "serverPath": "Mosh server executable",
+    "udpHost": "UDP host (optional)",
+    "portStart": "UDP port range start",
+    "portEnd": "UDP port range end",
+    "routing": "UDP connects directly. SSH proxies and jump hosts apply only to login and auxiliary services.",
+    "prediction": "Local prediction (display only)",
+    "adaptive": "Adaptive",
+    "always": "Always",
+    "never": "Never",
+    "terminal": "Mosh uses UTF-8. Use SFTP for file transfers; terminal transfer protocols and SSH forwarding are unavailable.",
+    "network": "Mosh network",
+    "online": "Connection restored",
+    "waiting": "Waiting for network: %{seconds}s"
   }
 }

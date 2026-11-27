@@ -32,6 +32,7 @@
   "ConnectionType": {
     "source": "models/connection.rs",
     "fields": {
+      "mosh": "portable:mosh",
       "host": "portable:endpoint",
       "endpoint": "portable:endpoint",
       "settings": "local",

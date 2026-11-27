@@ -971,7 +971,9 @@ impl NyaTermApp {
                 && self
                     .session
                     .session_info(session_id)
-                    .is_some_and(|session| session.kind == SessionKind::Ssh)
+                    .is_some_and(|session| {
+                        matches!(session.kind, SessionKind::Ssh | SessionKind::Mosh)
+                    })
                 && let Some(endpoint) = self.session.endpoint(session_id)
             {
                 return format!("{name} — {endpoint}");
@@ -1168,6 +1170,7 @@ fn session_kind_label(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::LocalPty => "Local",
         SessionKind::Ssh | SessionKind::RawTcp => "SSH",
+        SessionKind::Mosh => "Mosh",
         SessionKind::Telnet => "Telnet",
         SessionKind::Serial => "Serial",
         SessionKind::Rdp => "RDP",

@@ -39,6 +39,7 @@ fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarge
             SessionStartFocusTarget::RemoteDesktop
         }
         ConnectionType::Adb { .. }
+        | ConnectionType::Mosh { .. }
         | ConnectionType::Ssh { .. }
         | ConnectionType::LocalTerminal { .. }
         | ConnectionType::Telnet { .. }
@@ -820,7 +821,11 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            ConnectionType::Ssh {
+            ConnectionType::Mosh {
+                ai_execution_profile,
+                ..
+            }
+            | ConnectionType::Ssh {
                 ai_execution_profile,
                 ..
             } => {
@@ -1190,6 +1195,12 @@ impl NyaTermApp {
             suppress_serial_prompt: _,
             request_id,
         } = options;
+        let is_mosh = matches!(connection.config, ConnectionType::Mosh { .. });
+        let kind = if is_mosh {
+            SessionKind::Mosh
+        } else {
+            SessionKind::Ssh
+        };
         let connection_name = connection.name.clone();
         let source_connection_id = Some(connection.id.clone());
         let geometry_session_hint = after_session_id
@@ -1206,7 +1217,7 @@ impl NyaTermApp {
                 requested_ssh_runtime_mode: ssh_runtime_mode,
                 connection_name: connection_name.clone(),
                 launch_config: None,
-                kind: SessionKind::Ssh,
+                kind,
                 ai_execution_profile,
                 custom_name,
                 tab_color,
@@ -1247,16 +1258,35 @@ impl NyaTermApp {
             "ssh-session-start",
             request_id_for_worker,
             connection_name,
-            SessionKind::Ssh,
+            kind,
             session_start_tx,
             move || {
+                let mosh_settings = if is_mosh {
+                    let id = connection.id.clone();
+                    let fresh = build_context
+                        .store
+                        .request_fn(nyaterm_store::StoreDomain::Connections, move |store| {
+                            store.get_connection(&id)
+                        })
+                        .map_err(|error| error.to_string())?;
+                    match fresh.as_ref().unwrap_or(&connection).config.clone() {
+                        ConnectionType::Mosh { mosh, .. } => Some(mosh),
+                        _ => return Err("saved connection protocol changed".into()),
+                    }
+                } else {
+                    None
+                };
                 let mut config = build_ssh_session_config_with_context(
                     &connection,
                     &mut Vec::new(),
                     &build_context,
                 )?;
-                if let Some(mode) = ssh_runtime_mode {
+                if let Some(mode) = ssh_runtime_mode.filter(|_| !is_mosh) {
                     config.runtime_mode = mode;
+                }
+                if is_mosh {
+                    config.runtime_mode =
+                        nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard;
                 }
                 config.deferred_pty = true;
                 config.apply_runtime_policy()?;
@@ -1267,9 +1297,30 @@ impl NyaTermApp {
                     config.pixel_width = geometry.pixel_width;
                     config.pixel_height = geometry.pixel_height;
                 }
+                if is_mosh {
+                    config.deferred_pty = false;
+                    config.terminal_shell_integration = false;
+                    config.sftp.cwd_follow_mode = nyaterm_transport::SftpCwdFollowMode::Off;
+                    config.encoding = "UTF-8".into();
+                }
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
                 let connection = ssh_connections.register(multiplex_key, multiplex);
+                if let Some(settings) = mosh_settings {
+                    let mosh = nyaterm_transport::mosh::MoshSessionConfig {
+                        ssh: config,
+                        settings,
+                    };
+                    let info = session_manager
+                        .create_mosh_session(mosh.clone(), connection.handle())
+                        .map_err(|error| error.to_string())?;
+                    return Ok(SessionStartSuccess::ssh(
+                        Arc::clone(&session_manager),
+                        info,
+                        connection,
+                        Some(SessionLaunchConfig::Mosh(Box::new(mosh))),
+                    ));
+                }
                 let session_info = session_manager
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
@@ -1432,7 +1483,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
         agent_forwarding_config,
         encoding,
         ..
-    } = connection.config.clone()
+    } = connection.config.ssh_bootstrap_config()
     else {
         return Err("only SSH connections can be used for SSH sessions".to_string());
     };

@@ -419,7 +419,7 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .ok_or("Connection type is missing")?;
     let endpoint_fields: &[&str] = match kind {
-        "ssh" => &["type", "host", "port", "username"],
+        "ssh" | "mosh" => &["type", "host", "port", "username"],
         "telnet" => &["type", "host", "port", "username"],
         "rdp" => &["type", "host", "port", "username", "domain"],
         "vnc" => &["type", "host", "port", "username"],
@@ -448,7 +448,7 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         result["android"] = android;
     }
     result["terminal"] = pick(source, connection_fields("terminal"));
-    for name in ["sftp", "ssh_algorithms"] {
+    for name in ["sftp", "ssh_algorithms", "mosh"] {
         if let Some(value) = source.get(name).filter(|value| value.is_object()) {
             result[name] = pick(value, connection_fields(name));
         }
@@ -609,7 +609,13 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
         } else if kind == "connection"
             && matches!(
                 field.as_str(),
-                "asset" | "authentication" | "network" | "sftp" | "ssh_algorithms" | "auto_login"
+                "asset"
+                    | "authentication"
+                    | "network"
+                    | "sftp"
+                    | "ssh_algorithms"
+                    | "auto_login"
+                    | "mosh"
             )
         {
             let name = if field == "authentication" {
@@ -688,6 +694,7 @@ pub fn supports_field(kind: &str, field: &str) -> bool {
                 | "authentication"
                 | "network"
                 | "post_login"
+                | "mosh"
                 | "sftp"
                 | "ssh_algorithms"
                 | "telnet"
@@ -768,6 +775,13 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
         ],
         "android" => &["directory", "screen"],
         "placement" => &["group_id", "sort_order", "tree_order"],
+        "mosh" => &[
+            "server_path",
+            "udp_host",
+            "udp_port_start",
+            "udp_port_end",
+            "prediction",
+        ],
         "terminal" => &[
             "encoding",
             "backspace_mode",

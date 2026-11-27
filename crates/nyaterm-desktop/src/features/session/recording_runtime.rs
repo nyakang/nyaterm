@@ -483,6 +483,13 @@ fn recording_launch_context(
         SessionLaunchConfig::Local(config) => {
             (config.name.clone(), "local".to_string(), None, None, None)
         }
+        SessionLaunchConfig::Mosh(config) => (
+            config.ssh.name.clone(),
+            "mosh".into(),
+            Some(config.ssh.host.clone()),
+            Some(config.ssh.port),
+            Some(config.ssh.username.clone()),
+        ),
         SessionLaunchConfig::Ssh(config) => (
             config.name.clone(),
             "ssh".to_string(),

@@ -1,4 +1,5 @@
 pub mod basis;
+pub mod mosh;
 pub mod spice;
 
 use crate::SecretString;
@@ -43,6 +44,7 @@ impl<T> BatchField<T> {
 /// Original protocol used to classify batch editing scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConnectionBatchKind {
+    Mosh,
     Adb,
     Ssh,
     LocalTerminal,
@@ -58,6 +60,7 @@ impl ConnectionBatchKind {
     pub fn from_config(config: &ConnectionType) -> Self {
         match config {
             ConnectionType::Adb { .. } => Self::Adb,
+            ConnectionType::Mosh { .. } => Self::Mosh,
             ConnectionType::Ssh { .. } => Self::Ssh,
             ConnectionType::LocalTerminal { .. } => Self::LocalTerminal,
             ConnectionType::Telnet { .. } => Self::Telnet,
@@ -71,7 +74,7 @@ impl ConnectionBatchKind {
 
     pub fn default_port(self) -> u16 {
         match self {
-            Self::Ssh => default_ssh_port(),
+            Self::Ssh | Self::Mosh => default_ssh_port(),
             Self::Telnet => super::default_telnet_port(),
             Self::Rdp => super::default_rdp_port(),
             Self::Vnc => super::default_vnc_port(),
@@ -89,6 +92,7 @@ impl ConnectionBatchKind {
 /// unknown (`extensions`/`extra`) data is never rewritten.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionBatchEdit {
+    pub mosh: mosh::MoshBatchEdit,
     pub spice: spice::SpiceBatchEdit,
     pub group_id: BatchField<String>,
     pub description: BatchField<String>,
@@ -237,7 +241,8 @@ pub struct ConnectionBatchEdit {
 impl ConnectionBatchEdit {
     /// Whether every field is still `Unchanged`.
     pub fn is_empty(&self) -> bool {
-        self.spice.is_empty()
+        self.mosh.is_empty()
+            && self.spice.is_empty()
             && self.group_id.is_unchanged()
             && self.description.is_unchanged()
             && self.icon.is_unchanged()
@@ -500,7 +505,7 @@ impl ConnectionBatchApplyReport {
 
 fn endpoint_user_default(config: &ConnectionType) -> String {
     match config {
-        ConnectionType::Ssh { .. } => default_ssh_user(),
+        ConnectionType::Mosh { .. } | ConnectionType::Ssh { .. } => default_ssh_user(),
         _ => String::new(),
     }
 }
@@ -508,7 +513,7 @@ fn endpoint_user_default(config: &ConnectionType) -> String {
 fn endpoint_port_default(config: &ConnectionType) -> u16 {
     match config {
         ConnectionType::Adb { .. } => 0,
-        ConnectionType::Ssh { .. } => default_ssh_port(),
+        ConnectionType::Ssh { .. } | ConnectionType::Mosh { .. } => default_ssh_port(),
         ConnectionType::Telnet { .. } => super::default_telnet_port(),
         ConnectionType::Rdp { .. } => super::default_rdp_port(),
         ConnectionType::Vnc { .. } => super::default_vnc_port(),
@@ -526,7 +531,9 @@ fn endpoint_port_default(config: &ConnectionType) -> u16 {
 
 fn backspace_default(config: &ConnectionType) -> String {
     match config {
-        ConnectionType::Ssh { .. } => super::default_backspace_mode_ssh(),
+        ConnectionType::Mosh { .. } | ConnectionType::Ssh { .. } => {
+            super::default_backspace_mode_ssh()
+        }
         ConnectionType::Telnet { .. } => super::default_backspace_mode_telnet(),
         ConnectionType::Serial { .. } => super::default_backspace_mode_serial(),
         _ => String::new(),
@@ -536,7 +543,8 @@ fn backspace_default(config: &ConnectionType) -> String {
 fn supports_endpoint(config: &ConnectionType) -> bool {
     matches!(
         config,
-        ConnectionType::Ssh { .. }
+        ConnectionType::Mosh { .. }
+            | ConnectionType::Ssh { .. }
             | ConnectionType::Telnet { .. }
             | ConnectionType::Rdp { .. }
             | ConnectionType::Vnc { .. }
@@ -557,7 +565,10 @@ fn supports_terminal_encoding(config: &ConnectionType) -> bool {
 fn supports_backspace(config: &ConnectionType) -> bool {
     matches!(
         config,
-        ConnectionType::Ssh { .. } | ConnectionType::Telnet { .. } | ConnectionType::Serial { .. }
+        ConnectionType::Mosh { .. }
+            | ConnectionType::Ssh { .. }
+            | ConnectionType::Telnet { .. }
+            | ConnectionType::Serial { .. }
     )
 }
 
@@ -571,6 +582,7 @@ pub fn apply_connection_batch_edit(
 ) -> ConnectionBatchApplyReport {
     let mut report = ConnectionBatchApplyReport::default();
     edit.spice.apply(&mut connection.config, &mut report);
+    edit.mosh.apply(&mut connection.config, &mut report);
 
     let apply = |condition: bool, touched: bool, report: &mut ConnectionBatchApplyReport| {
         report.record(
@@ -579,7 +591,8 @@ pub fn apply_connection_batch_edit(
         );
     };
 
-    let is_ssh = matches!(connection.config, ConnectionType::Ssh { .. });
+    let is_ssh = connection.config.is_ssh_backed();
+    let is_ssh_terminal = matches!(connection.config, ConnectionType::Ssh { .. });
     let is_rdp = matches!(connection.config, ConnectionType::Rdp { .. });
     let is_vnc = matches!(connection.config, ConnectionType::Vnc { .. });
     let is_ftp = matches!(connection.config, ConnectionType::Ftp { .. });
@@ -642,7 +655,8 @@ pub fn apply_connection_batch_edit(
                 BatchField::Unchanged => unreachable!(),
             };
             match &mut connection.config {
-                ConnectionType::Ssh { port: slot, .. }
+                ConnectionType::Mosh { port: slot, .. }
+                | ConnectionType::Ssh { port: slot, .. }
                 | ConnectionType::Telnet { port: slot, .. }
                 | ConnectionType::Rdp { port: slot, .. }
                 | ConnectionType::Vnc { port: slot, .. }
@@ -669,7 +683,8 @@ pub fn apply_connection_batch_edit(
                 BatchField::Unchanged => unreachable!(),
             };
             match &mut connection.config {
-                ConnectionType::Ssh { username: slot, .. }
+                ConnectionType::Mosh { username: slot, .. }
+                | ConnectionType::Ssh { username: slot, .. }
                 | ConnectionType::Telnet { username: slot, .. }
                 | ConnectionType::Rdp { username: slot, .. }
                 | ConnectionType::Vnc { username: slot, .. }
@@ -731,7 +746,8 @@ pub fn apply_connection_batch_edit(
                 BatchField::Unchanged => unreachable!(),
             };
             match &mut connection.config {
-                ConnectionType::Ssh { backspace_mode, .. }
+                ConnectionType::Mosh { backspace_mode, .. }
+                | ConnectionType::Ssh { backspace_mode, .. }
                 | ConnectionType::Telnet { backspace_mode, .. }
                 | ConnectionType::Serial { backspace_mode, .. } => *backspace_mode = value,
                 _ => {}
@@ -740,8 +756,8 @@ pub fn apply_connection_batch_edit(
     }
 
     if !edit.ssh_profile.is_unchanged() {
-        apply(is_ssh, true, &mut report);
-        if is_ssh {
+        apply(is_ssh_terminal, true, &mut report);
+        if is_ssh_terminal {
             connection.ssh_profile = match &edit.ssh_profile {
                 BatchField::Set(value) => *value,
                 BatchField::Clear => SshProfile::default(),
@@ -750,8 +766,8 @@ pub fn apply_connection_batch_edit(
         }
     }
     if !edit.terminal_type.is_unchanged() {
-        apply(is_ssh, true, &mut report);
-        if is_ssh {
+        apply(is_ssh_terminal, true, &mut report);
+        if is_ssh_terminal {
             connection.terminal_type = match &edit.terminal_type {
                 BatchField::Set(value) => Some(*value),
                 BatchField::Clear => None,
@@ -761,14 +777,19 @@ pub fn apply_connection_batch_edit(
     }
     let dynamic_title_ok = matches!(
         connection.config,
-        ConnectionType::Ssh { .. } | ConnectionType::LocalTerminal { .. }
+        ConnectionType::Mosh { .. }
+            | ConnectionType::Ssh { .. }
+            | ConnectionType::LocalTerminal { .. }
     );
     if !edit.dynamic_tab_title.is_unchanged() {
         apply(dynamic_title_ok, true, &mut report);
         if dynamic_title_ok {
             let value = flag_value(&edit.dynamic_tab_title, false);
             match &mut connection.config {
-                ConnectionType::Ssh {
+                ConnectionType::Mosh {
+                    dynamic_tab_title, ..
+                }
+                | ConnectionType::Ssh {
                     dynamic_tab_title, ..
                 }
                 | ConnectionType::LocalTerminal {
@@ -795,29 +816,39 @@ pub fn apply_connection_batch_edit(
         || !edit.sftp_pipeline_depth.is_unchanged()
     {
         let sftp_touched = is_ssh;
-        for touched in [
-            !edit.sftp_enabled.is_unchanged(),
-            !edit.sftp_compatibility_mode.is_unchanged(),
-            !edit.sftp_cwd_follow_mode.is_unchanged(),
-            !edit.sftp_shell_detection_timeout_ms.is_unchanged(),
-            !edit.sftp_filename_encoding.is_unchanged(),
-            !edit.sftp_pipeline_depth.is_unchanged(),
+        for (supported, touched) in [
+            (sftp_touched, !edit.sftp_enabled.is_unchanged()),
+            (sftp_touched, !edit.sftp_compatibility_mode.is_unchanged()),
+            (is_ssh_terminal, !edit.sftp_cwd_follow_mode.is_unchanged()),
+            (
+                is_ssh_terminal,
+                !edit.sftp_shell_detection_timeout_ms.is_unchanged(),
+            ),
+            (sftp_touched, !edit.sftp_filename_encoding.is_unchanged()),
+            (sftp_touched, !edit.sftp_pipeline_depth.is_unchanged()),
         ] {
-            apply(sftp_touched, touched, &mut report);
+            apply(supported, touched, &mut report);
         }
         if sftp_touched {
-            apply_sftp(&mut connection.sftp, edit);
+            if is_ssh_terminal {
+                apply_sftp(&mut connection.sftp, edit);
+            } else {
+                let mut supported = edit.clone();
+                supported.sftp_cwd_follow_mode = BatchField::Unchanged;
+                supported.sftp_shell_detection_timeout_ms = BatchField::Unchanged;
+                apply_sftp(&mut connection.sftp, &supported);
+            }
         }
     }
 
     if !edit.x11_forwarding.is_unchanged() {
-        apply(is_ssh, true, &mut report);
+        apply(is_ssh_terminal, true, &mut report);
         if let ConnectionType::Ssh { x11_forwarding, .. } = &mut connection.config {
             *x11_forwarding = flag_value(&edit.x11_forwarding, false);
         }
     }
     if !edit.agent_forwarding_enabled.is_unchanged() {
-        apply(is_ssh, true, &mut report);
+        apply(is_ssh_terminal, true, &mut report);
         if let ConnectionType::Ssh {
             agent_forwarding_config,
             ..
@@ -1107,7 +1138,11 @@ pub fn apply_connection_batch_edit(
     }
     if !edit.auth_agent_endpoint.is_unchanged() {
         apply(is_ssh, true, &mut report);
-        if let ConnectionType::Ssh {
+        if let ConnectionType::Mosh {
+            auth_agent_endpoint,
+            ..
+        }
+        | ConnectionType::Ssh {
             auth_agent_endpoint,
             ..
         } = &mut connection.config
@@ -1126,9 +1161,9 @@ pub fn apply_connection_batch_edit(
         !edit.agent_forwarding_policy.is_unchanged(),
     ];
     for touched in agent_touched {
-        apply(is_ssh, touched, &mut report);
+        apply(is_ssh_terminal, touched, &mut report);
     }
-    if is_ssh && agent_touched.iter().any(|touched| *touched) {
+    if is_ssh_terminal && agent_touched.iter().any(|touched| *touched) {
         let agent = match &mut connection.config {
             ConnectionType::Ssh {
                 agent_forwarding_config,

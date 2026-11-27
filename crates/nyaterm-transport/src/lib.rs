@@ -62,6 +62,7 @@ pub mod adb_shell;
 pub mod connection_attempt;
 #[cfg(windows)]
 pub mod local_conpty;
+pub mod mosh;
 pub mod network_route;
 pub mod networktools;
 pub mod protocol_transfer;

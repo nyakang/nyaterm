@@ -162,7 +162,7 @@ pub(super) fn format_otp_code_display(code: &str) -> String {
 
 pub(super) fn session_kind_icon_path(kind: SessionKind) -> &'static str {
     match kind {
-        SessionKind::Ssh => "icons/conn/server.svg",
+        SessionKind::Mosh | SessionKind::Ssh => "icons/conn/server.svg",
         SessionKind::Telnet | SessionKind::RawTcp => "icons/conn/telnet.svg",
         SessionKind::Serial => "icons/conn/serial.svg",
         SessionKind::LocalPty => "icons/conn/terminal.svg",

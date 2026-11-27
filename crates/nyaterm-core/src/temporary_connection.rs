@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemporaryLinkProtocol {
     Ssh,
+    Mosh,
     Telnet,
     Serial,
 }
@@ -9,6 +10,7 @@ impl TemporaryLinkProtocol {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ssh => "ssh",
+            Self::Mosh => "mosh",
             Self::Telnet => "telnet",
             Self::Serial => "serial",
         }
@@ -83,6 +85,18 @@ const UNSUPPORTED_LONG_OPTIONS: [&str; 7] = [
     "identityfile",
     "controlpath",
 ];
+
+pub fn parse_temporary_mosh_link(
+    input: &str,
+) -> Result<TemporarySshLinkConfig, TemporaryLinkError> {
+    let input = input.trim();
+    let target = if input.to_ascii_lowercase().starts_with("mosh://") {
+        format!("ssh://{}", &input[7..])
+    } else {
+        input.to_owned()
+    };
+    parse_temporary_ssh_link(&target)
+}
 
 pub fn parse_temporary_ssh_link(input: &str) -> Result<TemporarySshLinkConfig, TemporaryLinkError> {
     let text = input.trim();

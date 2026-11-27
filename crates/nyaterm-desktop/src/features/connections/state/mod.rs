@@ -946,6 +946,15 @@ impl ConnectionFeatureState {
         set_connection_editor_serial_prompt_baud_rate(&mut self.editor.draft, ask)
     }
 
+    pub fn set_mosh_prediction(&mut self, prediction: nyaterm_core::mosh::MoshPrediction) {
+        if self.editor_save_in_flight() {
+            return;
+        }
+        if let Some(draft) = self.editor.draft.as_mut() {
+            draft.mosh.prediction = prediction;
+        }
+    }
+
     pub fn set_editor_field_text(&mut self, field: ConnectionEditorField, text: String) {
         if self.editor_save_in_flight() {
             return;
@@ -1325,7 +1334,7 @@ impl ConnectionFeatureState {
             };
             if !matches!(
                 editor.kind,
-                ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
             ) {
                 return;
             }

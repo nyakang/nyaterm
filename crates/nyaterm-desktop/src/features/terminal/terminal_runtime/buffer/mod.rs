@@ -266,6 +266,18 @@ impl NyaTermApp {
             .submit_decoded_output(session_id.to_string(), text);
     }
 
+    pub(in crate::features) fn submit_mosh_frame(
+        &self,
+        session_id: &str,
+        frame: nyaterm_transport::mosh::MoshFrame,
+    ) {
+        self.terminal.view.frame_pipeline.submit_mosh_frame(
+            session_id.to_owned(),
+            frame,
+            self.terminal_scrollback_line_limit(),
+        );
+    }
+
     pub(in crate::features) fn submit_terminal_frame_output(
         &self,
         session_id: &str,

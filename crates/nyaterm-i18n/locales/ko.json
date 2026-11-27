@@ -5208,5 +5208,20 @@
     "installAction": "설치 및 시작",
     "continueWithout": "X11 없이 계속",
     "independentConnection": "이 X11 세션은 독립적인 SSH 연결을 사용합니다."
+  },
+  "mosh": {
+    "serverPath": "Mosh server executable",
+    "udpHost": "UDP host (optional)",
+    "portStart": "UDP port range start",
+    "portEnd": "UDP port range end",
+    "routing": "UDP connects directly. SSH proxies and jump hosts apply only to login and auxiliary services.",
+    "prediction": "Local prediction (display only)",
+    "adaptive": "Adaptive",
+    "always": "Always",
+    "never": "Never",
+    "terminal": "Mosh uses UTF-8. Use SFTP for file transfers; terminal transfer protocols and SSH forwarding are unavailable.",
+    "network": "Mosh network",
+    "online": "Connection restored",
+    "waiting": "Waiting for network: %{seconds}s"
   }
 }

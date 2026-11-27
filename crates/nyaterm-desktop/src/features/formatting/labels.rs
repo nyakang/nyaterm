@@ -22,6 +22,7 @@ pub(in crate::features) fn session_kind_label(kind: SessionKind) -> std::borrow:
     match kind {
         SessionKind::LocalPty => "local".into(),
         SessionKind::Ssh => "ssh".into(),
+        SessionKind::Mosh => "mosh".into(),
         SessionKind::Telnet => "telnet".into(),
         SessionKind::RawTcp => "raw tcp".into(),
         SessionKind::Serial => "serial".into(),

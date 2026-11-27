@@ -212,7 +212,8 @@ pub fn format_asset_address(connection: &SavedConnection, labels: &AssetDisplayL
                 port
             }
         }
-        ConnectionType::Ssh { host, .. }
+        ConnectionType::Mosh { host, .. }
+        | ConnectionType::Ssh { host, .. }
         | ConnectionType::Telnet { host, .. }
         | ConnectionType::Rdp { host, .. }
         | ConnectionType::Ftp { host, .. }
@@ -359,7 +360,8 @@ fn connection_address_fields(connection: &SavedConnection) -> (String, String, S
                 .unwrap_or_default(),
         ),
         ConnectionType::Adb { device, .. } => (device.serial(), String::new(), String::new()),
-        ConnectionType::Ssh { host, username, .. } => {
+        ConnectionType::Mosh { host, username, .. }
+        | ConnectionType::Ssh { host, username, .. } => {
             (host.clone(), username.clone(), String::new())
         }
         ConnectionType::Telnet { host, username, .. } => {

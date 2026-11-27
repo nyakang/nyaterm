@@ -149,7 +149,7 @@ pub(crate) fn run_if_requested() -> Option<anyhow::Result<()>> {
         let schemes: &[&str] = if nyaterm_core::app_identity::AppFlavor::current()
             == nyaterm_core::app_identity::AppFlavor::Stable
         {
-            &["nyaterm", "ssh", "telnet"]
+            &["nyaterm", "ssh", "mosh", "telnet"]
         } else {
             &["nyaterm-preview"]
         };

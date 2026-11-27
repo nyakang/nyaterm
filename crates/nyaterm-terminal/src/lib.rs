@@ -30,6 +30,7 @@ pub mod local_mode;
 pub mod logical_lines;
 pub mod navigation;
 pub mod output;
+pub mod prediction;
 pub mod protocol;
 pub mod recording_sanitizer;
 mod reflow_timestamps;
@@ -362,6 +363,8 @@ pub struct TerminalDamageSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshot {
+    /// Speculative display only; text, history, selection and recording remain confirmed.
+    pub prediction: Option<Arc<prediction::TerminalPrediction>>,
     pub command_blocks: Arc<[command_blocks::CommandBlock]>,
     pub display_rows: Option<Arc<display_rows::TerminalDisplayRows>>,
     pub history: TerminalHistoryState,
@@ -496,6 +499,7 @@ impl TerminalSnapshot {
     ) -> Self {
         let row_data = rows.into();
         Self {
+            prediction: None,
             history: meta.history,
             cols: meta.cols,
             viewport_rows: meta.viewport_rows,

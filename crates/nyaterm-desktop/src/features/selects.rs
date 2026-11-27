@@ -514,6 +514,7 @@ impl NyaTermApp {
                 let protocol = match value {
                     "telnet" => TemporaryLinkProtocol::Telnet,
                     "serial" => TemporaryLinkProtocol::Serial,
+                    "mosh" => TemporaryLinkProtocol::Mosh,
                     _ => TemporaryLinkProtocol::Ssh,
                 };
                 self.set_temporary_link_protocol(protocol, cx);

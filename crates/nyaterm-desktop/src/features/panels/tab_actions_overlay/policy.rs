@@ -4,6 +4,7 @@ use crate::models::{SessionLaunchConfig, TabActionsSubmenu};
 pub(in crate::features) enum TabSessionCapability {
     Local,
     Ssh,
+    Mosh,
     Telnet,
     Serial,
     Rdp,
@@ -17,6 +18,7 @@ impl TabSessionCapability {
     pub(in crate::features) fn from_launch_config(config: &SessionLaunchConfig) -> Self {
         match config {
             SessionLaunchConfig::Local(_) => Self::Local,
+            SessionLaunchConfig::Mosh(_) => Self::Mosh,
             SessionLaunchConfig::Ssh(_) => Self::Ssh,
             SessionLaunchConfig::Telnet(_) => Self::Telnet,
             SessionLaunchConfig::Serial(_) => Self::Serial,
@@ -32,7 +34,7 @@ impl TabSessionCapability {
     pub(in crate::features) fn supports_terminal_actions(self) -> bool {
         matches!(
             self,
-            Self::Local | Self::Ssh | Self::Telnet | Self::Serial | Self::AdbShell
+            Self::Local | Self::Mosh | Self::Ssh | Self::Telnet | Self::Serial | Self::AdbShell
         )
     }
 }

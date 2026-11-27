@@ -523,7 +523,8 @@ impl SessionEventBridgeState {
 
 fn bridge_event_session_id(event: &SessionEvent) -> &str {
     match event {
-        SessionEvent::Output { session_id, .. }
+        SessionEvent::MoshFrame { session_id, .. }
+        | SessionEvent::Output { session_id, .. }
         | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
@@ -551,7 +552,8 @@ impl SessionEventBridgeQueue {
         let mut retained = VecDeque::new();
         while let Some(event) = inner.events.pop_front() {
             let session_id = match &event {
-                SessionEvent::Output { session_id, .. }
+                SessionEvent::MoshFrame { session_id, .. }
+                | SessionEvent::Output { session_id, .. }
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
@@ -662,7 +664,8 @@ impl SessionEventBridgeQueueInner {
             SessionEvent::Output { data, .. } => {
                 self.queued_output_bytes = self.queued_output_bytes.saturating_add(data.len());
             }
-            SessionEvent::OutputBoundary { .. }
+            SessionEvent::MoshFrame { .. }
+            | SessionEvent::OutputBoundary { .. }
             | SessionEvent::OutputDropped { .. }
             | SessionEvent::CwdChanged { .. }
             | SessionEvent::CommandContext { .. }
@@ -724,7 +727,8 @@ impl SessionEventBridgeQueueInner {
                 SessionEvent::OutputDropped { bytes, .. } => {
                     stats.dropped_output_bytes = stats.dropped_output_bytes.saturating_add(*bytes);
                 }
-                SessionEvent::OutputBoundary { .. }
+                SessionEvent::MoshFrame { .. }
+                | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::CwdChanged { .. }
                 | SessionEvent::CommandContext { .. }
                 | SessionEvent::CommandAccepted { .. }
@@ -829,6 +833,10 @@ fn bridge_route_event(
         return;
     };
     match event {
+        SessionEvent::MoshFrame { session_id, frame } => {
+            flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
+            frame_pipeline.submit_mosh_frame(session_id, frame, control.scrollback_limit);
+        }
         SessionEvent::Output { session_id, data } => {
             let sideband_probe_active =
                 bridge_sideband_probe_active(sideband_probe_sessions, &session_id, now);

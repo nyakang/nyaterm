@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 mod auth_runtime;
 mod duplicate_prompts;
+mod mosh_auxiliary;
 pub(in crate::features) mod notice_runtime;
 pub(in crate::features) mod notices;
 mod prompt_runtime;
@@ -39,6 +40,7 @@ struct SessionProtocolRuntimeState {
     trzsz: HashMap<String, trzsz_runtime::TrzszSessionState>,
     remote_files: HashMap<String, RemoteFilesSession>,
     ssh_connections: HashMap<String, SshConnectionLease>,
+    mosh_auxiliary: HashMap<String, mosh_auxiliary::AuxiliaryJob>,
 }
 
 impl SessionProtocolRuntimeState {
@@ -52,6 +54,7 @@ impl SessionProtocolRuntimeState {
         for state in self.trzsz.values_mut() {
             state.stop_workers();
         }
+        self.mosh_auxiliary.clear();
         self.remote_files.clear();
         self.ssh_connections.clear();
     }

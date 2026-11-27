@@ -14,7 +14,8 @@ use rust_i18n::t;
 fn batch_field_is_select(field: BatchFieldKey) -> bool {
     matches!(
         field,
-        BatchFieldKey::AuthMode
+        BatchFieldKey::MoshPrediction
+            | BatchFieldKey::AuthMode
             | BatchFieldKey::Group
             | BatchFieldKey::Icon
             | BatchFieldKey::Encoding

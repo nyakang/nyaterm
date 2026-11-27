@@ -22,6 +22,11 @@ pub enum ActivationAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExternalConnectionRequest {
+    Mosh {
+        host: String,
+        port: u16,
+        username: Option<String>,
+    },
     SpiceFile {
         path: RawActivationArg,
     },
@@ -283,6 +288,31 @@ pub fn parse_deep_link(text: &str) -> Result<ActivationAction, ActivationParseEr
                     path: RawActivationArg::from_os_string(path.into_os_string()),
                 },
             ))
+        }
+        "mosh" => {
+            if url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !url.path().is_empty()
+            {
+                return Err(ActivationParseError::UnsupportedComponent);
+            }
+            let rewritten = format!("ssh://{}", &text[7..]);
+            let ssh_url = Url::parse(&rewritten).map_err(|_| ActivationParseError::InvalidHost)?;
+            let ActivationAction::Connect(ExternalConnectionRequest::Ssh {
+                host,
+                port,
+                username,
+                ..
+            }) = parse_ssh_url(&rewritten, &ssh_url)?
+            else {
+                unreachable!()
+            };
+            Ok(ActivationAction::Connect(ExternalConnectionRequest::Mosh {
+                host,
+                port,
+                username,
+            }))
         }
         "ssh" => parse_ssh_url(text, &url),
         "telnet" => parse_telnet_url(text, &url),

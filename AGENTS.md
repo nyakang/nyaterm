@@ -100,7 +100,8 @@ must include explicit conversion logic and tests.
   highlighting, images, and painting. Its `scrollbar`, `decorations`, `gutter` and `ime`
   modules own reusable presentation; desktop retains drag/session routing,
   action-link cache selection and composition editing state.
-* `crates/nyaterm-transport`: local PTY, SSH authentication and channels, Telnet,
+* `crates/nyaterm-mosh`: UI-independent authenticated Mosh UDP protocol, state synchronization, framebuffer and prediction engine, adapted from NyaMosh. It has no workspace dependencies. Transport owns SSH bootstrap and worker lifetimes; desktop owns auxiliary SSH recovery.
+* `crates/nyaterm-transport`: local PTY, SSH authentication and channels, Mosh, Telnet,
   Serial, tunnels, session lifecycle, tmux, and transfer-protocol runtime. It
   exposes file-session probe injection and must not depend on the file,
   recording, or remote-operations crates.

@@ -21,6 +21,7 @@ mod authentication;
 mod ftp;
 mod layout;
 mod local;
+mod mosh;
 pub(in crate::features) mod options;
 mod rdp;
 mod recording;
@@ -261,7 +262,7 @@ impl NyaTermApp {
             .filter(|_| {
                 matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
                 )
             })
             .or(editor.password_id.as_ref())
@@ -341,7 +342,7 @@ impl NyaTermApp {
             options::ssh_key_choices(self.security.ssh_keys(), editor.key_id.as_deref());
         let password_selected = if matches!(
             editor.kind,
-            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
         ) {
             editor.account_id.as_deref()
         } else {
@@ -349,7 +350,7 @@ impl NyaTermApp {
         };
         let password_reference = if matches!(
             editor.kind,
-            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
         ) {
             editor.account_id.as_ref()
         } else {
@@ -706,7 +707,7 @@ impl NyaTermApp {
             .editor_anchor(ConnectionEditorFocusTarget::Heading);
         let account_id = if matches!(
             editor.kind,
-            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
         ) {
             editor.account_id.as_deref()
         } else {
@@ -956,7 +957,7 @@ impl NyaTermApp {
                         })),
                 )
             })
-            .when(editor.kind == ConnectionKindTab::Ssh, |this| {
+            .when(editor.kind.is_ssh_backed(), |this| {
                 this.child(
                     div()
                         .id("connection-editor-icon-auto-detect")
@@ -1111,7 +1112,7 @@ impl NyaTermApp {
                         ),
                 )
             })
-            .when(editor.kind == ConnectionKindTab::Ssh, |this| {
+            .when(editor.kind.is_ssh_backed(), |this| {
                 this.child(connection_editor_ssh_section(
                     section_context,
                     SshConnectionSectionLabels {

@@ -17,6 +17,7 @@ pub struct SessionInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
+    Mosh,
     AdbShell,
     AdbFiles,
     AdbScreen,
@@ -34,6 +35,10 @@ pub enum SessionKind {
 // `Eq` is impossible: `TmuxState` carries `f64` layout ratios.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
+    MoshFrame {
+        session_id: String,
+        frame: crate::mosh::MoshFrame,
+    },
     /// Established mode of this session, independent of other SSH channels.
     SshRuntimeModeConfirmed {
         session_id: String,
@@ -135,6 +140,8 @@ pub struct SessionDrain {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("Mosh: {0}")]
+    Mosh(String),
     #[error("Android session failed: {0}")]
     Adb(#[source] anyhow::Error),
     #[error("session background worker unavailable: {0}")]

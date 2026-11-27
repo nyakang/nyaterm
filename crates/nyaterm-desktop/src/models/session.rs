@@ -98,6 +98,7 @@ impl StartupCommandAction {
 
 #[derive(Clone)]
 pub(crate) enum SessionLaunchConfig {
+    Mosh(Box<nyaterm_transport::mosh::MoshSessionConfig>),
     AdbShell(AndroidSessionConfig),
     AdbFiles(AndroidSessionConfig),
     AdbScreen(AndroidSessionConfig),
@@ -213,7 +214,7 @@ impl SessionLaunchConfig {
 
     pub(crate) fn encoding(&self) -> Option<&str> {
         match self {
-            Self::AdbShell(_) => Some("UTF-8"),
+            Self::Mosh(_) | Self::AdbShell(_) => Some("UTF-8"),
             Self::AdbFiles(_) | Self::AdbScreen(_) => None,
             Self::Local(config) => Some(&config.encoding),
             Self::Ssh(config) => Some(&config.encoding),

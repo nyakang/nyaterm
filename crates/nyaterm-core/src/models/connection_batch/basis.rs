@@ -47,6 +47,7 @@ pub fn connection_kind_counts(
     }
     [
         ConnectionBatchKind::Ssh,
+        ConnectionBatchKind::Mosh,
         ConnectionBatchKind::LocalTerminal,
         ConnectionBatchKind::Telnet,
         ConnectionBatchKind::Serial,

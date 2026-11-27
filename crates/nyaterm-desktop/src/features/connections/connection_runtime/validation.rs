@@ -154,6 +154,9 @@ impl ConnectionEditorValidationError {
             _ => {}
         }
         let field = match self {
+            ConnectionEditorValidationError::MoshInvalid(_) => {
+                ConnectionEditorField::MoshServerPath
+            }
             ConnectionEditorValidationError::AndroidDeviceRequired
             | ConnectionEditorValidationError::AndroidHostInvalid
             | ConnectionEditorValidationError::HostRequired
@@ -224,7 +227,7 @@ impl ConnectionEditorValidationError {
             ConnectionEditorField::Username
                 if matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
                 ) && editor.username_source
                     == nyaterm_core::ConnectionUsernameSource::Account
                     && editor.account_id.is_some() =>
@@ -234,7 +237,7 @@ impl ConnectionEditorValidationError {
             _ if matches!(self, Self::MissingAccount) => ConnectionEditorFocusTarget::Select(
                 if matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
                 ) {
                     ConnectionEditorSelect::Account
                 } else {

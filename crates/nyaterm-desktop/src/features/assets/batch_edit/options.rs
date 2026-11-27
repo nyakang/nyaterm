@@ -278,6 +278,7 @@ pub(super) fn telnet_enter_select_options(selected: &str) -> Vec<NyaSelectOption
 pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
     match kind {
         ConnectionBatchKind::Ssh => "SSH".into(),
+        ConnectionBatchKind::Mosh => "Mosh".into(),
         ConnectionBatchKind::Telnet => "Telnet".into(),
         ConnectionBatchKind::Rdp => "RDP".into(),
         ConnectionBatchKind::Vnc => "VNC".into(),

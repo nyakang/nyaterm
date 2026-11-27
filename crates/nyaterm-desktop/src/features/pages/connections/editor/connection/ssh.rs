@@ -282,10 +282,19 @@ pub(super) fn connection_editor_ssh_section(
             .flex_col()
             .gap_3()
             .child(ssh_basic(section, cx))
-            .child(ssh_authentication(section, labels.otp, options.auth, cx)),
+            .child(ssh_authentication(section, labels.otp, options.auth, cx))
+            .when(
+                section.editor.kind == crate::models::ConnectionKindTab::Mosh,
+                |panel| panel.child(super::mosh::settings(section, cx)),
+            ),
         ConnectionEditorSection::Network => ssh_network(section, labels.proxy, labels.jump, cx),
         ConnectionEditorSection::Forwarding => ssh_forwarding(section, cx),
         ConnectionEditorSection::PostLogin => ssh_post_login(section, cx),
+        ConnectionEditorSection::Terminal
+            if section.editor.kind == crate::models::ConnectionKindTab::Mosh =>
+        {
+            super::mosh::terminal(section, cx)
+        }
         ConnectionEditorSection::Terminal => ssh_terminal(section, cx),
         ConnectionEditorSection::Sftp => ssh_sftp(section, cx),
         ConnectionEditorSection::Algorithms => ssh_algorithms(section, cx),
@@ -1305,16 +1314,21 @@ fn ssh_sftp(
                     );
                 }),
             ))
-            .child(connection_editor_select(
-                ConnectionEditorRenderContext {
-                    palette,
-                    fields,
-                    cx,
+            .when(
+                editor.kind != crate::models::ConnectionKindTab::Mosh,
+                |panel| {
+                    panel.child(connection_editor_select(
+                        ConnectionEditorRenderContext {
+                            palette,
+                            fields,
+                            cx,
+                        },
+                        "connection-editor-sftp-cwd",
+                        t!("dialog.sftpCwdFollowMode"),
+                        ConnectionEditorSelect::SftpCwdFollowMode,
+                    ))
                 },
-                "connection-editor-sftp-cwd",
-                t!("dialog.sftpCwdFollowMode"),
-                ConnectionEditorSelect::SftpCwdFollowMode,
-            ))
+            )
             .child(editor_stepper_field(
                 palette,
                 t!("dialog.sftpShellDetectionTimeout"),

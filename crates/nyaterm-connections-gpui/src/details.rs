@@ -64,7 +64,13 @@ pub fn connection_detail_rows(
             copyable_value_detail_row("Android".into(), device.serial()),
             copyable_text_detail_row(t!("android.directory").into_owned(), directory),
         ],
-        nyaterm_core::ConnectionType::Ssh {
+        nyaterm_core::ConnectionType::Mosh {
+            host,
+            port,
+            username,
+            ..
+        }
+        | nyaterm_core::ConnectionType::Ssh {
             host,
             port,
             username,

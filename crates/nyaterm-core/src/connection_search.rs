@@ -106,7 +106,8 @@ impl ConnectionSearch {
             return None;
         }
         let host = match &connection.config {
-            ConnectionType::Ssh { host, .. }
+            ConnectionType::Mosh { host, .. }
+            | ConnectionType::Ssh { host, .. }
             | ConnectionType::Telnet { host, .. }
             | ConnectionType::Rdp { host, .. }
             | ConnectionType::Vnc { host, .. } => host.as_str(),

@@ -67,6 +67,15 @@ impl SessionNotices {
     }
 
     fn push(&mut self, kind: SessionNoticeKind) -> bool {
+        if matches!(
+            kind,
+            SessionNoticeKind::Transport(SessionNotice::MoshNetwork { online: true, .. })
+        ) {
+            let before = self.entries.len();
+            self.entries
+                .retain(|entry| entry.kind.category() != kind.category());
+            return before != self.entries.len();
+        }
         if let Some(index) = self
             .entries
             .iter()

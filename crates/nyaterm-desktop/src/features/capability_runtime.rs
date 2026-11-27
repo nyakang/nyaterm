@@ -1124,7 +1124,7 @@ impl NyaTermApp {
             connected: !metadata.disconnected,
             cwd: self.session.cwd(session_id).map(str::to_string),
             terminal_execution: execution_profile_name(metadata.ai_execution_profile).to_string(),
-            sftp_available: session.kind == SessionKind::Ssh
+            sftp_available: matches!(session.kind, SessionKind::Ssh | SessionKind::Mosh)
                 && metadata.ssh_config.is_some()
                 && !metadata.disconnected,
         })
@@ -1507,6 +1507,7 @@ fn session_kind_name(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::LocalPty => "local",
         SessionKind::Ssh => "ssh",
+        SessionKind::Mosh => "mosh",
         SessionKind::Telnet => "telnet",
         SessionKind::RawTcp => "raw_tcp",
         SessionKind::Serial => "serial",
@@ -1535,6 +1536,7 @@ pub(in crate::features) fn connection_type_name(
 ) -> Option<&'static str> {
     match connection {
         ConnectionType::Ssh { .. } => Some("ssh"),
+        ConnectionType::Mosh { .. } => Some("mosh"),
         ConnectionType::LocalTerminal { .. } => Some("local_terminal"),
         ConnectionType::Telnet { .. } => Some("telnet"),
         ConnectionType::Serial { .. } => Some("serial"),

@@ -406,8 +406,11 @@ impl NyaTermApp {
         let kind = session_kind_for_launch_config(&launch_config);
         let ftp_session_id = matches!(launch_config, SessionLaunchConfig::Ftp(_))
             .then(|| reconnect_session_id.clone().unwrap_or_else(uuid));
-        let multiplex_key = matches!(launch_config, SessionLaunchConfig::Ssh(_))
-            .then(|| format!("ssh-session:{}", uuid()));
+        let multiplex_key = matches!(
+            launch_config,
+            SessionLaunchConfig::Ssh(_) | SessionLaunchConfig::Mosh(_)
+        )
+        .then(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
                 request_id,
@@ -440,6 +443,9 @@ impl NyaTermApp {
         );
 
         let attempt = self.session.start.attempt(&request_id);
+        if let SessionLaunchConfig::Mosh(config) = &mut launch_config {
+            config.ssh.bind_attempt(attempt.clone());
+        }
         if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
             config.bind_attempt(attempt.clone());
         }
@@ -1003,6 +1009,7 @@ impl NyaTermApp {
                     })
                     .unwrap_or_else(|| launch_config_for_session_info(&session_info));
                 let ssh_config = match &launch_config {
+                    SessionLaunchConfig::Mosh(config) => Some(config.ssh.clone()),
                     SessionLaunchConfig::Ssh(config) => Some(config.as_ref().clone()),
                     _ => None,
                 };
@@ -1405,6 +1412,7 @@ fn session_kind_for_launch_config(config: &SessionLaunchConfig) -> SessionKind {
         SessionLaunchConfig::AdbFiles(_) => SessionKind::AdbFiles,
         SessionLaunchConfig::AdbScreen(_) => SessionKind::AdbScreen,
         SessionLaunchConfig::Local(_) => SessionKind::LocalPty,
+        SessionLaunchConfig::Mosh(_) => SessionKind::Mosh,
         SessionLaunchConfig::Ssh(_) => SessionKind::Ssh,
         SessionLaunchConfig::Telnet(config) if config.raw_tcp => SessionKind::RawTcp,
         SessionLaunchConfig::Telnet(_) => SessionKind::Telnet,
@@ -1453,6 +1461,21 @@ fn create_session_from_launch_config(
                 ftp_service: None,
             })
             .map_err(|error| error.to_string()),
+        SessionLaunchConfig::Mosh(config) => {
+            let handle =
+                open_ssh_multiplex_handle(config.ssh.clone()).map_err(|error| error.to_string())?;
+            let connection =
+                ssh_connections.register(multiplex_key.expect("Mosh SSH connection key"), handle);
+            let info = session_manager
+                .create_mosh_session(*config, connection.handle())
+                .map_err(|error| error.to_string())?;
+            Ok(SessionStartSuccess::ssh(
+                Arc::clone(session_manager),
+                info,
+                connection,
+                None,
+            ))
+        }
         SessionLaunchConfig::Ssh(config) => {
             let config = *config;
             let multiplex =
@@ -1512,6 +1535,7 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
             pixel_width: 0,
             pixel_height: 0,
         }),
+        SessionKind::Mosh => SessionLaunchConfig::Mosh(Box::default()),
         SessionKind::Ssh => SessionLaunchConfig::Ssh(Box::default()),
         SessionKind::Telnet | SessionKind::RawTcp => {
             SessionLaunchConfig::Telnet(TelnetSessionConfig {

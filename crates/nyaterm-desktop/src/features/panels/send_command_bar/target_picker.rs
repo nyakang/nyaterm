@@ -527,6 +527,7 @@ impl NyaTermApp {
 fn protocol_label(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::Ssh => "SSH",
+        SessionKind::Mosh => "Mosh",
         SessionKind::LocalPty => "Local",
         SessionKind::Telnet => "Telnet",
         SessionKind::RawTcp => "TCP",

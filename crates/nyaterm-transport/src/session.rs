@@ -44,6 +44,7 @@ pub struct SessionManager {
 }
 
 pub(crate) enum ManagedSession {
+    Mosh(crate::mosh::MoshTransport),
     Adb(crate::adb_shell::AdbTerminalTransport),
     Local(LocalPtyTransport),
     Ssh(SshChannelTransport),
@@ -125,6 +126,34 @@ pub(crate) fn should_use_interactive_login_args(program: &str) -> bool {
 }
 
 impl SessionManager {
+    pub fn create_mosh_session(
+        &self,
+        config: crate::mosh::MoshSessionConfig,
+        connection: SshMultiplexHandle,
+    ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
+        let info = SessionInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: config.ssh.name.clone(),
+            kind: SessionKind::Mosh,
+            working_dir: None,
+            cols: config.ssh.cols,
+            rows: config.ssh.rows,
+        };
+        let transport = crate::mosh::MoshTransport::open(
+            info.clone(),
+            config,
+            connection,
+            self.event_queue.clone(),
+        )
+        .map_err(SessionError::Mosh)?;
+        self.sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?
+            .insert(info.id.clone(), ManagedSession::Mosh(transport));
+        Ok(info)
+    }
+
     pub fn create_adb_session(
         &self,
         config: crate::adb_shell::AdbShellConfig,
@@ -221,6 +250,7 @@ impl SessionManager {
                 // Native cancellation and joins remain on the reaper worker.
                 match &session {
                     ManagedSession::Adb(adb) => adb.stop(),
+                    ManagedSession::Mosh(mosh) => mosh.stop(),
                     ManagedSession::Local(local) => local.writer.command_tx.stop(),
                     ManagedSession::Tcp(tcp) => tcp.writer.command_tx.stop(),
                     ManagedSession::Serial(serial) => serial.writer.command_tx.stop(),
@@ -939,7 +969,7 @@ impl SessionManager {
             Some(ManagedSession::Serial(s)) => s.writer.command_tx.peak_bytes(),
             Some(ManagedSession::Ssh(s)) => s.command_tx.peak_bytes(),
             Some(ManagedSession::TmuxPane(pane)) => pane.tmux_tx.peak_bytes(),
-            Some(ManagedSession::Adb(_)) | None => 0,
+            Some(ManagedSession::Adb(_) | ManagedSession::Mosh(_)) | None => 0,
         }
     }
 
@@ -1038,7 +1068,11 @@ impl SessionManager {
                             Some(ManagedSession::Ssh(s)) => {
                                 WriteCapacity::Ssh(s.command_tx.clone())
                             }
-                            Some(ManagedSession::TmuxPane(_) | ManagedSession::Adb(_)) => {
+                            Some(
+                                ManagedSession::TmuxPane(_)
+                                | ManagedSession::Adb(_)
+                                | ManagedSession::Mosh(_),
+                            ) => {
                                 return Err(SessionError::Write {
                                     session_id: session_id.into(),
                                     source: tmux_modem_unsupported().into(),
@@ -1322,6 +1356,7 @@ impl ManagedSession {
         match self {
             Self::Adb(session) => session.info.clone(),
             Self::Local(session) => session.info.clone(),
+            Self::Mosh(session) => session.info.clone(),
             Self::Ssh(session) => session.info.clone(),
             Self::Tcp(session) => session.info.clone(),
             Self::Serial(session) => session.info.clone(),
@@ -1334,6 +1369,7 @@ impl ManagedSession {
             Self::Adb(session) => session.write(data),
             Self::Local(session) => session.write(data),
             Self::Tcp(session) => session.write(data),
+            Self::Mosh(session) => session.write(data),
             Self::Ssh(session) => session.write(data),
             Self::Serial(session) => session.write(data),
             Self::TmuxPane(pane) => pane.write(data),
@@ -1345,6 +1381,7 @@ impl ManagedSession {
             Self::Adb(session) => session.write_raw(data),
             Self::Local(session) => session.write_raw(data),
             Self::Tcp(session) => session.write_raw(data),
+            Self::Mosh(session) => session.write_raw(data),
             Self::Ssh(session) => session.write_raw(data),
             Self::Serial(session) => session.write_raw(data),
             Self::TmuxPane(pane) => pane.write_raw(data),
@@ -1362,6 +1399,7 @@ impl ManagedSession {
             Self::Adb(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Local(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Tcp(session) => session.resize(cols, rows, pixel_width, pixel_height),
+            Self::Mosh(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Ssh(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Serial(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::TmuxPane(pane) => pane.resize(cols, rows, pixel_width, pixel_height),
@@ -1380,6 +1418,9 @@ impl ManagedSession {
                 let _ = session.close();
             }
             Self::Ssh(session) => {
+                let _ = session.close();
+            }
+            Self::Mosh(session) => {
                 let _ = session.close();
             }
             Self::Serial(session) => {

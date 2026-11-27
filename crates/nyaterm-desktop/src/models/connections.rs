@@ -1,3 +1,4 @@
+pub(crate) mod mosh;
 pub(crate) mod spice;
 
 use futures::channel::mpsc::UnboundedReceiver;
@@ -112,6 +113,10 @@ pub(crate) enum ConnectionEditorCredentialOverlay {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionEditorField {
+    MoshServerPath,
+    MoshUdpHost,
+    MoshPortStart,
+    MoshPortEnd,
     Name,
     NewTag,
     NewGroupName,
@@ -176,7 +181,11 @@ impl ConnectionEditorField {
             Self::AndroidMaxSize | Self::AndroidFps | Self::AndroidBitRate => {
                 ConnectionEditorSection::AndroidScreen
             }
-            Self::Name
+            Self::MoshServerPath
+            | Self::MoshUdpHost
+            | Self::MoshPortStart
+            | Self::MoshPortEnd
+            | Self::Name
             | Self::NewTag
             | Self::NewGroupName
             | Self::Description
@@ -306,6 +315,7 @@ pub(crate) fn serial_session_title(
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
+    pub(crate) mosh: mosh::MoshEditorDraft,
     /// "Default session settings" mode: the same editor surface minus the
     /// basic-info tab, saving reusable parameters instead of a connection.
     pub(crate) defaults_mode: bool,
@@ -477,7 +487,7 @@ impl ConnectionEditorState {
         self.host = source.host.clone();
         self.username = source.username.clone();
         let standard_port = match source.kind {
-            ConnectionKindTab::Ssh => "22",
+            ConnectionKindTab::Mosh | ConnectionKindTab::Ssh => "22",
             ConnectionKindTab::Telnet => "23",
             ConnectionKindTab::Rdp => "3389",
             ConnectionKindTab::Vnc => "5900",

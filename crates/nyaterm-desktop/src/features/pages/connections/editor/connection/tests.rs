@@ -332,7 +332,7 @@ fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
             "connection-editor-adb-section",
             "connection-editor-adb-advanced",
         ),
-        ConnectionKindTab::Ssh => (
+        ConnectionKindTab::Mosh | ConnectionKindTab::Ssh => (
             "connection-editor-ssh-section",
             "connection-editor-ssh-advanced",
         ),
@@ -381,6 +381,7 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> ConnectionEditorState {
     ConnectionEditorState {
+        mosh: Default::default(),
         defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),

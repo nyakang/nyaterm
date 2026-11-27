@@ -2429,6 +2429,7 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
     ConnectionEditorState {
+        mosh: Default::default(),
         defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),

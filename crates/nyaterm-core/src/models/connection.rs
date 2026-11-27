@@ -530,6 +530,23 @@ impl Default for TelnetAutoLoginConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConnectionType {
+    Mosh {
+        host: String,
+        #[serde(default = "default_ssh_port")]
+        port: u16,
+        #[serde(default = "default_ssh_user")]
+        username: String,
+        #[serde(default = "default_backspace_mode_ssh")]
+        backspace_mode: String,
+        #[serde(default)]
+        ai_execution_profile: AiExecutionProfile,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_agent_endpoint: Option<SshAgentEndpoint>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        dynamic_tab_title: bool,
+        #[serde(default)]
+        mosh: crate::mosh::MoshSettings,
+    },
     Adb {
         device: AdbDeviceSelector,
         #[serde(default = "default_android_directory")]
@@ -984,9 +1001,47 @@ pub enum AssetDeviceType {
 }
 
 impl ConnectionType {
+    pub fn is_ssh_backed(&self) -> bool {
+        matches!(self, Self::Ssh { .. } | Self::Mosh { .. })
+    }
+
+    /// Authentication view only; never serialize this in place of the saved protocol.
+    pub fn ssh_bootstrap_config(&self) -> Self {
+        if let Self::Mosh {
+            host,
+            port,
+            username,
+            backspace_mode,
+            ai_execution_profile,
+            auth_agent_endpoint,
+            dynamic_tab_title,
+            ..
+        } = self
+        {
+            Self::Ssh {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                backspace_mode: backspace_mode.clone(),
+                ai_execution_profile: *ai_execution_profile,
+                auth_agent_endpoint: auth_agent_endpoint.clone(),
+                dynamic_tab_title: *dynamic_tab_title,
+                x11_forwarding: false,
+                agent_forwarding_config: None,
+                legacy_agent_forwarding: None,
+                encoding: "UTF-8".into(),
+            }
+        } else {
+            self.clone()
+        }
+    }
+
     pub fn dynamic_tab_title_enabled(&self) -> bool {
         match self {
-            Self::Ssh {
+            Self::Mosh {
+                dynamic_tab_title, ..
+            }
+            | Self::Ssh {
                 dynamic_tab_title, ..
             }
             | Self::LocalTerminal {

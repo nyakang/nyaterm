@@ -83,6 +83,12 @@ impl NyaTermApp {
                     details.push((t!("sessionInfo.workingDir"), dir.display().to_string()));
                 }
             }
+            SessionLaunchConfig::Mosh(config) => {
+                details.push((t!("sessionInfo.launch"), "Mosh".into()));
+                details.push((t!("sessionInfo.host"), config.ssh.host.clone()));
+                details.push((t!("sessionInfo.port"), config.ssh.port.to_string()));
+                details.push((t!("sessionInfo.username"), config.ssh.username.clone()));
+            }
             SessionLaunchConfig::Ssh(config) => {
                 details.push((t!("sessionInfo.launch"), t!("sessionInfo.ssh").to_string()));
                 details.push((t!("sessionInfo.host"), config.host.clone()));

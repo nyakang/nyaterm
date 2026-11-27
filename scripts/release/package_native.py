@@ -84,7 +84,7 @@ class PackageIdentity:
 
     @property
     def url_schemes(self) -> tuple[str, ...]:
-        return (self.desktop_id, "ssh", "telnet") if self.desktop_id == "nyaterm" else (self.desktop_id,)
+        return (self.desktop_id, "ssh", "mosh", "telnet") if self.desktop_id == "nyaterm" else (self.desktop_id,)
 
     @property
     def macos_bundle_name(self) -> str:

@@ -98,6 +98,7 @@ def dependency_errors() -> list[str]:
         "nyaterm-completion-runtime",
         "nyaterm-android",
         "nyaterm-x11",
+        "nyaterm-mosh",
         "nyaterm-transport",
         "nyaterm-files",
         "nyaterm-recording",
@@ -122,6 +123,7 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-mosh", set()),
         ("nyaterm-executor", set()),
         ("nyaterm-i18n", set()),
         ("nyaterm-completion-runtime", set()),
@@ -178,7 +180,7 @@ def dependency_errors() -> list[str]:
                 and package.startswith("nyaterm-")
                 and package not in {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}
             )
-            wrong_leaf_direction = crate in {"nyaterm-i18n", "nyaterm-executor"} and package.startswith("nyaterm-")
+            wrong_leaf_direction = crate in {"nyaterm-i18n", "nyaterm-executor", "nyaterm-mosh"} and package.startswith("nyaterm-")
             if wrong_leaf_direction or wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
     host_tools = tomllib.loads(

@@ -37,6 +37,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 pub struct TerminalFrameSession {
+    prediction: Option<std::sync::Arc<nyaterm_terminal::prediction::TerminalPrediction>>,
+    mosh_sequence: u64,
     pub(super) screen: TerminalScreen,
     pub(super) output_decoder: TerminalOutputDecoder,
     pub(super) recording_decoder: TerminalOutputDecoder,
@@ -59,6 +61,14 @@ impl std::fmt::Debug for TerminalFrameSession {
 }
 
 impl TerminalFrameSession {
+    fn with_prediction(
+        &self,
+        mut snapshot: std::sync::Arc<nyaterm_terminal::TerminalSnapshot>,
+    ) -> std::sync::Arc<nyaterm_terminal::TerminalSnapshot> {
+        std::sync::Arc::make_mut(&mut snapshot).prediction = self.prediction.clone();
+        snapshot
+    }
+
     pub(super) fn new(encoding: &str, scrollback_limit: usize) -> Self {
         let mut screen = TerminalScreen::default();
         if let Err(error) = screen.set_encoding(encoding) {
@@ -75,6 +85,8 @@ impl TerminalFrameSession {
         }
         Self {
             screen,
+            prediction: None,
+            mosh_sequence: 0,
             output_decoder,
             recording_decoder,
             revision: 0,
@@ -100,6 +112,8 @@ impl TerminalFrameSession {
     }
 
     pub(super) fn reset_reconnect_stream(&mut self, encoding: &str, scrollback_limit: usize) {
+        self.prediction = None;
+        self.mosh_sequence = 0;
         self.screen.reset_stream_state();
         self.screen.reset_session_input_protocols();
         self.output_decoder.reset_decoder();
@@ -152,7 +166,7 @@ impl TerminalFrameSession {
             layout_generation: self.layout_generation,
             session_id,
             offset: 0,
-            snapshot,
+            snapshot: self.with_prediction(snapshot),
             action_links: None,
             revision: self.revision,
             purpose: TerminalFrameSnapshotPurpose::Paint,
@@ -163,7 +177,6 @@ impl TerminalFrameSession {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn process_output(
         &mut self,
         session_id: String,
@@ -226,7 +239,7 @@ impl TerminalFrameSession {
             session_id,
             visible_text: batch.visible_text,
             recording_text_bytes: batch.recording_text_bytes,
-            snapshot,
+            snapshot: snapshot.map(|value| self.with_prediction(value)),
             action_links: None,
             protocol_state,
             effects: batch.effects,
@@ -285,7 +298,7 @@ impl TerminalFrameSession {
             layout_generation: self.layout_generation,
             session_id,
             offset: snapshot.display_offset,
-            snapshot,
+            snapshot: self.with_prediction(snapshot),
             action_links,
             revision: self.revision,
             purpose,
@@ -864,6 +877,45 @@ pub(super) fn run_terminal_frame_processor(
                     sessions.insert(session_id, session);
                 }
             }
+            TerminalFrameCommand::MoshFrame {
+                session_id,
+                frame,
+                scrollback_limit,
+            } => {
+                if rekeyed_old_ids.contains(&session_id) {
+                    continue;
+                }
+                let session = sessions
+                    .entry(session_id.clone())
+                    .or_insert_with(|| TerminalFrameSession::new("UTF-8", scrollback_limit));
+                if frame.sequence <= session.mosh_sequence {
+                    continue;
+                }
+                if let Some(stale) = cancel_selected_occurrence_search_job_for_session(
+                    &mut selected_occurrence_search_jobs,
+                    &session_id,
+                    "selected occurrence search was cancelled by terminal output",
+                ) {
+                    push_event(&event_queue, TerminalFrameEvent::Search(stale));
+                }
+                session.mosh_sequence = frame.sequence;
+                session.screen.set_color_palette(color_palette);
+                session.screen.set_ignore_alternate_screen(false);
+                session.screen.set_logical_line_snapshots(false);
+                session.layout_generation = layout_generation;
+                session.include_live_snapshot =
+                    !priority_initialized || snapshot_priority.contains(&session_id);
+                session.resize(frame.cols, frame.rows);
+                session.prediction = Some(frame.prediction);
+                let event = session.process_output(
+                    session_id,
+                    frame.data,
+                    "UTF-8".into(),
+                    scrollback_limit,
+                    &recording_writer,
+                );
+                push_event(&event_queue, TerminalFrameEvent::Output(event));
+            }
             TerminalFrameCommand::ResizeSession {
                 session_id,
                 cols,
@@ -878,6 +930,7 @@ pub(super) fn run_terminal_frame_processor(
                 }
                 if let Some(session) = sessions.get_mut(&session_id) {
                     let started_at = Instant::now();
+                    session.prediction = None;
                     session.resize(cols, rows);
                     let event = session.resized_live_snapshot_event(session_id, started_at);
                     push_event(&event_queue, TerminalFrameEvent::Snapshot(event));

@@ -625,6 +625,7 @@ impl NyaTermApp {
                 .metadata(&session_id)
                 .and_then(|m| match &m.launch_config {
                     SessionLaunchConfig::Ssh(config) => Some(config.as_ref().clone()),
+                    SessionLaunchConfig::Mosh(config) => Some(config.ssh.clone()),
                     _ => None,
                 })
                 .ok_or_else(|| {

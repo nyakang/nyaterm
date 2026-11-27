@@ -375,6 +375,7 @@ fn protocol_key(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::LocalPty => "local",
         SessionKind::Ssh => "ssh",
+        SessionKind::Mosh => "mosh",
         SessionKind::Telnet => "telnet",
         SessionKind::RawTcp => "raw tcp",
         SessionKind::Serial => "serial",

@@ -535,7 +535,7 @@ impl NyaTerminalElement {
         bold_weight: f32,
     ) -> Self {
         Self {
-            snapshot,
+            snapshot: nyaterm_terminal::prediction::painted_snapshot(snapshot),
             keyword_rules,
             keyword_highlights: None,
             decorations: decorations.into(),

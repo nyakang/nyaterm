@@ -119,6 +119,7 @@ impl NyaTermApp {
         drain_budget: SessionEventDrainBudget,
         drain_sideband_workers: bool,
     ) -> bool {
+        self.ensure_mosh_auxiliary_services(cx);
         let drain_started_at = Instant::now();
         let mut root_chrome_dirty = false;
         // Common calm path: no local pending events, no bridge UI work, no file
@@ -225,6 +226,9 @@ impl NyaTermApp {
                 }
                 drained_events += 1;
                 match event {
+                    SessionEvent::MoshFrame { session_id, frame } => {
+                        self.submit_mosh_frame(&session_id, frame);
+                    }
                     SessionEvent::Output { session_id, data } => {
                         self.ensure_sftp_session_view(&session_id, cx);
                         output_event_count += 1;
@@ -405,8 +409,17 @@ impl NyaTermApp {
                         {
                             let kind = SessionNoticeKind::Transport(notice);
                             let (title, detail) = session_notice_text(&kind);
-                            self.terminal
-                                .submit_system_recording(&session_id, format!("{title}: {detail}"));
+                            if !matches!(
+                                kind,
+                                SessionNoticeKind::Transport(
+                                    nyaterm_transport::session_notice::SessionNotice::MoshNetwork { .. }
+                                )
+                            ) {
+                                self.terminal.submit_system_recording(
+                                    &session_id,
+                                    format!("{title}: {detail}"),
+                                );
+                            }
                             root_chrome_dirty |= self.publish_session_notice(&session_id, kind);
                         }
                     }

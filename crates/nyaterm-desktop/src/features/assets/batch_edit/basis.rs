@@ -117,7 +117,13 @@ fn endpoint_values(config: &ConnectionType) -> Option<(&str, u16, &str)> {
             endpoint.tls_port.or(endpoint.port).unwrap_or(0),
             username,
         )),
-        ConnectionType::Ssh {
+        ConnectionType::Mosh {
+            host,
+            port,
+            username,
+            ..
+        }
+        | ConnectionType::Ssh {
             host,
             port,
             username,
@@ -154,7 +160,8 @@ fn endpoint_values(config: &ConnectionType) -> Option<(&str, u16, &str)> {
 fn is_network_kind(kind: ConnectionBatchKind) -> bool {
     matches!(
         kind,
-        ConnectionBatchKind::Ssh
+        ConnectionBatchKind::Mosh
+            | ConnectionBatchKind::Ssh
             | ConnectionBatchKind::Telnet
             | ConnectionBatchKind::Rdp
             | ConnectionBatchKind::Vnc
@@ -182,10 +189,44 @@ pub(in crate::features) fn batch_field_in_kind(
     field: BatchFieldKey,
 ) -> bool {
     use ConnectionBatchKind::{LocalTerminal, Rdp, Serial, Ssh, Telnet, Vnc};
+    if kind == ConnectionBatchKind::Mosh {
+        if matches!(
+            field,
+            BatchFieldKey::MoshServerPath
+                | BatchFieldKey::MoshUdpHost
+                | BatchFieldKey::MoshPortStart
+                | BatchFieldKey::MoshPortEnd
+                | BatchFieldKey::MoshPrediction
+        ) {
+            return true;
+        }
+        if matches!(
+            field,
+            BatchFieldKey::Encoding
+                | BatchFieldKey::SshProfile
+                | BatchFieldKey::TerminalType
+                | BatchFieldKey::X11
+                | BatchFieldKey::AgentForwarding
+                | BatchFieldKey::AgentExternal
+                | BatchFieldKey::AgentStoredKeys
+                | BatchFieldKey::AgentPolicy
+                | BatchFieldKey::AgentEndpoints
+                | BatchFieldKey::SftpCwdFollow
+        ) {
+            return false;
+        }
+        return batch_field_in_kind(ConnectionBatchKind::Ssh, field);
+    }
     if is_kind_independent(field) {
         return true;
     }
     match field {
+        BatchFieldKey::MoshServerPath
+        | BatchFieldKey::MoshUdpHost
+        | BatchFieldKey::MoshPortStart
+        | BatchFieldKey::MoshPortEnd
+        | BatchFieldKey::MoshPrediction => kind == ConnectionBatchKind::Mosh,
+
         BatchFieldKey::Host | BatchFieldKey::Port => {
             (is_network_kind(kind)
                 && !(field == BatchFieldKey::Port && kind == ConnectionBatchKind::Spice))
@@ -336,8 +377,36 @@ pub(in crate::features) fn field_display_value(
     connection: &SavedConnection,
     field: BatchFieldKey,
 ) -> Option<String> {
-    let is_ssh = matches!(&connection.config, ConnectionType::Ssh { .. });
+    let is_ssh = connection.config.is_ssh_backed();
     match field {
+        BatchFieldKey::MoshServerPath => match &connection.config {
+            ConnectionType::Mosh { mosh, .. } => Some(mosh.server_path.clone()),
+            _ => None,
+        },
+        BatchFieldKey::MoshUdpHost => match &connection.config {
+            ConnectionType::Mosh { mosh, .. } => Some(mosh.udp_host.clone()),
+            _ => None,
+        },
+        BatchFieldKey::MoshPortStart => match &connection.config {
+            ConnectionType::Mosh { mosh, .. } => Some(mosh.udp_port_start.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::MoshPortEnd => match &connection.config {
+            ConnectionType::Mosh { mosh, .. } => Some(mosh.udp_port_end.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::MoshPrediction => match &connection.config {
+            ConnectionType::Mosh { mosh, .. } => Some(
+                match mosh.prediction {
+                    nyaterm_core::mosh::MoshPrediction::Adaptive => "adaptive",
+                    nyaterm_core::mosh::MoshPrediction::Always => "always",
+                    nyaterm_core::mosh::MoshPrediction::Never => "never",
+                }
+                .to_owned(),
+            ),
+            _ => None,
+        },
+
         BatchFieldKey::Name => Some(connection.name.clone()),
         BatchFieldKey::SpiceTcpPort => match &connection.config {
             ConnectionType::Spice { endpoint, .. } => {
@@ -511,7 +580,11 @@ pub(in crate::features) fn field_display_value(
                 .to_string(),
         ),
         BatchFieldKey::SshAuthAgentEndpoint => match &connection.config {
-            ConnectionType::Ssh {
+            ConnectionType::Mosh {
+                auth_agent_endpoint,
+                ..
+            }
+            | ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
             } => Some(match auth_agent_endpoint {
@@ -533,7 +606,11 @@ pub(in crate::features) fn field_display_value(
         // currently selects the other one: the user may switch the type and the
         // value has to be editable in the same draft.
         BatchFieldKey::SshAuthAgentEnvironment => match &connection.config {
-            ConnectionType::Ssh {
+            ConnectionType::Mosh {
+                auth_agent_endpoint,
+                ..
+            }
+            | ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
             } => Some(match auth_agent_endpoint {
@@ -543,7 +620,11 @@ pub(in crate::features) fn field_display_value(
             _ => None,
         },
         BatchFieldKey::SshAuthAgentSocket => match &connection.config {
-            ConnectionType::Ssh {
+            ConnectionType::Mosh {
+                auth_agent_endpoint,
+                ..
+            }
+            | ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
             } => Some(match auth_agent_endpoint {
@@ -1284,8 +1365,9 @@ pub(super) fn compute_batch_basis_indexed(
     (basis, values, bool_values)
 }
 
-pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 9] = [
+pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 10] = [
     ConnectionBatchKind::Ssh,
+    ConnectionBatchKind::Mosh,
     ConnectionBatchKind::Telnet,
     ConnectionBatchKind::Rdp,
     ConnectionBatchKind::Vnc,
@@ -1299,6 +1381,7 @@ pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 9] = [
 pub(in crate::features) fn batch_kind_value(kind: ConnectionBatchKind) -> &'static str {
     match kind {
         ConnectionBatchKind::Ssh => "ssh",
+        ConnectionBatchKind::Mosh => "mosh",
         ConnectionBatchKind::Telnet => "telnet",
         ConnectionBatchKind::Rdp => "rdp",
         ConnectionBatchKind::Vnc => "vnc",
@@ -1328,7 +1411,8 @@ fn config_encoding(config: &ConnectionType) -> Option<&str> {
 
 fn config_backspace(config: &ConnectionType) -> Option<&str> {
     match config {
-        ConnectionType::Ssh { backspace_mode, .. }
+        ConnectionType::Mosh { backspace_mode, .. }
+        | ConnectionType::Ssh { backspace_mode, .. }
         | ConnectionType::Telnet { backspace_mode, .. }
         | ConnectionType::Serial { backspace_mode, .. } => Some(backspace_mode.as_str()),
         _ => None,

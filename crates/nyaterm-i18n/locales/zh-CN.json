@@ -5208,5 +5208,20 @@
     "installAction": "安装并启动",
     "continueWithout": "不使用 X11，继续连接",
     "independentConnection": "此 X11 会话将使用独立的 SSH 连接。"
+  },
+  "mosh": {
+    "serverPath": "Mosh 服务端程序",
+    "udpHost": "UDP 地址（可选）",
+    "portStart": "UDP 端口范围起始",
+    "portEnd": "UDP 端口范围结束",
+    "routing": "UDP 直接连接。SSH 代理与跳板机仅用于登录和辅助服务。",
+    "prediction": "本地预测（仅显示）",
+    "adaptive": "自适应",
+    "always": "始终",
+    "never": "关闭",
+    "terminal": "Mosh 使用 UTF-8。文件传输请使用 SFTP，不支持终端传输协议和 SSH 转发。",
+    "network": "Mosh 网络",
+    "online": "连接已恢复",
+    "waiting": "等待网络恢复：%{seconds} 秒"
   }
 }

@@ -10359,3 +10359,47 @@ fn x11_settings_preserve_legacy_display_and_stay_device_local() {
     preserve_device_local_sync_settings(&mut sync, &current);
     assert_eq!(sync["terminal"], current["terminal"]);
 }
+
+#[test]
+fn mosh_connections_preserve_extensions_credentials_and_native_backup_compatibility() {
+    let source_dir = unique_temp_dir("mosh-source");
+    let restored_dir = unique_temp_dir("mosh-restored");
+    let portable_dir = unique_temp_dir("mosh-portable");
+    let backup_dir = unique_temp_dir("mosh-backup");
+    let backup_path = backup_dir.join("mosh.nya");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"mosh", "name":"Mosh", "type":"mosh", "host":"example.test", "username":"test",
+        "mosh":{"udp_port_start":60100,"udp_port_end":60105,"future_option":42},
+        "auth":{"mode":"password","password":"fixture-password"}, "future_field":true
+    }))
+    .unwrap();
+    source.save_connection(&connection).unwrap();
+    let loaded = source.get_connection("mosh").unwrap().unwrap();
+    assert!(matches!(loaded.config, ConnectionType::Mosh { .. }));
+    let mut invalid = loaded.clone();
+    if let ConnectionType::Mosh { mosh, .. } = &mut invalid.config {
+        mosh.udp_port_end = 1;
+    }
+    assert!(source.save_connection(&invalid).is_err());
+    assert_eq!(source.get_connection("mosh").unwrap().unwrap(), loaded);
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "fixture", "test")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    let portable = ConnectionStore::open(&portable_dir).unwrap();
+    portable.apply_raw_portable_snapshot(&snapshot).unwrap();
+    let assert_mosh = |store: &ConnectionStore| {
+        let restored = store.get_connection("mosh").unwrap().unwrap();
+        let value = serde_json::to_value(&restored).unwrap();
+        assert_eq!(value["mosh"]["future_option"], 42);
+        assert_eq!(value["future_field"], true);
+        assert_eq!(value["mosh"]["udp_port_start"], 60100);
+        assert!(restored.auth.unwrap().password.is_some());
+    };
+    assert_mosh(&portable);
+    drop(source);
+    ConnectionStore::export_config_database(&source_dir, None, &backup_path).unwrap();
+    ConnectionStore::import_config_database(&restored_dir, None, &backup_path).unwrap();
+    assert_mosh(&ConnectionStore::open(&restored_dir).unwrap());
+}

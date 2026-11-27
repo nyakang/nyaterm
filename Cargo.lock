@@ -7511,6 +7511,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-mosh"
+version = "2.0.8"
+dependencies = [
+ "aes 0.8.4",
+ "base64 0.22.1",
+ "flate2",
+ "getrandom 0.2.17",
+ "hex",
+ "libc",
+ "quinn-udp",
+ "rand 0.8.8",
+ "socket2",
+ "thiserror 2.0.21",
+ "unicode-width",
+ "zeroize",
+]
+
+[[package]]
 name = "nyaterm-native-protocol"
 version = "1.0.0"
 source = "git+https://github.com/nyakang/nyaterm-plugins?rev=dfd5380f9cdcf7c148bb6439d8516afe7d60d20e#dfd5380f9cdcf7c148bb6439d8516afe7d60d20e"
@@ -7759,6 +7777,7 @@ dependencies = [
  "md5",
  "nyaterm-android",
  "nyaterm-core",
+ "nyaterm-mosh",
  "nyaterm-terminal",
  "portable-pty",
  "rand 0.10.3",
@@ -9561,16 +9580,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.15"
+version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a133f956daabe89a61a685c2649f13d82d5aa4bd5d12d1277e1072a21c0694"
+checksum = "addec6a0dcad8a8d96a771f815f0eaf55f9d1805756410b39f5fa81332574cbd"
 dependencies = [
  "cfg_aliases 0.2.2",
  "libc",
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

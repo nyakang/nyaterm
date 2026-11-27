@@ -1012,6 +1012,10 @@ impl NyaTermApp {
                     .collect();
                 self.open_serial_upload_protocol_dialog(session_id, files, window, cx);
             }
+            Some(SessionKind::Mosh) => {
+                self.shell.set_status(t!("mosh.terminal").to_string());
+                cx.notify();
+            }
             Some(SessionKind::Ssh | SessionKind::Telnet | SessionKind::RawTcp) => {
                 if has_dirs {
                     self.shell.set_status(

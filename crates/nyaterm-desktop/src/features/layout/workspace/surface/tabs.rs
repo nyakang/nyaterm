@@ -489,6 +489,7 @@ impl NyaTermApp {
                 let kind = match session.kind {
                     nyaterm_transport::SessionKind::LocalPty => "Local",
                     nyaterm_transport::SessionKind::Ssh => "SSH",
+                    nyaterm_transport::SessionKind::Mosh => "Mosh",
                     nyaterm_transport::SessionKind::Telnet => "Telnet",
                     nyaterm_transport::SessionKind::Serial => "Serial",
                     nyaterm_transport::SessionKind::RawTcp => "SSH",

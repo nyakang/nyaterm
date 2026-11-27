@@ -156,6 +156,7 @@ impl SavedConnection {
         match self.config {
             ConnectionType::Adb { .. } => "ADB",
             ConnectionType::Ssh { .. } => "SSH",
+            ConnectionType::Mosh { .. } => "Mosh",
             ConnectionType::LocalTerminal { .. } => "Local",
             ConnectionType::Telnet { .. } => "Telnet",
             ConnectionType::Serial { .. } => "Serial",
@@ -169,7 +170,13 @@ impl SavedConnection {
     pub fn endpoint(&self) -> String {
         match &self.config {
             ConnectionType::Adb { device, .. } => device.serial(),
-            ConnectionType::Ssh {
+            ConnectionType::Mosh {
+                host,
+                port,
+                username,
+                ..
+            }
+            | ConnectionType::Ssh {
                 host,
                 port,
                 username,

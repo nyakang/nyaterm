@@ -91,6 +91,14 @@ pub(super) fn session_info_from_metadata(
             cols: config.cols,
             rows: config.rows,
         },
+        SessionLaunchConfig::Mosh(config) => SessionInfo {
+            id: session_id.to_owned(),
+            name: config.ssh.name.clone(),
+            kind: SessionKind::Mosh,
+            working_dir: None,
+            cols: config.ssh.cols,
+            rows: config.ssh.rows,
+        },
         SessionLaunchConfig::Ssh(config) => SessionInfo {
             id: session_id.to_string(),
             name: config.name.clone(),
@@ -234,7 +242,10 @@ impl SessionFeatureState {
                 command_history: self.command_history.remove(session_id),
                 busy_action: self.busy_actions.remove(session_id),
                 remote_file: self.protocols.remote_files.remove(session_id),
-                ssh_connection: self.protocols.ssh_connections.remove(session_id),
+                ssh_connection: {
+                    self.protocols.mosh_auxiliary.remove(session_id);
+                    self.protocols.ssh_connections.remove(session_id)
+                },
                 xymodem: self.protocols.xymodem.remove(session_id),
                 zmodem: self.protocols.zmodem.remove(session_id),
                 trzsz: self.protocols.trzsz.remove(session_id),
@@ -254,7 +265,8 @@ impl SessionFeatureState {
         let mut retained_events = VecDeque::new();
         while let Some(event) = self.events.pending.pop_front() {
             let session_id = match &event {
-                SessionEvent::Output { session_id, .. }
+                SessionEvent::MoshFrame { session_id, .. }
+                | SessionEvent::Output { session_id, .. }
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
@@ -479,7 +491,7 @@ impl SessionFeatureState {
             }
             SessionKind::LocalPty => Some(FileBrowserBackendKind::Local),
             SessionKind::Ftp => Some(FileBrowserBackendKind::Remote),
-            SessionKind::Ssh => self
+            SessionKind::Mosh | SessionKind::Ssh => self
                 .metadata(session_id)
                 .and_then(|metadata| metadata.ssh_config.as_ref())
                 .filter(|config| config.remote_file_browser_enabled())
@@ -850,6 +862,10 @@ impl SessionFeatureState {
                     None => shell.to_string(),
                 })
             }
+            SessionLaunchConfig::Mosh(config) => Some(format!(
+                "{}@{}:{}",
+                config.ssh.username, config.ssh.host, config.ssh.port
+            )),
             SessionLaunchConfig::Ssh(config) => Some(format!(
                 "{}@{}:{}",
                 config.username, config.host, config.port

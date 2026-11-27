@@ -1580,6 +1580,12 @@ impl ConnectionStore {
         &self,
         connections: &[SavedConnection],
     ) -> Result<Vec<PreparedConnectionForStorage>, StorageError> {
+        for connection in connections {
+            if let ConnectionType::Mosh { mosh, .. } = &connection.config {
+                mosh.validate()
+                    .map_err(|error| StorageError::InvalidData(error.into()))?;
+            }
+        }
         let crypto = self.credential_crypto()?;
         let master_key_token = if connections
             .iter()

@@ -692,7 +692,7 @@ impl NyaTermApp {
             && !self
                 .session
                 .session_info(&session_id)
-                .is_some_and(|session| session.kind == SessionKind::Ssh)
+                .is_some_and(|session| matches!(session.kind, SessionKind::Ssh | SessionKind::Mosh))
         {
             let result = Err(rpc_failure(
                 "invalid_argument",
@@ -847,16 +847,18 @@ impl NyaTermApp {
         }
         let target = if request.policy.background {
             match session.kind {
-                SessionKind::Ssh => {
-                    self.session
-                        .metadata(&request.session_id)
-                        .and_then(|metadata| match &metadata.launch_config {
-                            SessionLaunchConfig::Ssh(config) => Some(
-                                BackgroundTerminalTarget::Ssh(Box::new(config.as_ref().clone())),
-                            ),
-                            _ => None,
-                        })
-                }
+                SessionKind::Ssh | SessionKind::Mosh => self
+                    .session
+                    .metadata(&request.session_id)
+                    .and_then(|metadata| match &metadata.launch_config {
+                        SessionLaunchConfig::Mosh(config) => {
+                            Some(BackgroundTerminalTarget::Ssh(Box::new(config.ssh.clone())))
+                        }
+                        SessionLaunchConfig::Ssh(config) => Some(BackgroundTerminalTarget::Ssh(
+                            Box::new(config.as_ref().clone()),
+                        )),
+                        _ => None,
+                    }),
                 SessionKind::LocalPty => Some(BackgroundTerminalTarget::Local {
                     working_dir: session.working_dir,
                 }),

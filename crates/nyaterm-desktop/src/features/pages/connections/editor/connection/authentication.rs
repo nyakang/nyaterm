@@ -100,7 +100,7 @@ pub(super) fn login_identity(
             .flex_col()
             .child(editor_field(
                 palette,
-                if editor.kind == ConnectionKindTab::Ssh {
+                if editor.kind.is_ssh_backed() {
                     required(t!("dialog.username"))
                 } else {
                     t!("credentialManager.usernameOptionalLabel").into()
@@ -189,7 +189,10 @@ pub(super) fn password_source(
     } = section;
     let uses_identity = matches!(
         editor.kind,
-        ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
+        ConnectionKindTab::Mosh
+            | ConnectionKindTab::Ssh
+            | ConnectionKindTab::Telnet
+            | ConnectionKindTab::Ftp
     );
     let mut body = div()
         .debug_selector(|| "connection-password-controls".to_string())

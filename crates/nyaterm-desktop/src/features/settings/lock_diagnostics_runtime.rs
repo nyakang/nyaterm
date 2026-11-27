@@ -317,7 +317,7 @@ impl NyaTermApp {
         for session in &sessions {
             match session.kind {
                 SessionKind::LocalPty => local_sessions += 1,
-                SessionKind::Ssh => ssh_sessions += 1,
+                SessionKind::Mosh | SessionKind::Ssh => ssh_sessions += 1,
                 SessionKind::Telnet => telnet_sessions += 1,
                 SessionKind::RawTcp => raw_tcp_sessions += 1,
                 SessionKind::Serial => serial_sessions += 1,

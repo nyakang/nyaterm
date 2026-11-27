@@ -57,6 +57,7 @@ impl NyaTermApp {
     ) -> bool {
         let submitted = match self.session.dialogs.temporary_link_protocol() {
             TemporaryLinkProtocol::Ssh => self.submit_temporary_ssh_link(cx),
+            TemporaryLinkProtocol::Mosh => self.submit_temporary_mosh_link(cx),
             TemporaryLinkProtocol::Telnet => self.submit_temporary_telnet_link(cx),
             TemporaryLinkProtocol::Serial => self.submit_temporary_serial_link(cx),
         };
@@ -142,6 +143,58 @@ impl NyaTermApp {
             SavedConnectionStartOptions::default(),
             cx,
         );
+    }
+
+    pub(in crate::features) fn start_external_mosh_link(
+        &mut self,
+        parsed: TemporarySshLinkConfig,
+        cx: &mut Context<Self>,
+    ) {
+        let mut ssh = self.temporary_ssh_session_config(parsed.clone());
+        ssh.encoding = "UTF-8".into();
+        ssh.terminal_shell_integration = false;
+        self.begin_background_session_start(
+            parsed.name,
+            SessionLaunchConfig::Mosh(Box::new(nyaterm_transport::mosh::MoshSessionConfig {
+                ssh,
+                settings: Default::default(),
+            })),
+            None,
+            AiExecutionProfile::Auto,
+            SavedConnectionStartOptions::default(),
+            cx,
+        );
+    }
+
+    fn submit_temporary_mosh_link(&mut self, cx: &mut Context<Self>) -> bool {
+        let parsed = match nyaterm_core::temporary_connection::parse_temporary_mosh_link(
+            self.session.dialogs.temporary_ssh_link_draft(),
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.session
+                    .dialogs
+                    .reject_temporary_ssh_link(error.locale_key());
+                cx.notify();
+                return false;
+            }
+        };
+        let mut ssh = self.temporary_ssh_session_config(parsed.clone());
+        ssh.encoding = "UTF-8".into();
+        ssh.terminal_shell_integration = false;
+        self.close_temporary_link_draft();
+        self.begin_background_session_start(
+            parsed.name,
+            SessionLaunchConfig::Mosh(Box::new(nyaterm_transport::mosh::MoshSessionConfig {
+                ssh,
+                settings: Default::default(),
+            })),
+            None,
+            AiExecutionProfile::Auto,
+            SavedConnectionStartOptions::default(),
+            cx,
+        );
+        true
     }
 
     fn submit_temporary_ssh_link(&mut self, cx: &mut Context<Self>) -> bool {
@@ -345,6 +398,10 @@ mod tests {
                     app.session.dialogs.open_temporary_ssh_link();
                     app.session.dialogs.set_temporary_link_protocol(protocol);
                     match protocol {
+                        TemporaryLinkProtocol::Mosh => app
+                            .session
+                            .dialogs
+                            .apply_temporary_ssh_link("mosh://root@127.0.0.1:1".into()),
                         TemporaryLinkProtocol::Ssh => app
                             .session
                             .dialogs

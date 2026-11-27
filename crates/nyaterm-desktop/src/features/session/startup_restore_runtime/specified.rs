@@ -23,6 +23,7 @@ impl NyaTermApp {
             }
             let session_type = match &connection.config {
                 ConnectionType::Ssh { .. } => "SSH",
+                ConnectionType::Mosh { .. } => "Mosh",
                 ConnectionType::LocalTerminal { .. } => "Local",
                 ConnectionType::Telnet { .. } => "Telnet",
                 ConnectionType::Serial { .. } => "Serial",

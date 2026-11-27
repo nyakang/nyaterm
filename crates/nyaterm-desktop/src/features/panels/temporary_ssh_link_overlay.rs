@@ -46,6 +46,7 @@ impl NyaTermApp {
                     .child(div().w(px(128.)).child(self.form_select_control(
                         "temporary-link-protocol",
                         vec![
+                            NyaSelectOption::new("mosh", "Mosh"),
                             NyaSelectOption::new("ssh", t!("temporarySsh.protocolSsh")),
                             NyaSelectOption::new("telnet", t!("temporarySsh.protocolTelnet")),
                             NyaSelectOption::new("serial", t!("temporarySsh.protocolSerial")),
@@ -55,8 +56,11 @@ impl NyaTermApp {
                         cx,
                     )))
                     .child(div().min_w_0().flex_1().child(match protocol {
-                        TemporaryLinkProtocol::Ssh | TemporaryLinkProtocol::Telnet => {
+                        TemporaryLinkProtocol::Mosh
+                        | TemporaryLinkProtocol::Ssh
+                        | TemporaryLinkProtocol::Telnet => {
                             let placeholder = match protocol {
+                                TemporaryLinkProtocol::Mosh => "mosh://user@host:22".into(),
                                 TemporaryLinkProtocol::Ssh => t!("temporarySsh.placeholder"),
                                 TemporaryLinkProtocol::Telnet => {
                                     t!("temporarySsh.telnetPlaceholder")
@@ -147,6 +151,15 @@ fn temporary_link_error_key(
     app.session
         .dialog_temporary_ssh_link_error()
         .or_else(|| match protocol {
+            TemporaryLinkProtocol::Mosh => {
+                if draft.trim().is_empty() {
+                    None
+                } else {
+                    nyaterm_core::temporary_connection::parse_temporary_mosh_link(draft)
+                        .err()
+                        .map(|e| e.locale_key())
+                }
+            }
             TemporaryLinkProtocol::Ssh => {
                 if draft.trim().is_empty() {
                     None

@@ -46,8 +46,10 @@ impl NyaTermApp {
             || self.remote_desktop.start_is_pending(id);
         let local = matches!(metadata.launch_config, SessionLaunchConfig::Local(_));
         let host = local
-            || (matches!(metadata.launch_config, SessionLaunchConfig::Ssh(_))
-                && metadata.ssh_runtime_mode() == Some(SshRuntimeMode::Standard)
+            || (matches!(
+                metadata.launch_config,
+                SessionLaunchConfig::Ssh(_) | SessionLaunchConfig::Mosh(_)
+            ) && metadata.ssh_runtime_mode() == Some(SshRuntimeMode::Standard)
                 && metadata
                     .ssh_config
                     .as_ref()
@@ -58,6 +60,7 @@ impl NyaTermApp {
         context.capabilities.disconnected = metadata.disconnected;
         match &metadata.launch_config {
             SessionLaunchConfig::Local(_)
+            | SessionLaunchConfig::Mosh(_)
             | SessionLaunchConfig::Ssh(_)
             | SessionLaunchConfig::Telnet(_)
             | SessionLaunchConfig::Serial(_) => {

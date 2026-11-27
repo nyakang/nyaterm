@@ -3183,3 +3183,74 @@ fn alternate_screen_policy_changes_are_ordered_with_output() {
         .collect();
     assert_eq!(replies, b"\x1b[?1049;1$y\x1b[?1049;2$y\x1b[?1049;1$y");
 }
+
+#[test]
+fn mosh_frame_publishes_confirmed_text_with_separate_prediction_and_rejects_old_sequence() {
+    use nyaterm_terminal::prediction::{PredictedCell, TerminalPrediction, painted_snapshot};
+    use nyaterm_terminal::{CellStyle, CellText, RenderCell};
+    use nyaterm_transport::mosh::MoshFrame;
+    let pipeline = TerminalFramePipeline::default();
+    let prediction = Arc::new(TerminalPrediction {
+        cols: 20,
+        rows: 3,
+        cells: vec![PredictedCell {
+            row: 0,
+            col: 0,
+            cell: RenderCell {
+                text: CellText::from("X"),
+                style: CellStyle::default(),
+                width: 1,
+                hyperlink: None,
+            },
+        }],
+        cursor: Some((0, 1)),
+    });
+    pipeline.submit_mosh_frame(
+        "mosh".into(),
+        MoshFrame {
+            sequence: 2,
+            cols: 20,
+            rows: 3,
+            data: b"\x1b[?1049hconfirmed".to_vec(),
+            prediction: prediction.clone(),
+        },
+        100,
+    );
+    pipeline.submit_mosh_frame(
+        "mosh".into(),
+        MoshFrame {
+            sequence: 1,
+            cols: 20,
+            rows: 3,
+            data: b"stale".to_vec(),
+            prediction,
+        },
+        100,
+    );
+    pipeline.finish_pending_output().unwrap();
+    let events = pipeline.take_events_for_transfer(&["mosh".into()]);
+    let frames = events
+        .into_iter()
+        .filter_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => frame.snapshot,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 1);
+    let snapshot = &frames[0];
+    assert_eq!(snapshot.cols, 20);
+    assert_eq!(snapshot.viewport_rows, 3);
+    assert!(snapshot.row_data[0].text.starts_with("confirmed"));
+    assert!(snapshot.prediction.is_some());
+    assert!(
+        painted_snapshot(snapshot.clone()).row_data[0]
+            .text
+            .starts_with("Xonfirmed")
+    );
+    let all_text = futures::executor::block_on(pipeline.request_all_text("mosh".into()))
+        .unwrap()
+        .unwrap();
+    assert!(all_text.contains("confirmed"));
+    assert!(!all_text.contains('X'));
+    assert!(!all_text.contains("stale"));
+}

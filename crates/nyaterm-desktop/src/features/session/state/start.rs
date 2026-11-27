@@ -288,6 +288,10 @@ impl SessionStartFeatureState {
             return id.clone();
         }
         let (kind, ai_execution_profile) = match &connection.config {
+            ConnectionType::Mosh {
+                ai_execution_profile,
+                ..
+            } => (SessionKind::Mosh, *ai_execution_profile),
             ConnectionType::LocalTerminal {
                 ai_execution_profile,
                 ..

@@ -26,6 +26,7 @@ members = [
     "crates/nyaterm-mcp",
     "crates/nyaterm-mcp-host",
     "crates/nyaterm-mcp-protocol",
+    "crates/nyaterm-mosh",
     "crates/nyaterm-otp",
     "crates/nyaterm-x11",
     "crates/nyaterm-plugin-api",
@@ -59,6 +60,7 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-mosh = { path = "crates/nyaterm-mosh" }
 nyaterm-x11 = { path = "crates/nyaterm-x11" }
 nyaterm-native-protocol = { git = "https://github.com/nyakang/nyaterm-plugins", rev = "dfd5380f9cdcf7c148bb6439d8516afe7d60d20e" }
 agent-client-protocol = { version = "=5.5.1", features = ["unstable_auth_status"] }

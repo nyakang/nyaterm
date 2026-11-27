@@ -3,6 +3,7 @@ use std::fmt;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SessionNotice {
+    MoshNetwork { online: bool, seconds: u64 },
     X11ForwardingDenied,
     X11PreparationFailed { error: nyaterm_core::x11::X11Error },
     X11ServerUnavailable { display_target: String },
@@ -15,6 +16,7 @@ pub enum SessionNotice {
 impl SessionNotice {
     pub fn category(&self) -> &'static str {
         match self {
+            Self::MoshNetwork { .. } => "mosh-network",
             Self::X11PreparationFailed { .. } => "x11-preparation-failed",
             Self::X11ForwardingDenied => "x11-forwarding-denied",
             Self::X11ServerUnavailable { .. } => "x11-server-unavailable",

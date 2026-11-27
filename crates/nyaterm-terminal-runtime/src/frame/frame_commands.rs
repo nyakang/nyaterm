@@ -19,6 +19,11 @@ pub(super) struct TerminalFrameScrollTarget {
 
 #[derive(Debug)]
 pub(super) enum TerminalFrameCommand {
+    MoshFrame {
+        session_id: String,
+        frame: nyaterm_transport::mosh::MoshFrame,
+        scrollback_limit: usize,
+    },
     SetColorPalette {
         palette: nyaterm_terminal::colors::TerminalColorPalette,
     },
@@ -584,6 +589,7 @@ pub(super) fn terminal_frame_command_priority_snapshot_insert_before(
 pub(super) fn terminal_frame_command_output_bytes(command: &TerminalFrameCommand) -> usize {
     match command {
         TerminalFrameCommand::ExecutionRecording { event, .. } => event.payload_bytes(),
+        TerminalFrameCommand::MoshFrame { frame, .. } => frame.byte_len(),
         TerminalFrameCommand::Output { data, .. } => data.len(),
         TerminalFrameCommand::DecodedOutput { text, .. }
         | TerminalFrameCommand::SyntheticOutput { text, .. }

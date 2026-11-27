@@ -1061,3 +1061,41 @@ fn discovery_without_a_tracker_is_restarted_after_a_release() {
         assert!(app.android_needs_tracker());
     });
 }
+
+#[test]
+fn mosh_editor_save_preserves_credentials_settings_and_unknown_extensions() {
+    let original: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"mosh", "name":"Mosh", "type":"mosh", "host":"example.test",
+        "username":"alice", "port":2222,
+        "mosh":{"server_path":"/opt/mosh-server", "udp_port_start":60100,
+            "udp_port_end":60105, "prediction":"never", "future":42},
+        "auth":{"mode":"password", "password":"fixture-password"},
+        "future_top_level":true
+    }))
+    .unwrap();
+    let root = TestTempDir::new("nyaterm-mosh-editor");
+    let store = ConnectionStore::open(&root).unwrap();
+    store.save_connection(&original).unwrap();
+    let mut editor = connection_editor_from_saved(original, false);
+    assert_eq!(editor.kind, crate::models::ConnectionKindTab::Mosh);
+    assert_eq!(editor.mosh.port_start, "60100");
+    editor.mosh.udp_host = "udp.example.test".into();
+    let saved = build_saved_connection_from_editor(&editor).unwrap();
+    assert!(
+        matches!(&saved.config, nyaterm_core::ConnectionType::Mosh { port: 2222, mosh, .. }
+        if mosh.udp_host == "udp.example.test")
+    );
+    save_editor_connection(&store, saved, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
+    let saved = store.get_connection("mosh").unwrap().unwrap();
+    let value = serde_json::to_value(&saved).unwrap();
+    assert_eq!(value["mosh"]["future"], 42);
+    assert_eq!(value["future_top_level"], true);
+    let reopened = connection_editor_from_saved(saved, false);
+    assert_eq!(reopened.password, "fixture-password");
+    assert_eq!(reopened.mosh, editor.mosh);
+    editor.mosh.port_end = "60000".into();
+    assert!(matches!(
+        build_saved_connection_from_editor(&editor),
+        Err(crate::features::connections::connection_runtime::helpers::ConnectionEditorValidationError::MoshInvalid(_))
+    ));
+}

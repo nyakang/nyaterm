@@ -539,6 +539,14 @@ impl NyaTermApp {
                 );
                 icons
             }),
+            (
+                BatchFieldKey::MoshPrediction,
+                vec![
+                    nyaterm_ui::NyaSelectOption::new("adaptive", t!("mosh.adaptive")),
+                    nyaterm_ui::NyaSelectOption::new("always", t!("mosh.always")),
+                    nyaterm_ui::NyaSelectOption::new("never", t!("mosh.never")),
+                ],
+            ),
             (BatchFieldKey::Encoding, options::encoding_select_options()),
             (
                 BatchFieldKey::Backspace,

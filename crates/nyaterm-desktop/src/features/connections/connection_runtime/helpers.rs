@@ -21,6 +21,7 @@ use crate::models::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConnectionEditorValidationError {
     HostRequired,
+    MoshInvalid(&'static str),
     SpiceInvalid(&'static str),
     AndroidSettings(nyaterm_core::models::android::AndroidScreenValidationError),
     AndroidDeviceRequired,
@@ -99,7 +100,7 @@ pub(super) fn validate_editor_account(
     }
     let identity = matches!(
         editor.kind,
-        ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+        ConnectionKindTab::Mosh | ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
     );
     let password_active = editor.auth_mode == "password"
         && !(editor.kind == ConnectionKindTab::Vnc && editor.vnc_security.mode == "none");
@@ -118,7 +119,7 @@ pub(super) fn validate_editor_account(
             username: &editor.username,
             username_source: editor.username_source,
             uses_account_identity: identity,
-            ssh: editor.kind == ConnectionKindTab::Ssh,
+            ssh: editor.kind.is_ssh_backed(),
         },
         accounts,
     )
@@ -151,7 +152,10 @@ pub(super) fn connection_editor_from_saved(
     };
     let uses_accounts = matches!(
         connection.config,
-        ConnectionType::Ssh { .. } | ConnectionType::Telnet { .. } | ConnectionType::Ftp { .. }
+        ConnectionType::Mosh { .. }
+            | ConnectionType::Ssh { .. }
+            | ConnectionType::Telnet { .. }
+            | ConnectionType::Ftp { .. }
     );
     let password_source = if uses_accounts && !auth.uses_account_password()
         || !uses_accounts && (auth.password.is_some() || auth.has_password)
@@ -170,6 +174,7 @@ pub(super) fn connection_editor_from_saved(
     };
     let icon_auto_detect = connection.icon_auto_detect_enabled();
     let mut editor = ConnectionEditorState {
+        mosh: Default::default(),
         defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),
@@ -240,8 +245,7 @@ pub(super) fn connection_editor_from_saved(
             auth.account_id.clone()
         },
         password_id: auth.password_id,
-        password: if (auth.mode == "password"
-            || matches!(connection.config, ConnectionType::Ssh { .. }))
+        password: if (auth.mode == "password" || connection.config.is_ssh_backed())
             && password_source == ConnectionEditorPasswordSource::Direct
             && !auth.has_password
         {
@@ -355,6 +359,25 @@ pub(super) fn connection_editor_from_saved(
             }
             editor.working_dir = directory;
             editor.android_screen = screen;
+        }
+        ConnectionType::Mosh {
+            host,
+            port,
+            username,
+            backspace_mode,
+            auth_agent_endpoint,
+            dynamic_tab_title,
+            mosh,
+            ..
+        } => {
+            editor.host = host;
+            editor.port = port.to_string();
+            editor.username = username;
+            editor.backspace_mode = backspace_mode;
+            editor.agent_endpoint = auth_agent_endpoint.unwrap_or_default();
+            editor.dynamic_tab_title = dynamic_tab_title;
+            editor.mosh = mosh.into();
+            editor.encoding = "UTF-8".into();
         }
         ConnectionType::Ssh {
             host,
@@ -584,7 +607,46 @@ fn parse_ssh_algorithm_mode(value: &str) -> SshAlgorithmMode {
 pub(super) fn build_saved_connection_from_editor(
     editor: &ConnectionEditorState,
 ) -> Result<SavedConnection, ConnectionEditorValidationError> {
+    if editor.kind == ConnectionKindTab::Mosh {
+        let settings = editor
+            .mosh
+            .settings()
+            .map_err(ConnectionEditorValidationError::MoshInvalid)?;
+        let mut ssh = editor.clone();
+        ssh.kind = ConnectionKindTab::Ssh;
+        ssh.encoding = "UTF-8".into();
+        ssh.ssh_profile = nyaterm_core::SshProfile::Standard;
+        ssh.x11_forwarding = false;
+        ssh.agent_forwarding_config = Default::default();
+        ssh.sftp_cwd_follow_mode = "off".into();
+        let mut connection = build_saved_connection_from_editor(&ssh)?;
+        let ConnectionType::Ssh {
+            host,
+            port,
+            username,
+            backspace_mode,
+            ai_execution_profile,
+            auth_agent_endpoint,
+            dynamic_tab_title,
+            ..
+        } = connection.config
+        else {
+            unreachable!()
+        };
+        connection.config = ConnectionType::Mosh {
+            host,
+            port,
+            username,
+            backspace_mode,
+            ai_execution_profile,
+            auth_agent_endpoint,
+            dynamic_tab_title,
+            mosh: settings,
+        };
+        return Ok(connection);
+    }
     let config = match editor.kind {
+        ConnectionKindTab::Mosh => unreachable!("handled above"),
         ConnectionKindTab::Ssh => {
             let host = editor.host.trim().to_string();
             if host.is_empty() {
@@ -990,7 +1052,8 @@ pub(super) fn build_saved_connection_from_editor(
 
     let name = if editor.name.trim().is_empty() {
         match &config {
-            ConnectionType::Ssh { host, port, .. }
+            ConnectionType::Mosh { host, port, .. }
+            | ConnectionType::Ssh { host, port, .. }
             | ConnectionType::Telnet { host, port, .. }
             | ConnectionType::Rdp { host, port, .. }
             | ConnectionType::Vnc { host, port, .. }
@@ -1067,13 +1130,19 @@ pub(super) fn build_saved_connection_from_editor(
             Some(ConnectionAuth {
                 account_id: matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
+                    ConnectionKindTab::Mosh
+                        | ConnectionKindTab::Ssh
+                        | ConnectionKindTab::Telnet
+                        | ConnectionKindTab::Ftp
                 )
                 .then(|| editor.account_id.clone())
                 .flatten(),
                 password_source: matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
+                    ConnectionKindTab::Mosh
+                        | ConnectionKindTab::Ssh
+                        | ConnectionKindTab::Telnet
+                        | ConnectionKindTab::Ftp
                 )
                 .then_some(
                     if (mode == "password" || retain_ssh_credentials)
@@ -1089,7 +1158,10 @@ pub(super) fn build_saved_connection_from_editor(
                     .flatten(),
                 username_source: (matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
+                    ConnectionKindTab::Mosh
+                        | ConnectionKindTab::Ssh
+                        | ConnectionKindTab::Telnet
+                        | ConnectionKindTab::Ftp
                 ) && editor
                     .account_id
                     .as_ref()
@@ -1320,6 +1392,7 @@ pub(super) fn apply_session_defaults(
     if defaults.kind != editor.kind {
         return;
     }
+    editor.mosh = defaults.mosh.clone();
     editor.proxy_id = defaults.proxy_id.clone();
     editor.proxy_jump_id = defaults.proxy_jump_id.clone();
     editor.agent_endpoint = defaults.agent_endpoint.clone();

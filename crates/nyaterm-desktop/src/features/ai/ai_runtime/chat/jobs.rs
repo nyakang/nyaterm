@@ -627,6 +627,7 @@ impl NyaTermApp {
         let metadata = session_id.and_then(|session_id| self.session.metadata(session_id));
         let ssh = match metadata.map(|metadata| &metadata.launch_config) {
             Some(SessionLaunchConfig::Ssh(config)) => Some(config.as_ref()),
+            Some(SessionLaunchConfig::Mosh(config)) => Some(&config.ssh),
             _ if session_id == self.session.active_id() => self.session.active_ssh_config(),
             _ => None,
         };

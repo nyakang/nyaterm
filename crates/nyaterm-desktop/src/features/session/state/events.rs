@@ -50,7 +50,8 @@ impl SessionFeatureState {
             .pending
             .iter()
             .map(|event| match event {
-                SessionEvent::Output { session_id, .. }
+                SessionEvent::MoshFrame { session_id, .. }
+                | SessionEvent::Output { session_id, .. }
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
