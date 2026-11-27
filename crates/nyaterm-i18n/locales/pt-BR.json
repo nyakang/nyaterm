@@ -333,7 +333,7 @@
     "selectedCount": "%{count} selecionado (%{hidden} oculto)",
     "storage": "Armazenamento",
     "title": "Ativos",
-    "windows": "Janelas",
+    "windows": "Windows",
     "workbench": "Bancada de trabalho"
   },
   "activityBar": {
