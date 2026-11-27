@@ -46,6 +46,8 @@ mod tray_tests;
 mod updates;
 mod window_decorations;
 mod workspaces;
+#[cfg(test)]
+mod x11_tests;
 
 use auto_sync::AutoSyncCoordinator;
 #[cfg(test)]
@@ -119,6 +121,7 @@ pub struct DesktopController {
     bootstrap_in_flight: bool,
     process_state: Option<gpui::Entity<ProcessStateStore>>,
     update_store: gpui::Entity<UpdateStore>,
+    x11_service: std::sync::Arc<crate::features::session::x11_service::X11Service>,
     plugin_process: gpui::Entity<crate::features::plugins::PluginProcess>,
     shared_refresh_generation: u64,
     applied_shared_refresh_generation: u64,
@@ -142,6 +145,7 @@ impl DesktopController {
             .map_or(0, |store| store.sync_mutation_generation());
         Self {
             ai_runtime: crate::ai_runtime::AiRuntime::new(),
+            x11_service: crate::features::session::x11_service::X11Service::new(cx),
             native_menu: Default::default(),
             plugin_process: cx
                 .new(|cx| crate::features::plugins::PluginProcess::new(runtime.clone(), cx)),
@@ -265,9 +269,39 @@ impl DesktopController {
         self.plugin_process.clone()
     }
 
+    pub(crate) fn x11_service(
+        &self,
+    ) -> std::sync::Arc<crate::features::session::x11_service::X11Service> {
+        self.x11_service.clone()
+    }
+
+    pub(crate) fn x11_prompt_app(
+        &self,
+        preferred: WorkspaceId,
+        cx: &gpui::App,
+    ) -> Option<gpui::WeakEntity<crate::features::NyaTermApp>> {
+        std::iter::once(preferred)
+            .chain(self.most_recent_workspace_id)
+            .chain(self.windows.keys().copied())
+            .filter(|id| !self.closing_workspaces.contains(id))
+            .find_map(|id| {
+                self.windows
+                    .get(&id)?
+                    .shell
+                    .upgrade()?
+                    .read(cx)
+                    .app
+                    .as_ref()
+                    .map(|app| app.downgrade())
+            })
+    }
+
     pub(crate) fn shutdown_plugins(&self, cx: &mut gpui::App) -> Task<()> {
         let service = self.plugin_process.read(cx).service();
+        let x11 = self.x11_service.clone();
+        x11.manager.begin_shutdown();
         cx.background_executor().spawn(async move {
+            x11.manager.shutdown();
             if let Some(service) = service {
                 service.shutdown();
             }

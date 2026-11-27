@@ -1,5 +1,6 @@
 //! Blocking platform adapter. Callers schedule preparation off the UI thread.
 mod managed;
+pub mod manager;
 mod process;
 mod system;
 

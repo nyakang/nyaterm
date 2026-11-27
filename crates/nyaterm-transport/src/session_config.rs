@@ -370,6 +370,7 @@ pub struct SshSessionConfig {
     pub x11_forwarding: bool,
     pub x11_display: String,
     /// Ephemeral endpoint and lifetime; never retain in restart configurations.
+    pub x11_provider: Option<Arc<dyn nyaterm_core::x11::X11ServerProvider>>,
     pub x11_connection: Option<nyaterm_core::x11::X11Connection>,
     pub encoding: String,
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
@@ -846,6 +847,7 @@ impl Default for SshSessionConfig {
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),
+            x11_provider: None,
             x11_connection: None,
             encoding: "UTF-8".to_string(),
             ssh_algorithms: None,

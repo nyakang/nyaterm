@@ -43,6 +43,9 @@ impl DesktopController {
         snapshot: BootstrapSnapshot,
         cx: &mut Context<Self>,
     ) {
+        self.x11_service
+            .manager
+            .set_clipboard(snapshot.settings.x11_clipboard);
         if should_enable_startup_screen_lock(
             self.process_state.is_some(),
             snapshot.settings.enable_startup_lock,
@@ -125,6 +128,9 @@ impl DesktopController {
         let Some(process_state) = self.process_state.clone() else {
             return;
         };
+        self.x11_service
+            .manager
+            .set_clipboard(process_state.read(cx).snapshot().settings.x11_clipboard);
         for (id, entry) in &self.windows {
             if Some(*id) == source {
                 continue;

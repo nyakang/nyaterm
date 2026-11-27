@@ -156,7 +156,8 @@ must include explicit conversion logic and tests.
   probes and native-helper process supervision. Only core and the pinned native
   protocol are allowed as workspace dependencies. Desktop owns preparation,
   prompts and settings; transport owns SSH forwarding and holds opaque runtime
-  leases. Windows managed instances are per SSH session; system/external servers
+  leases. Windows managed instances are application-wide, start only after authenticated X11 use,
+  and stop after five minutes without active channels; system/external servers
   are never stopped by the application.
 * `crates/nyaterm-otp`: bundled HOTP/TOTP implementation.
 * `crates/nyaterm-app/assets`: bundled icons and images. Assets under

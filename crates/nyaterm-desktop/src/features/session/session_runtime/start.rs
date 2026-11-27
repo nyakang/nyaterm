@@ -1274,6 +1274,7 @@ impl NyaTermApp {
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
                 config.x11_connection = None;
+                config.x11_provider = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,
@@ -1501,6 +1502,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
             .to_string(),
         x11_forwarding,
         x11_display: context.x11_display.clone(),
+        x11_provider: None,
         x11_connection: None,
         encoding,
         ssh_algorithms: connection

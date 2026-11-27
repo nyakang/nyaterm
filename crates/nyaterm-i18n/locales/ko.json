@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "X11 서버 대기 시간이 초과되었습니다. 승인된 설치는 계속됩니다. 설치가 완료되면 그래픽 프로그램을 다시 실행하세요.",
+    "clipboardNextStart": "클립보드 설정은 공유 X11 서버가 다음에 시작될 때 적용됩니다.",
+    "installedRetry": "X11 구성 요소가 설치되었습니다. 원격 그래픽 프로그램을 다시 실행하세요.",
     "mode": "로컬 X11 서버",
     "auto": "자동 선택",
     "managed": "NyaTerm 관리 서버",
     "external": "외부 X 서버",
-    "sharedDescription": "Windows 관리 서버는 SSH 세션별로 분리됩니다. 시스템 및 외부 서버는 데스크톱과 신뢰 경계를 공유합니다.",
+    "sharedDescription": "모든 SSH 세션은 필요할 때 시작되고 5분 동안 사용하지 않으면 중지되는 관리형 X11 서버 하나를 공유합니다. X11 클라이언트는 데스크톱과 신뢰 경계를 공유합니다.",
     "clipboard": "관리 서버 클립보드",
     "clipboardDescription": "원격 앱의 시스템 클립보드 접근을 허용합니다. 기본값은 꺼짐이며 새 인스턴스에 적용됩니다.",
     "componentUnavailable": "X11 구성 요소 서비스를 사용할 수 없습니다.",
-    "installDescription": "이 연결에는 로컬 X 서버가 필요합니다. 공식 X11 Server를 다운로드할까요? 설치를 건너뛴 후 일반 SSH 연결을 계속할 수도 있습니다.",
+    "installDescription": "현재 원격 프로그램에 X11 서버가 필요합니다. X11 구성 요소를 설치하면 이 컴퓨터에서 원격 그래픽 화면을 표시할 수 있습니다. 한 번만 설치하면 이후 세션에서 재사용됩니다.",
     "installSkipped": "X11 구성 요소 설치를 건너뛰었습니다.",
     "cancelled": "X11 연결 준비가 취소되었습니다.",
     "noDisplay": "로컬 X 서버를 찾을 수 없습니다. DISPLAY를 확인하고 Xorg/Xwayland 또는 외부 서버를 시작하세요.",
@@ -5168,9 +5171,9 @@
     "authentication": "로컬 X 서버 인증에 실패했습니다. DISPLAY와 Xauthority를 확인하세요.",
     "startup": "관리 X 서버를 시작할 수 없습니다.",
     "protocol": "X11 구성 요소가 호환되지 않습니다. 호환되는 서명된 버전을 설치하세요.",
-    "installTitle": "X11 Server 설치",
+    "installTitle": "X11 구성 요소 설치",
     "unavailableTitle": "X11 사용 불가",
-    "installAction": "다운로드 후 연결",
+    "installAction": "설치 및 시작",
     "continueWithout": "X11 없이 계속",
     "independentConnection": "이 X11 세션은 독립적인 SSH 연결을 사용합니다."
   }

@@ -1048,7 +1048,9 @@ pub(crate) async fn open_pending_ssh_shell(
         "opening SSH transport"
     );
     let x11_config = if config.x11_forwarding {
-        Some(if let Some(connection) = &config.x11_connection {
+        Some(if let Some(provider) = &config.x11_provider {
+            X11ForwardingConfig::lazy(provider.clone())
+        } else if let Some(connection) = &config.x11_connection {
             X11ForwardingConfig::prepared(connection)?
         } else {
             prepare_x11_forwarding(&config.x11_display).await

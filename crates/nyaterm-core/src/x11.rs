@@ -57,6 +57,8 @@ pub enum X11PreparationChoice {
 pub trait X11Lifetime: Send + Sync {
     fn is_alive(&self) -> bool;
     fn shutdown(&self);
+    /// Blocking process-tree and pipe-reader barrier; call only off the UI thread.
+    fn wait_stopped(&self) {}
 }
 
 #[derive(Clone)]
@@ -72,10 +74,27 @@ impl std::fmt::Debug for X11Connection {
     }
 }
 
+/// One authenticated forwarding channel. The opaque guard releases only this
+/// channel's reservation; it cannot stop the application-owned server.
+pub struct X11ChannelConnection {
+    pub connection: X11Connection,
+    pub guard: Option<Box<dyn Send + Sync>>,
+}
+
+/// Invoked only after the SSH session's fake cookie has been authenticated.
+/// Dropping the returned future withdraws this request, not other callers.
+pub trait X11ServerProvider: Send + Sync {
+    fn acquire(
+        &self,
+    ) -> futures::future::BoxFuture<'static, Result<X11ChannelConnection, X11Error>>;
+}
+
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum X11Error {
     #[error("X11 preparation cancelled")]
     Cancelled,
+    #[error("Timed out waiting for the X11 server")]
+    Timeout,
     #[error("No local X11 display is available")]
     NoDisplay,
     #[error("XQuartz is not installed or did not become ready")]

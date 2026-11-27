@@ -1,13 +1,17 @@
 //! X11 forwarding: display resolution, xauth cookie rewriting and channel relay.
 //!
-//! Desktop supplies a prepared local endpoint and its lifetime. Legacy callers
-//! can still resolve external displays here; every channel validates its session cookie.
+//! Desktop supplies a lazy server provider. Every channel authenticates its
+//! session cookie before acquiring a server or opening a local connection.
 
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use nyaterm_core::x11::{
+    X11ChannelConnection, X11Connection, X11Endpoint, X11Error, X11ServerProvider,
+};
 use russh::{ChannelMsg, client};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use std::time::Duration;
@@ -57,6 +61,7 @@ impl X11DisplayTarget {
 
 #[derive(Clone)]
 pub struct X11ForwardingConfig {
+    pub provider: Option<Arc<dyn X11ServerProvider>>,
     pub target: X11DisplayTarget,
     pub fallback_target: Option<X11DisplayTarget>,
     pub fake_cookie: Vec<u8>,
@@ -101,19 +106,81 @@ pub async fn prepare_x11_forwarding(configured_display: &str) -> X11ForwardingCo
     let (target, fallback_target) = resolve_x11_display_targets(&display);
     let fake_cookie = uuid::Uuid::new_v4().as_bytes().to_vec();
     let fake_cookie_hex = encode_hex(&fake_cookie);
-    let real_cookie = read_local_x11_auth_cookie(&display).await;
+    let provider = Arc::new(ExternalDisplayProvider(display));
 
     X11ForwardingConfig {
+        provider: Some(provider),
         target,
         fallback_target,
         fake_cookie,
         fake_cookie_hex,
-        real_cookie,
+        real_cookie: None,
         lifetime: None,
     }
 }
 
+struct ExternalDisplayProvider(String);
+impl X11ServerProvider for ExternalDisplayProvider {
+    fn acquire(
+        &self,
+    ) -> futures::future::BoxFuture<'static, Result<X11ChannelConnection, X11Error>> {
+        let display = self.0.clone();
+        Box::pin(async move {
+            let (target, _) = resolve_x11_display_targets(&display);
+            Ok(X11ChannelConnection {
+                connection: X11Connection {
+                    endpoint: target.endpoint(),
+                    cookie: read_local_x11_auth_cookie(&display)
+                        .await
+                        .map(Zeroizing::new),
+                    lifetime: None,
+                },
+                guard: None,
+            })
+        })
+    }
+}
+impl X11DisplayTarget {
+    fn endpoint(&self) -> X11Endpoint {
+        match self {
+            Self::Tcp { host, port } => X11Endpoint::Tcp {
+                host: host.clone(),
+                port: *port,
+            },
+            #[cfg(unix)]
+            Self::UnixSocket { path } => X11Endpoint::UnixSocket { path: path.clone() },
+        }
+    }
+    fn from_endpoint(endpoint: &X11Endpoint) -> anyhow::Result<Self> {
+        match endpoint {
+            X11Endpoint::Tcp { host, port } => Ok(Self::Tcp {
+                host: host.clone(),
+                port: *port,
+            }),
+            #[cfg(unix)]
+            X11Endpoint::UnixSocket { path } => Ok(Self::UnixSocket { path: path.clone() }),
+            #[cfg(not(unix))]
+            X11Endpoint::UnixSocket { .. } => anyhow::bail!("Unsupported local X11 endpoint"),
+        }
+    }
+}
 impl X11ForwardingConfig {
+    pub(crate) fn lazy(provider: Arc<dyn X11ServerProvider>) -> Self {
+        let fake_cookie = uuid::Uuid::new_v4().as_bytes().to_vec();
+        Self {
+            provider: Some(provider),
+            target: X11DisplayTarget::Tcp {
+                host: "127.0.0.1".into(),
+                port: 6000,
+            },
+            fallback_target: None,
+            fake_cookie_hex: encode_hex(&fake_cookie),
+            fake_cookie,
+            real_cookie: None,
+            lifetime: None,
+        }
+    }
+
     pub(crate) fn prepared(connection: &nyaterm_core::x11::X11Connection) -> anyhow::Result<Self> {
         use nyaterm_core::x11::X11Endpoint;
         let target = match &connection.endpoint {
@@ -128,6 +195,7 @@ impl X11ForwardingConfig {
         };
         let fake_cookie = uuid::Uuid::new_v4().as_bytes().to_vec();
         Ok(Self {
+            provider: None,
             target,
             fallback_target: None,
             fake_cookie_hex: encode_hex(&fake_cookie),
@@ -542,52 +610,21 @@ pub(super) fn spawn_x11_forwarder(
     mut forwarder: X11Forwarder,
 ) -> tokio_util::task::AbortOnDropHandle<()> {
     tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        struct RuntimeGuard(Option<std::sync::Arc<dyn nyaterm_core::x11::X11Lifetime>>);
-        impl Drop for RuntimeGuard {
-            fn drop(&mut self) {
-                if let Some(lifetime) = &self.0 {
-                    lifetime.shutdown();
-                }
-            }
-        }
-        let lifetime = RuntimeGuard(forwarder.config.lifetime.clone());
         let mut tasks = tokio::task::JoinSet::new();
-        let mut health = tokio::time::interval(Duration::from_millis(250));
-        health.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let open = tokio::select! {
                 open = forwarder.rx.recv() => match open { Some(open) => open, None => break },
                 _ = tasks.join_next(), if !tasks.is_empty() => continue,
-                _ = health.tick(), if lifetime.0.is_some() => {
-                    if lifetime.0.as_ref().is_some_and(|lease| !lease.is_alive()) {
-                        event_queue.push(SessionEvent::Notice { session_id: session_id.clone(),
-                            notice: crate::session_notice::SessionNotice::X11ServerUnavailable { display_target: forwarder.config.target.describe() } });
-                        break;
-                    }
-                    continue;
-                },
             };
             if tasks.len() >= MAX_X11_CHANNELS {
                 let _ = open.channel.close().await;
                 continue;
             }
-            let target = forwarder.config.target.clone();
-            let fallback = forwarder.config.fallback_target.clone();
-            let fake_cookie = forwarder.config.fake_cookie.clone();
-            let real_cookie = forwarder.config.real_cookie.clone();
+            let config = forwarder.config.clone();
             let event_queue = event_queue.clone();
             let session_id = session_id.clone();
             tasks.spawn(async move {
-                let _ = handle_x11_channel(
-                    event_queue,
-                    session_id,
-                    open,
-                    target,
-                    fallback,
-                    fake_cookie,
-                    real_cookie,
-                )
-                .await;
+                let _ = handle_x11_channel(event_queue, session_id, open, config).await;
             });
         }
     }))
@@ -597,10 +634,7 @@ async fn handle_x11_channel(
     event_queue: SessionEventQueue,
     session_id: String,
     open: X11ChannelOpen,
-    target: X11DisplayTarget,
-    fallback: Option<X11DisplayTarget>,
-    fake_cookie: Vec<u8>,
-    real_cookie: Option<Vec<u8>>,
+    config: X11ForwardingConfig,
 ) -> anyhow::Result<()> {
     let X11ChannelOpen {
         channel,
@@ -608,77 +642,136 @@ async fn handle_x11_channel(
         originator_port,
     } = open;
     let _originator = (originator_address, originator_port);
-
-    let local = match connect_local_x_server_with_fallback(&target, fallback.as_ref()).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            let _ = channel.close().await;
-            event_queue.push(SessionEvent::Notice {
-                session_id,
-                notice: crate::session_notice::SessionNotice::X11ServerUnavailable {
-                    display_target: target.describe(),
-                },
-            });
-            anyhow::bail!("failed to connect local X11 server: {error}");
-        }
-    };
-
     let (mut remote_read, remote_write) = channel.split();
-    let mut remote_writer = remote_write.make_writer();
-    let (mut local_read, mut local_write) = tokio::io::split(local);
-    let mut rewriter = X11AuthRewriter::new(fake_cookie, real_cookie);
-
-    let remote_to_local = async {
-        let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
-        loop {
-            let msg = if rewriter.complete {
-                remote_read.wait().await
-            } else {
-                tokio::time::timeout_at(deadline, remote_read.wait())
-                    .await
-                    .map_err(|_| {
-                        std::io::Error::new(std::io::ErrorKind::TimedOut, "X11 setup timed out")
-                    })?
-            };
-            let Some(msg) = msg else { break };
-            match msg {
-                ChannelMsg::Data { data } => {
-                    let rewritten = Zeroizing::new(rewriter.push(&data)?);
-                    if !rewritten.is_empty() {
-                        local_write.write_all(&rewritten).await?;
+    let remote_write = Arc::new(remote_write);
+    let mut close_guard = ChannelCloseGuard(Some(remote_write.clone()));
+    let mut authenticated = false;
+    let result: anyhow::Result<()> = async {
+        // Authenticate before acquiring a server, touching xauth, or opening a
+        // local socket. Keeping the fake cookie here preserves the setup bytes.
+        let mut validator =
+            X11AuthRewriter::new(config.fake_cookie.clone(), Some(config.fake_cookie.clone()));
+        let mut setup = tokio::time::timeout(SETUP_TIMEOUT, async {
+            loop {
+                match remote_read.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        let bytes = Zeroizing::new(validator.push(&data)?);
+                        if validator.complete {
+                            return Ok(bytes);
+                        }
                     }
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => {
+                        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+                    }
+                    _ => {}
                 }
-                ChannelMsg::Eof | ChannelMsg::Close => break,
-                _ => {}
             }
-        }
-        let _ = local_write.shutdown().await;
-        Ok::<(), std::io::Error>(())
-    };
-
-    let local_to_remote = async {
-        let mut buf = [0_u8; 16 * 1024];
-        loop {
-            let n = local_read.read(&mut buf).await?;
-            if n == 0 {
-                break;
+        })
+        .await??;
+        authenticated = true;
+        let acquire = async {
+            if let Some(provider) = &config.provider {
+                provider.acquire().await
+            } else {
+                Ok(X11ChannelConnection {
+                    connection: X11Connection {
+                        endpoint: config.target.endpoint(),
+                        cookie: config.real_cookie.clone().map(Zeroizing::new),
+                        lifetime: config.lifetime.clone(),
+                    },
+                    guard: None,
+                })
             }
-            remote_writer.write_all(&buf[..n]).await?;
+        };
+        let acquire = tokio::time::timeout(Duration::from_secs(60), acquire);
+        tokio::pin!(acquire);
+        // Bounded read-ahead observes clients which abandon an installation;
+        // once full, SSH's own bounded channel window provides backpressure.
+        const WAIT_BUFFER: usize = 256 * 1024;
+        let acquired = loop {
+            tokio::select! {
+                result = &mut acquire => break result.map_err(|_| X11Error::Timeout)??,
+                message = remote_read.wait(), if setup.len() < WAIT_BUFFER => match message {
+                    Some(ChannelMsg::Data { data }) => setup.extend_from_slice(&data),
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return Ok(()),
+                    _ => {},
+                },
+            }
+        };
+        let target = X11DisplayTarget::from_endpoint(&acquired.connection.endpoint)?;
+        let mut rewriter = X11AuthRewriter::new(
+            config.fake_cookie.clone(),
+            acquired.connection.cookie.as_ref().map(|c| c.to_vec()),
+        );
+        let rewritten = Zeroizing::new(rewriter.push(&setup)?);
+        setup.zeroize();
+        let mut local = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut local =
+                connect_local_x_server_with_fallback(&target, config.fallback_target.as_ref())
+                    .await?;
+            local.write_all(&rewritten).await?;
+            Ok::<_, std::io::Error>(local)
+        })
+        .await??;
+        let (mut local_read, mut local_write) = tokio::io::split(&mut local);
+        let mut remote_writer = remote_write.make_writer();
+        let remote_to_local = async {
+            loop {
+                match remote_read.wait().await {
+                    Some(ChannelMsg::Data { data }) => local_write.write_all(&data).await?,
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => break,
+                    _ => {}
+                }
+            }
+            local_write.shutdown().await
+        };
+        let local_to_remote = async {
+            tokio::io::copy(&mut local_read, &mut remote_writer).await?;
+            remote_writer.shutdown().await
+        };
+        tokio::select! {
+            result = remote_to_local => result?,
+            result = local_to_remote => result?,
         }
-        let _ = remote_writer.shutdown().await;
-        Ok::<(), std::io::Error>(())
-    };
-
-    let result = tokio::select! {
-        result = remote_to_local => result,
-        result = local_to_remote => result,
-    };
-
-    // Dropping russh channel halves does not send CHANNEL_CLOSE. In particular,
-    // rejected setup authentication must not leave the remote X client waiting
-    // forever for a reply on a channel that no longer has a forwarding task.
+        // acquired's guard remains alive through both directions of the relay.
+        drop(acquired);
+        Ok(())
+    }
+    .await;
+    // Dropping russh channel halves does not send CHANNEL_CLOSE.
     let _ = remote_write.close().await;
-    result.map_err(Into::into)
+    close_guard.0 = None;
+    if authenticated && let Err(error) = &result {
+        let error = error
+            .downcast_ref::<X11Error>()
+            .copied()
+            .unwrap_or(X11Error::NoDisplay);
+        if error != X11Error::Cancelled {
+            let notice = if config.provider.is_some() {
+                crate::session_notice::SessionNotice::X11PreparationFailed { error }
+            } else {
+                crate::session_notice::SessionNotice::X11ServerUnavailable {
+                    display_target: config.target.describe(),
+                }
+            };
+            event_queue.push(SessionEvent::Notice { session_id, notice });
+        }
+    }
+    result
+}
+
+// JoinSet aborts must release the SSH channel as well as the server lease.
+struct ChannelCloseGuard(Option<Arc<russh::ChannelWriteHalf<client::Msg>>>);
+impl Drop for ChannelCloseGuard {
+    fn drop(&mut self) {
+        if let Some(channel) = self.0.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = tokio::time::timeout(Duration::from_secs(1), channel.close()).await;
+            });
+        }
+    }
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

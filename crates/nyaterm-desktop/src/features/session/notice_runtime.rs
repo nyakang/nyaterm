@@ -32,6 +32,10 @@ pub(in crate::features) fn session_notice_text(kind: &SessionNoticeKind) -> (Str
             t!("sessionNotice.droppedBytes", bytes = bytes).to_string(),
         ),
         SessionNoticeKind::Transport(notice) => match notice {
+            SessionNotice::X11PreparationFailed { error } => (
+                "x11.unavailableTitle",
+                crate::features::session::x11_service::error_message(*error),
+            ),
             SessionNotice::X11ForwardingDenied => (
                 "sessionNotice.x11Denied",
                 t!("sessionNotice.x11DeniedHelp").to_string(),

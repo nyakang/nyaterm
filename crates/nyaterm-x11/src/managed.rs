@@ -4,7 +4,7 @@ use nyaterm_core::x11::{X11Connection, X11Endpoint, X11Error, X11Lifetime};
 use nyaterm_native_protocol::x11::{self, Event, X11_PROTOCOL_VERSION};
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 struct Lifetime {
     alive: Arc<AtomicBool>,
     stop: mpsc::SyncSender<()>,
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 impl X11Lifetime for Lifetime {
     fn is_alive(&self) -> bool {
@@ -21,6 +22,11 @@ impl X11Lifetime for Lifetime {
     }
     fn shutdown(&self) {
         let _ = self.stop.try_send(());
+    }
+    fn wait_stopped(&self) {
+        if let Some(worker) = self.worker.lock().unwrap().take() {
+            let _ = worker.join();
+        }
     }
 }
 impl Drop for Lifetime {
@@ -32,7 +38,7 @@ impl Drop for Lifetime {
 pub fn start_managed(
     launch: NativeLaunch,
     clipboard: bool,
-    cancelled: &impl Fn() -> bool,
+    cancelled: &(impl Fn() -> bool + ?Sized),
 ) -> Result<X11Connection, X11Error> {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return Err(X11Error::Unsupported);
@@ -46,19 +52,27 @@ pub fn start_managed(
     let lifetime = Arc::new(Lifetime {
         alive: alive.clone(),
         stop,
+        worker: Mutex::new(None),
     });
-    std::thread::Builder::new()
+    let worker = std::thread::Builder::new()
         .name("nyaterm-x11".into())
         .spawn(move || {
+            struct MarkStopped(Arc<AtomicBool>);
+            impl Drop for MarkStopped {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+            let _stopped = MarkStopped(alive);
             let result = supervise(launch, clipboard, &stopped, &ready_tx);
-            alive.store(false, Ordering::Release);
             if let Err(error) = result {
                 let _ = ready_tx.try_send(Err(error));
             }
         })
         .map_err(|_| X11Error::Startup)?;
+    *lifetime.worker.lock().unwrap() = Some(worker);
     let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
+    let result = (|| loop {
         if cancelled() {
             return Err(X11Error::Cancelled);
         }
@@ -67,14 +81,19 @@ pub fn start_managed(
         }
         match ready_rx.recv_timeout(Duration::from_millis(25)) {
             Ok(Ok(mut connection)) => {
-                connection.lifetime = Some(lifetime);
+                connection.lifetime = Some(lifetime.clone());
                 return Ok(connection);
             }
             Ok(Err(error)) => return Err(error),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(X11Error::Startup),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+    })();
+    if result.is_err() {
+        lifetime.shutdown();
+        lifetime.wait_stopped();
     }
+    result
 }
 
 fn supervise(

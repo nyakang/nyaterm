@@ -1,7 +1,6 @@
 {
   "wildcard_super_import": [],
   "desktop_feature_thread_spawn": [
-    {"path": "crates/nyaterm-desktop/src/features/session/session_runtime/x11.rs", "max_count": 2, "reason": "X11 preparation tests join their blocking workers to verify explicit fallback and late-confirmation cancellation; production uses the bounded session executor."},
     {"path": "crates/nyaterm-desktop/src/features/app_state/store_runtime.rs", "max_count": 1, "reason": "The GPUI shutdown responsiveness test uses a watchdog thread and joins it before returning."}
   ],
   "terminal_runtime_thread_builder": [

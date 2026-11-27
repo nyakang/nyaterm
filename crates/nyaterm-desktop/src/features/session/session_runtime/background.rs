@@ -541,6 +541,7 @@ impl NyaTermApp {
                 };
                 if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
                     config.x11_connection = None;
+                    config.x11_provider = None;
                 }
                 result
                     .map(|success| SessionStartSuccess {
@@ -686,6 +687,7 @@ impl NyaTermApp {
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
                 config.x11_connection = None;
+                config.x11_provider = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,
@@ -758,6 +760,7 @@ impl NyaTermApp {
         }
         let (existing_multiplex, existing_multiplex_key) = if config.x11_forwarding {
             config.x11_connection = None;
+            config.x11_provider = None;
             self.shell
                 .set_status(rust_i18n::t!("x11.independentConnection").to_string());
             (None, None)
@@ -827,6 +830,7 @@ impl NyaTermApp {
                     .create_ssh_session_with_multiplex(config.clone(), connection.handle())
                     .map_err(|error| error.to_string())?;
                 config.x11_connection = None;
+                config.x11_provider = None;
                 Ok(SessionStartSuccess::ssh(
                     Arc::clone(&session_manager),
                     session_info,

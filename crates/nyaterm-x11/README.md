@@ -1,6 +1,7 @@
 # X11 local runtime
 
-The application prepares a local display before requesting SSH X11 forwarding.
+The application requests SSH X11 forwarding without preparing a local display.
+Only an authenticated incoming X11 setup triggers local preparation.
 This crate owns blocking discovery, readiness probes and managed process trees.
 It depends on core contracts and the independently pinned native control protocol;
 desktop owns scheduling, prompts and settings, and transport owns X11 channels.
@@ -9,14 +10,14 @@ desktop owns scheduling, prompts and settings, and transport owns X11 channels.
 
 | Platform | Automatic mode | Ownership |
 | --- | --- | --- |
-| Windows x64 | Install/acquire the signed X11 component, start one VcXsrv per SSH session | Private instance, clipboard off by default |
+| Windows x64 | Lazily install/acquire the signed X11 component and share one VcXsrv across all workspaces | Application-owned instance, clipboard off by default |
 | macOS | Discover and start an already installed XQuartz | Shared system server, never stopped |
 | Linux | Use the current DISPLAY and scoped xauth entry for Xorg/Xwayland | Shared system server, never stopped |
 | Windows ARM64 | External server only | No official managed component |
 
 An explicit saved DISPLAY remains authoritative in Automatic mode. External
-mode never starts a managed server. X11 preparation failure requires the user
-to choose ordinary SSH or cancel; it never silently removes forwarding. An
+mode never starts a managed server. Preparation failure closes only the affected
+graphical channel; ordinary SSH and subsequent X11 requests remain available. An
 X11-enabled tab receives its own SSH connection so its cookie and receiver are
 not overwritten by another multiplexed tab. Auxiliary SFTP/monitoring channels
 can still share that tab's SSH connection.
@@ -31,10 +32,26 @@ oversized or timed-out setup packets close the forwarding channel.
 
 The managed helper launches the pinned loopback-only VcXsrv fork with a private
 Xauthority file. It reports the display and ephemeral cookie through a bounded
-control pipe. Each process tree has a Windows Job Object. Final runtime release,
-SSH X11 rejection, cancellation and session shutdown trigger cleanup outside
-the UI thread. The component directory lease survives until child termination
-and pipe-reader reaping. User-owned servers are never terminated.
+control pipe. Each process tree has a Windows Job Object. `X11ServerManager`
+serializes startup and shutdown, retains the process across SSH session closures,
+and counts actual channel leases. Five minutes after the last lease is released,
+it reaps the process tree. New channels cancel the idle deadline; after a crash,
+the next authenticated request starts a fresh instance. Process shutdown waits
+for cleanup before stopping the plugin service. The component directory lease
+survives until child termination and pipe-reader reaping. User-owned servers
+are never terminated.
+
+All managed X11 clients share a desktop and trust boundary; session-specific fake
+cookies authenticate forwarding but do not isolate clients within the server.
+Clipboard settings apply at the next server start without interrupting clients.
+
+Setup authentication has a 10-second deadline. Once authenticated, a channel can
+wait up to 60 seconds for preparation; starting the installed helper has its own
+20-second limit, followed by a 10-second local connect/setup-write limit. The
+first missing-component request opens one application-wide installation prompt.
+Explicitly approved installation continues after the requesting clients time
+out, with a notification to rerun the graphical application. Commands are never
+replayed. Unapproved requests disappear when their channels close.
 
 ## Compatibility and release
 
@@ -75,7 +92,7 @@ instances listened only on `127.0.0.1`, and normal stop and forced helper
 termination left no server listener behind. This artifact has not been signed
 or published to the official component index.
 
-Implementation validation on 2026-11-27 covered workspace check, all-target
+The original eager, per-session implementation validation on 2026-11-27 covered workspace check, all-target
 Clippy, formatting, architecture rules, documentation translations and workspace
 doc tests. Workspace tests were completed across multiple runs with
 `RUST_MIN_STACK=33554432` and `RUST_TEST_THREADS=8`: the existing file-permission

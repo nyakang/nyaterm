@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "X11 サーバーの待機がタイムアウトしました。承認済みのインストールは続行されます。完了後に GUI アプリケーションを再実行してください。",
+    "clipboardNextStart": "クリップボード設定は共有 X11 サーバーの次回起動時に適用されます。",
+    "installedRetry": "X11 コンポーネントをインストールしました。リモート GUI アプリケーションを再実行してください。",
     "mode": "ローカル X11 サーバー",
     "auto": "自動選択",
     "managed": "NyaTerm 管理サーバー",
     "external": "外部 X サーバー",
-    "sharedDescription": "Windows の管理サーバーは SSH セッションごとに分離されます。システムと外部サーバーはデスクトップと信頼境界を共有します。",
+    "sharedDescription": "すべての SSH セッションは、必要なときに起動し、5 分間未使用で停止する管理対象 X11 サーバーを共有します。X11 クライアントはデスクトップと信頼境界を共有します。",
     "clipboard": "管理サーバーのクリップボード",
     "clipboardDescription": "リモートアプリによるシステムクリップボードへのアクセスを許可します。既定では無効で、新しいインスタンスに適用されます。",
     "componentUnavailable": "X11 コンポーネントサービスを利用できません。",
-    "installDescription": "この接続にはローカル X サーバーが必要です。公式 X11 Server をダウンロードしますか？インストールを省略して通常の SSH 接続を続けることもできます。",
+    "installDescription": "現在のリモートアプリケーションには X11 サーバーが必要です。X11 コンポーネントをインストールすると、このコンピューターにリモート GUI を表示できます。インストールは一度だけで、以降のセッションでも再利用されます。",
     "installSkipped": "X11 コンポーネントのインストールを省略しました。",
     "cancelled": "X11 接続の準備をキャンセルしました。",
     "noDisplay": "ローカル X サーバーが見つかりません。DISPLAY を確認し、Xorg/Xwayland または外部サーバーを起動してください。",
@@ -5168,9 +5171,9 @@
     "authentication": "ローカル X サーバーの認証に失敗しました。DISPLAY と Xauthority を確認してください。",
     "startup": "管理 X サーバーを起動できません。",
     "protocol": "X11 コンポーネントに互換性がありません。互換性のある署名済みバージョンをインストールしてください。",
-    "installTitle": "X11 Server をインストール",
+    "installTitle": "X11 コンポーネントのインストール",
     "unavailableTitle": "X11 を利用できません",
-    "installAction": "ダウンロードして接続",
+    "installAction": "インストールして起動",
     "continueWithout": "X11 なしで続行",
     "independentConnection": "この X11 セッションには独立した SSH 接続を使用します。"
   }

@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "Timed out waiting for the X11 server. An approved installation will continue; run the graphical application again when it finishes.",
+    "clipboardNextStart": "The clipboard setting will apply the next time the shared X11 server starts.",
+    "installedRetry": "The X11 component is installed. Run the remote graphical application again.",
     "mode": "Local X11 server",
     "auto": "Automatic",
     "managed": "NyaTerm managed server",
     "external": "External X server",
-    "sharedDescription": "Managed Windows servers are isolated per SSH session. System and external servers share their desktop and trust boundary.",
+    "sharedDescription": "All SSH sessions share one managed X11 server, started on demand and stopped after five idle minutes. X11 clients share its desktop and trust boundary.",
     "clipboard": "Managed server clipboard",
     "clipboardDescription": "Allow remote applications to access the system clipboard. Applies to new instances; disabled by default.",
     "componentUnavailable": "The X11 component service is unavailable.",
-    "installDescription": "This connection needs a local X server. Download the official X11 Server component? If you skip installation, you can continue with ordinary SSH.",
+    "installDescription": "The current remote application needs an X11 server. Install the X11 component to display remote graphical applications on this computer. Install it once; subsequent sessions reuse it.",
     "installSkipped": "X11 component installation was skipped.",
     "cancelled": "X11 connection preparation cancelled.",
     "noDisplay": "No local X server is available. Check DISPLAY and start Xorg/Xwayland or an external X server.",
@@ -5168,9 +5171,9 @@
     "authentication": "Could not authenticate to the local X server. Check DISPLAY and Xauthority.",
     "startup": "Could not start the managed X server.",
     "protocol": "The X11 component is incompatible. Install a compatible signed version.",
-    "installTitle": "Install X11 Server",
+    "installTitle": "Install X11 component",
     "unavailableTitle": "X11 is unavailable",
-    "installAction": "Download and connect",
+    "installAction": "Install and start",
     "continueWithout": "Continue without X11",
     "independentConnection": "X11 uses an independent SSH connection for this session."
   }

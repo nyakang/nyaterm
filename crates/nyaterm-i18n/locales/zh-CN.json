@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "等待 X11 Server 超时。已确认的安装会继续完成，请在安装完成后重新运行图形程序。",
+    "clipboardNextStart": "剪贴板设置将在共享 X11 Server 下次启动时生效。",
+    "installedRetry": "X11 组件安装完成，请重新运行远程图形程序。",
     "mode": "本地 X11 服务",
     "auto": "自动选择",
     "managed": "NyaTerm 内置服务",
     "external": "外部 X Server",
-    "sharedDescription": "Windows 内置服务按 SSH 会话隔离；系统和外部服务共享桌面及信任边界。",
+    "sharedDescription": "所有 SSH 会话共享一个内置 X11 Server，首次使用时启动，空闲 5 分钟后停止。X11 客户端共享其桌面及信任边界。",
     "clipboard": "内置服务剪贴板",
     "clipboardDescription": "允许远程应用访问系统剪贴板。默认关闭，仅对新实例生效。",
     "componentUnavailable": "X11 组件服务不可用。",
-    "installDescription": "此连接需要本地 X Server。是否下载官方 X11 Server 组件？跳过安装后可以选择继续普通 SSH 连接。",
+    "installDescription": "当前远程程序需要 X11 Server。安装 X11 组件后，即可在本机显示远程图形界面。组件仅需安装一次，后续会话自动复用。",
     "installSkipped": "已跳过 X11 组件安装。",
     "cancelled": "已取消 X11 连接准备。",
     "noDisplay": "未找到可用的本地 X Server。请检查 DISPLAY 并启动 Xorg/Xwayland 或外部服务。",
@@ -5168,9 +5171,9 @@
     "authentication": "本地 X Server 认证失败。请检查 DISPLAY 和 Xauthority。",
     "startup": "无法启动内置 X Server。",
     "protocol": "X11 组件不兼容，请安装兼容的签名版本。",
-    "installTitle": "安装 X11 Server",
+    "installTitle": "安装 X11 组件",
     "unavailableTitle": "X11 不可用",
-    "installAction": "下载并连接",
+    "installAction": "安装并启动",
     "continueWithout": "不使用 X11，继续连接",
     "independentConnection": "此 X11 会话将使用独立的 SSH 连接。"
   }

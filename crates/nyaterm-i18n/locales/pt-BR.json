@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "O tempo de espera pelo servidor X11 expirou. Uma instalação aprovada continuará; execute o aplicativo gráfico novamente quando ela terminar.",
+    "clipboardNextStart": "A configuração da área de transferência será aplicada na próxima inicialização do servidor X11 compartilhado.",
+    "installedRetry": "O componente X11 foi instalado. Execute o aplicativo gráfico remoto novamente.",
     "mode": "Servidor X11 local",
     "auto": "Automático",
     "managed": "Servidor gerenciado pelo NyaTerm",
     "external": "Servidor X externo",
-    "sharedDescription": "Os servidores Windows gerenciados são isolados por sessão SSH. Servidores do sistema e externos compartilham a área de trabalho e o limite de confiança.",
+    "sharedDescription": "Todas as sessões SSH compartilham um servidor X11 gerenciado, iniciado sob demanda e encerrado após cinco minutos de inatividade. Os clientes X11 compartilham sua área de trabalho e seu limite de confiança.",
     "clipboard": "Área de transferência do servidor gerenciado",
     "clipboardDescription": "Permitir que aplicativos remotos acessem a área de transferência do sistema. Desativado por padrão; aplica-se a novas instâncias.",
     "componentUnavailable": "O serviço de componentes X11 está indisponível.",
-    "installDescription": "Esta conexão precisa de um servidor X local. Baixar o componente oficial X11 Server? Você também pode ignorar a instalação e continuar com SSH comum.",
+    "installDescription": "O aplicativo remoto atual precisa de um servidor X11. Instale o componente X11 para exibir aplicativos gráficos remotos neste computador. Basta instalar uma vez; as próximas sessões reutilizam o componente.",
     "installSkipped": "A instalação do componente X11 foi ignorada.",
     "cancelled": "A preparação da conexão X11 foi cancelada.",
     "noDisplay": "Nenhum servidor X local disponível. Verifique DISPLAY e inicie Xorg/Xwayland ou um servidor externo.",
@@ -5168,9 +5171,9 @@
     "authentication": "Falha na autenticação no servidor X local. Verifique DISPLAY e Xauthority.",
     "startup": "Não foi possível iniciar o servidor X gerenciado.",
     "protocol": "O componente X11 é incompatível. Instale uma versão assinada compatível.",
-    "installTitle": "Instalar X11 Server",
+    "installTitle": "Instalar componente X11",
     "unavailableTitle": "X11 indisponível",
-    "installAction": "Baixar e conectar",
+    "installAction": "Instalar e iniciar",
     "continueWithout": "Continuar sem X11",
     "independentConnection": "Esta sessão X11 usa uma conexão SSH independente."
   }

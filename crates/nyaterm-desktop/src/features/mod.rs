@@ -26,7 +26,7 @@ mod remote_desktop;
 mod root;
 mod runtime_jobs;
 mod selects;
-mod session;
+pub(crate) mod session;
 mod settings;
 pub(crate) mod shell;
 pub(crate) mod sync;

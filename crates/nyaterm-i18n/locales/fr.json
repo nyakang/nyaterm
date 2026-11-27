@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "Le délai d’attente du serveur X11 est dépassé. Une installation approuvée se poursuit ; relancez l’application graphique une fois celle-ci terminée.",
+    "clipboardNextStart": "Le réglage du presse-papiers sera appliqué au prochain démarrage du serveur X11 partagé.",
+    "installedRetry": "Le composant X11 est installé. Relancez l’application graphique distante.",
     "mode": "Serveur X11 local",
     "auto": "Automatique",
     "managed": "Serveur géré par NyaTerm",
     "external": "Serveur X externe",
-    "sharedDescription": "Les serveurs Windows gérés sont isolés par session SSH. Les serveurs système et externes partagent le bureau et la même zone de confiance.",
+    "sharedDescription": "Toutes les sessions SSH partagent un serveur X11 géré, démarré à la demande et arrêté après cinq minutes d’inactivité. Les clients X11 partagent son bureau et son périmètre de confiance.",
     "clipboard": "Presse-papiers du serveur géré",
     "clipboardDescription": "Autoriser les applications distantes à accéder au presse-papiers système. Désactivé par défaut ; applicable aux nouvelles instances.",
     "componentUnavailable": "Le service de composants X11 est indisponible.",
-    "installDescription": "Cette connexion nécessite un serveur X local. Télécharger le composant officiel X11 Server ? Vous pouvez aussi ignorer cette installation et continuer en SSH standard.",
+    "installDescription": "L’application distante actuelle nécessite un serveur X11. Installez le composant X11 pour afficher les applications graphiques distantes sur cet ordinateur. Une seule installation suffit ; les sessions suivantes le réutilisent.",
     "installSkipped": "Installation du composant X11 ignorée.",
     "cancelled": "Préparation de la connexion X11 annulée.",
     "noDisplay": "Aucun serveur X local disponible. Vérifiez DISPLAY et démarrez Xorg/Xwayland ou un serveur externe.",
@@ -5168,9 +5171,9 @@
     "authentication": "Échec de l’authentification auprès du serveur X local. Vérifiez DISPLAY et Xauthority.",
     "startup": "Impossible de démarrer le serveur X géré.",
     "protocol": "Le composant X11 est incompatible. Installez une version signée compatible.",
-    "installTitle": "Installer X11 Server",
+    "installTitle": "Installer le composant X11",
     "unavailableTitle": "X11 indisponible",
-    "installAction": "Télécharger et connecter",
+    "installAction": "Installer et démarrer",
     "continueWithout": "Continuer sans X11",
     "independentConnection": "Cette session X11 utilise une connexion SSH indépendante."
   }

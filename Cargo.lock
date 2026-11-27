@@ -7833,6 +7833,7 @@ dependencies = [
 name = "nyaterm-x11"
 version = "2.0.8"
 dependencies = [
+ "futures",
  "libc",
  "nyaterm-core",
  "nyaterm-native-protocol",

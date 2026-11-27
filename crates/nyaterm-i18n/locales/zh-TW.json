@@ -5151,15 +5151,18 @@
     }
   },
   "x11": {
+    "waitTimeout": "等待 X11 Server 逾時。已確認的安裝會繼續完成，請在安裝完成後重新執行圖形程式。",
+    "clipboardNextStart": "剪貼簿設定將在共用 X11 Server 下次啟動時生效。",
+    "installedRetry": "X11 元件安裝完成，請重新執行遠端圖形程式。",
     "mode": "本機 X11 服務",
     "auto": "自動選擇",
     "managed": "NyaTerm 內建服務",
     "external": "外部 X Server",
-    "sharedDescription": "Windows 內建服務依 SSH 工作階段隔離；系統與外部服務共用桌面及信任邊界。",
+    "sharedDescription": "所有 SSH 工作階段共用一個內建 X11 Server，首次使用時啟動，閒置 5 分鐘後停止。X11 用戶端共用其桌面及信任邊界。",
     "clipboard": "內建服務剪貼簿",
     "clipboardDescription": "允許遠端應用程式存取系統剪貼簿。預設關閉，僅對新執行個體生效。",
     "componentUnavailable": "X11 元件服務無法使用。",
-    "installDescription": "此連線需要本機 X Server。是否下載官方 X11 Server 元件？略過安裝後可選擇繼續一般 SSH 連線。",
+    "installDescription": "目前遠端程式需要 X11 Server。安裝 X11 元件後，即可在本機顯示遠端圖形介面。元件只需安裝一次，後續工作階段會自動重用。",
     "installSkipped": "已略過 X11 元件安裝。",
     "cancelled": "已取消 X11 連線準備。",
     "noDisplay": "找不到可用的本機 X Server。請檢查 DISPLAY 並啟動 Xorg/Xwayland 或外部服務。",
@@ -5168,9 +5171,9 @@
     "authentication": "本機 X Server 驗證失敗。請檢查 DISPLAY 與 Xauthority。",
     "startup": "無法啟動內建 X Server。",
     "protocol": "X11 元件不相容，請安裝相容的簽署版本。",
-    "installTitle": "安裝 X11 Server",
+    "installTitle": "安裝 X11 元件",
     "unavailableTitle": "X11 無法使用",
-    "installAction": "下載並連線",
+    "installAction": "安裝並啟動",
     "continueWithout": "不使用 X11，繼續連線",
     "independentConnection": "此 X11 工作階段將使用獨立的 SSH 連線。"
   }

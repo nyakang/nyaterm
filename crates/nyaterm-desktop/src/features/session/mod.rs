@@ -1,5 +1,6 @@
 //! Session lifecycle, prompts, recording and file-transfer session runtimes.
 mod transfer_wire;
+pub(crate) mod x11_service;
 
 use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;
 use remote_files::RemoteFilesSession;

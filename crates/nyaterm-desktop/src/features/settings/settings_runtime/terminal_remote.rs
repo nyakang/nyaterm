@@ -17,6 +17,22 @@ impl NyaTermApp {
     pub(in crate::features) fn toggle_x11_clipboard(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_x11_clipboard();
         self.save_terminal_settings(cx);
+        if let Some(controller) = self
+            .desktop_controller
+            .as_ref()
+            .and_then(|controller| controller.upgrade())
+        {
+            let service = controller.read(cx).x11_service();
+            if service.manager.is_running() {
+                self.notify_operation_at(
+                    self.shell.main_window().map(Into::into),
+                    "x11-clipboard-next-start",
+                    nyaterm_ui::notification::NyaNotificationKind::Warning,
+                    rust_i18n::t!("x11.clipboardNextStart").to_string(),
+                    cx,
+                );
+            }
+        }
         cx.notify();
     }
     pub(in crate::features) fn apply_android_adb_path(
