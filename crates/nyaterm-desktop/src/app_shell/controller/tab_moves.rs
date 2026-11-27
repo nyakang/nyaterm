@@ -138,6 +138,7 @@ impl DesktopController {
     }
 
     pub fn workspace_ready(&mut self, workspace_id: WorkspaceId, cx: &mut Context<Self>) {
+        self.http_mcp_workspace_ready(workspace_id, cx);
         let Some(request) = self.pending_tab_moves.remove(&workspace_id) else {
             return;
         };

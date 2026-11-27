@@ -35,6 +35,10 @@ impl DesktopController {
             return;
         }
         self.screen_locked = locked;
+        let controller = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = controller.update(cx, |controller, cx| controller.http_mcp_lock_changed(cx));
+        });
         self.request_native_menu_refresh(cx);
         for (id, entry) in &self.windows {
             if *id == source {

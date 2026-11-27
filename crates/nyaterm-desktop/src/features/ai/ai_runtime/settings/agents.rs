@@ -104,23 +104,40 @@ impl NyaTermApp {
         client: &'static str,
         cx: &mut Context<Self>,
     ) {
-        let result = self
-            .ai
-            .agent_management_view()
-            .mcp_helper_path
-            .as_ref()
-            .ok_or_else(|| "NyaTerm MCP helper is unavailable; refresh agent status".to_string())
-            .and_then(|path| {
-                let server = serde_json::json!({ "command": path.to_string_lossy(), "args": [] });
-                let config = match client {
-                    "codex" => serde_json::json!({ "mcp_servers": { "nyaterm": server } }),
-                    "claude" | "cursor" => {
-                        serde_json::json!({ "mcpServers": { "nyaterm": server } })
-                    }
-                    _ => return Err("Unsupported MCP client".to_string()),
-                };
-                serde_json::to_string_pretty(&config).map_err(|error| error.to_string())
-            });
+        let result = if self.http_mcp_settings().transport
+            == nyaterm_core::ai::mcp_http::McpTransport::StreamableHttp
+        {
+            self.desktop_controller
+                .as_ref()
+                .and_then(|controller| controller.upgrade())
+                .ok_or_else(|| "HTTP MCP is unavailable".to_owned())
+                .and_then(|controller| controller.read(cx).http_mcp_config(client))
+        } else if matches!(
+            self.http_mcp_settings().transport,
+            nyaterm_core::ai::mcp_http::McpTransport::Unknown(_)
+        ) {
+            Err("Unsupported MCP transport".to_owned())
+        } else {
+            self.ai
+                .agent_management_view()
+                .mcp_helper_path
+                .as_ref()
+                .ok_or_else(|| {
+                    "NyaTerm MCP helper is unavailable; refresh agent status".to_string()
+                })
+                .and_then(|path| {
+                    let server =
+                        serde_json::json!({ "command": path.to_string_lossy(), "args": [] });
+                    let config = match client {
+                        "codex" => serde_json::json!({ "mcp_servers": { "nyaterm": server } }),
+                        "claude" | "cursor" => {
+                            serde_json::json!({ "mcpServers": { "nyaterm": server } })
+                        }
+                        _ => return Err("Unsupported MCP client".to_string()),
+                    };
+                    serde_json::to_string_pretty(&config).map_err(|error| error.to_string())
+                })
+        };
         match result {
             Ok(config) => {
                 self.copy_text_with_feedback("copy-mcp-config", config, cx);

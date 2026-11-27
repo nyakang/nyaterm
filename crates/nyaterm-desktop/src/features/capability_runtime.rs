@@ -122,6 +122,10 @@ impl CapabilityRuntimeState {
 
     pub(in crate::features) fn expire_mcp_owner(&mut self, owner: &str) {
         self.ledger.forget_expired_owner(owner);
+        // Recovery has expired, rather than merely losing a socket. Stop these
+        // jobs before discarding the owner-to-generation association.
+        self.terminal_executions
+            .request_owner_background_shutdown(owner);
     }
     fn read_output(&mut self, owner: &str, args: OutputReadArgs) -> Result<Value, RpcError> {
         self.outputs
@@ -171,6 +175,8 @@ impl CapabilityRuntimeState {
             .map(|(owner, _)| owner.clone())
             .collect::<Vec<_>>();
         for owner in owners {
+            self.terminal_executions
+                .request_owner_background_shutdown(&owner);
             for request in self.connection_disconnected(&owner) {
                 let _ = request.reply.send(Err(rpc_failure(
                     "cancelled",

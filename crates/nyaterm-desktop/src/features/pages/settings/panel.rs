@@ -757,6 +757,16 @@ impl SettingsPanel {
         self.app.upgrade().map(|app| app.read(cx).runtime.clone())
     }
 
+    pub(in crate::features::pages::settings) fn http_mcp_view(
+        &self,
+        cx: &gpui::App,
+    ) -> crate::app_shell::HttpMcpView {
+        self.app
+            .upgrade()
+            .map(|app| app.read(cx).http_mcp_view(cx))
+            .unwrap_or_default()
+    }
+
     pub(in crate::features::pages::settings) fn mcp_host_status(
         &self,
         cx: &Context<Self>,

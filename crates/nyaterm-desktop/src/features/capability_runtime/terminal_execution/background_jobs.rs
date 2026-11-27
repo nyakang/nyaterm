@@ -31,11 +31,23 @@ impl super::TerminalExecutionState {
     }
     pub(in crate::features) fn request_background_shutdown(&mut self) {
         self.cancel_pending_inline_starts();
-        for job in self
-            .jobs
-            .values_mut()
-            .filter(|job| job.target.connection_id().is_some() && job.finished.is_none())
-        {
+        self.request_background_job_shutdown(None);
+    }
+
+    pub(in crate::features::capability_runtime) fn request_owner_background_shutdown(
+        &mut self,
+        owner: &str,
+    ) {
+        self.cancel_pending_inline_starts_for_owner(Some(owner));
+        self.request_background_job_shutdown(Some(owner));
+    }
+
+    fn request_background_job_shutdown(&mut self, owner: Option<&str>) {
+        for job in self.jobs.values_mut().filter(|job| {
+            job.target.connection_id().is_some()
+                && job.finished.is_none()
+                && owner.is_none_or(|owner| job.owner == owner)
+        }) {
             job.stop_started.get_or_insert_with(Instant::now);
             job.stop_state = "accepted".into();
             job.status = TerminalJobStatus::Cancelling;

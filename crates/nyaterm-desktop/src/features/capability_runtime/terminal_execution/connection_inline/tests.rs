@@ -88,6 +88,68 @@ fn preparing_inline_jobs_count_towards_client_limits_and_shutdown_cancels_openin
     assert!(opening_tokens.iter().all(CancellationToken::is_cancelled));
 }
 
+#[test]
+fn revoking_http_credentials_stops_only_their_jobs_and_pending_starts() {
+    use crate::features::capability_runtime::CapabilityRuntimeState;
+    use crate::features::capability_runtime::terminal_execution::jobs::TerminalJob;
+    use nyaterm_mcp_protocol::{ExecutionTarget, TerminalJobStatus};
+
+    let mut state = CapabilityRuntimeState::default();
+    let mut tokens = Vec::new();
+    for (owner, generation) in [("http-client", "http"), ("embedded-agent", "agent")] {
+        state
+            .owners
+            .insert(owner.into(), (CapabilityCaller::Mcp, generation.into()));
+        let (mut request, _reply) = request(
+            generation,
+            json!({"target":{"type":"connection","connectionId":"saved"},"command":"pwd"}),
+        );
+        request.connection_id = owner.into();
+        let args = serde_json::from_value(request.arguments.clone()).unwrap();
+        let opening = request.cancellation.child_token();
+        let (_, receiver) = oneshot::channel();
+        let job = TerminalJob::new(
+            true,
+            owner.into(),
+            ExecutionTarget::Connection {
+                connection_id: "saved".into(),
+            },
+            TerminalBackend::SshExec,
+            None,
+            "pwd".into(),
+            "fixture".into(),
+            "saved".into(),
+        );
+        tokens.push((opening.clone(), job.interrupt.clone()));
+        state.terminal_executions.jobs.insert(owner.into(), job);
+        state.terminal_executions.pending_inline_starts.insert(
+            owner.into(),
+            PendingInlineStart {
+                request,
+                args,
+                deadline: Instant::now() + Duration::from_secs(30),
+                opening,
+                receiver,
+            },
+        );
+    }
+
+    state.revoke_generation("http");
+    assert!(tokens[0].0.is_cancelled());
+    assert!(tokens[0].1.is_cancelled());
+    assert!(!tokens[1].0.is_cancelled());
+    assert!(!tokens[1].1.is_cancelled());
+    assert_eq!(
+        state.terminal_executions.jobs["http-client"].status,
+        TerminalJobStatus::Cancelling
+    );
+    assert!(state.owners.contains_key("embedded-agent"));
+
+    state.expire_mcp_owner("embedded-agent");
+    assert!(tokens[1].0.is_cancelled());
+    assert!(tokens[1].1.is_cancelled());
+}
+
 #[gpui::test]
 fn public_settings_override_clients_and_remain_frozen_while_approval_is_pending(
     cx: &mut gpui::TestAppContext,

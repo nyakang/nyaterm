@@ -17,6 +17,7 @@ mod codex;
 mod diagnostics;
 pub mod harness;
 pub mod mcp_execution;
+pub mod mcp_http;
 pub mod ollama;
 mod prompts;
 pub mod provider_settings;
@@ -133,8 +134,16 @@ pub enum McpTerminalDisplayMode {
     Silent,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalMcpSettings {
+    #[serde(default)]
+    pub transport: mcp_http::McpTransport,
+    #[serde(default = "mcp_http::default_http_port")]
+    pub http_port: u16,
+    #[serde(default)]
+    pub http_allowed_origins: Vec<String>,
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -145,6 +154,22 @@ pub struct ExternalMcpSettings {
     pub terminal_display_mode: McpTerminalDisplayMode,
     #[serde(default)]
     pub terminal_execution_mode: mcp_execution::McpTerminalExecutionMode,
+}
+
+impl Default for ExternalMcpSettings {
+    fn default() -> Self {
+        Self {
+            transport: Default::default(),
+            http_port: mcp_http::default_http_port(),
+            http_allowed_origins: Vec::new(),
+            extra: Default::default(),
+            enabled: false,
+            permission_mode: Default::default(),
+            session_scope: Default::default(),
+            terminal_display_mode: Default::default(),
+            terminal_execution_mode: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

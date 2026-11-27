@@ -581,6 +581,7 @@ impl NyaTermApp {
                     self.request_ai_permission_mode(AiFullAccessSetting::ClaudeCode, mode, cx);
                 }
             }
+            "ai-mcp-transport" => self.set_ai_mcp_transport(value, cx),
             "ai-mcp-permission" => {
                 if let Some(mode) = ai_permission_mode(value) {
                     self.request_ai_permission_mode(AiFullAccessSetting::McpHost, mode, cx);

@@ -33,6 +33,19 @@ use crate::models::{
 impl NyaTermApp {
     /// Rebase existing buffers after a save or rollback without creating inactive inputs.
     pub(in crate::features) fn reset_ai_settings_inputs(&mut self, cx: &mut Context<Self>) {
+        let settings = self.ai.settings_config().external_mcp.clone();
+        for (id, value) in [
+            ("ai.mcp.http-port", settings.http_port.to_string()),
+            (
+                "ai.mcp.http-origins",
+                settings.http_allowed_origins.join("\n"),
+            ),
+        ] {
+            if let Some(input) = self.existing_text_input(id) {
+                input.update(cx, |state, cx| state.set_content_silent(&value, cx));
+            }
+        }
+
         for (id, value, _) in acp_input_values(self.ai.settings_config()) {
             if let Some(input) = self.existing_text_input(&id) {
                 input.update(cx, |state, cx| state.set_content_silent(&value, cx));
@@ -174,6 +187,20 @@ impl NyaTermApp {
 
     /// The AI Agents tab owns the external-agent registry inputs.
     pub(in crate::features) fn ensure_ai_agent_inputs(&mut self, cx: &mut Context<Self>) {
+        let settings = self.ai.pending_settings().external_mcp;
+        self.ensure_text_input(
+            "ai.mcp.http-port",
+            &settings.http_port.to_string(),
+            TextInputSetup::default(),
+            cx,
+        );
+        self.ensure_text_input(
+            "ai.mcp.http-origins",
+            &settings.http_allowed_origins.join("\n"),
+            TextInputSetup::multi_line("https://client.example"),
+            cx,
+        );
+
         let values = acp_input_values(&self.ai.pending_settings());
         self.retain_acp_inputs(&values.iter().map(|(id, _, _)| id.clone()).collect());
         for (id, value, secret) in values {

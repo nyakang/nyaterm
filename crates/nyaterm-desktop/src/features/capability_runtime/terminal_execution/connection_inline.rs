@@ -35,7 +35,15 @@ impl TerminalExecutionState {
     }
 
     pub(super) fn cancel_pending_inline_starts(&mut self) {
-        for pending in self.pending_inline_starts.values() {
+        self.cancel_pending_inline_starts_for_owner(None);
+    }
+
+    pub(super) fn cancel_pending_inline_starts_for_owner(&mut self, owner: Option<&str>) {
+        for pending in self
+            .pending_inline_starts
+            .values()
+            .filter(|pending| owner.is_none_or(|owner| pending.request.connection_id == owner))
+        {
             pending.request.cancellation.cancel();
             pending.opening.cancel();
         }

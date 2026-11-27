@@ -33,6 +33,16 @@ pub struct BridgeEndpoint {
 }
 
 impl BridgeEndpoint {
+    pub(crate) fn managed(port: u16, token: String, generation: String) -> Self {
+        Self {
+            host: "127.0.0.1".into(),
+            port,
+            token,
+            generation,
+            rpc_timeout: DEFAULT_RPC_TIMEOUT,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(port: u16) -> Self {
         Self {

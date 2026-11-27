@@ -1,3 +1,4 @@
+pub mod http_control;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -37,6 +37,19 @@ impl SettingsPanel {
         let settings = self.ai.settings_config().clone();
         let status = self.ai.agent_management.clone();
         let columns = if self.content_width >= 1024. { 2 } else { 1 };
+        let http_view = self.http_mcp_view(cx);
+        let is_http = settings.external_mcp.transport
+            == nyaterm_core::ai::mcp_http::McpTransport::StreamableHttp;
+        let transport = self.form_select_control(
+            "ai-mcp-transport",
+            vec![
+                NyaSelectOption::new("stdio", "stdio"),
+                NyaSelectOption::new("streamable_http", "Streamable HTTP"),
+            ],
+            Some(settings.external_mcp.transport.as_str().to_owned()),
+            false,
+            cx,
+        );
         let local = self.ai_agent_profiles_content(&settings, &status, cx);
         let mcp_permission = self.form_select_control(
             "ai-mcp-permission",
@@ -95,10 +108,19 @@ impl SettingsPanel {
             false,
             cx,
         );
-        let mcp_status = match self.mcp_host_status(cx) {
-            McpHostStatus::Running => t!("ai.mcp.running"),
-            McpHostStatus::Unavailable => t!("ai.mcp.unavailable"),
-            _ => t!("ai.mcp.disabled"),
+        let mcp_status = if matches!(
+            settings.external_mcp.transport,
+            nyaterm_core::ai::mcp_http::McpTransport::Unknown(_)
+        ) {
+            t!("ai.mcp.unsupportedTransport")
+        } else if is_http {
+            t!(http_view.status_key)
+        } else {
+            match self.mcp_host_status(cx) {
+                McpHostStatus::Running => t!("ai.mcp.running"),
+                McpHostStatus::Unavailable => t!("ai.mcp.unavailable"),
+                _ => t!("ai.mcp.disabled"),
+            }
         };
         let helper_ready = status.mcp_helper_path.is_some();
         let mcp = div()
@@ -139,6 +161,57 @@ impl SettingsPanel {
                         cx.listener(|panel, _, _, cx| panel.toggle_ai_mcp_enabled(cx)),
                     )),
             ))
+            .child(ai_field(palette, t!("ai.mcp.transport"), None, transport))
+            .when(is_http, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(self.existing_text_input_field(
+                            "ai.mcp.http-port",
+                            t!("ai.mcp.httpPort"),
+                            false,
+                        ))
+                        .child(self.existing_text_input_field(
+                            "ai.mcp.http-origins",
+                            t!("ai.mcp.httpOrigins"),
+                            true,
+                        ))
+                        .child(div().text_sm().child(t!("ai.mcp.httpTokenHint")))
+                        .child(div().text_sm().child(format!(
+                            "{} {}",
+                            t!("ai.mcp.httpOwner"),
+                            if http_view.owned_by_current_window {
+                                t!("ai.mcp.currentWindow").to_string()
+                            } else if http_view.owner.is_some() {
+                                t!("ai.mcp.httpOtherWindow").to_string()
+                            } else {
+                                "—".into()
+                            }
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    NyaButton::new("mcp-http-apply", t!("ai.mcp.httpApply"))
+                                        .on_click(cx.listener(|panel, _, _, cx| {
+                                            panel
+                                                .with_app(cx, |app, cx| app.apply_http_mcp_form(cx))
+                                        })),
+                                )
+                                .child(
+                                    NyaButton::new("mcp-http-claim", t!("ai.mcp.httpUseWindow"))
+                                        .on_click(cx.listener(|panel, _, _, cx| {
+                                            panel.with_app(cx, |app, cx| {
+                                                app.schedule_http_mcp(true, cx)
+                                            })
+                                        })),
+                                ),
+                        ),
+                )
+            })
             .child(
                 div()
                     .grid()
@@ -181,6 +254,7 @@ impl SettingsPanel {
                         ("codex", "Codex"),
                         ("claude", "Claude Code"),
                         ("cursor", "Cursor"),
+                        ("generic", "HTTP"),
                     ]
                     .into_iter()
                     .map(|(client, label)| {
@@ -202,7 +276,16 @@ impl SettingsPanel {
                                 )
                                 .form_control()
                                 .full_width()
-                                .disabled(!helper_ready)
+                                .disabled(if is_http {
+                                    !http_view.running
+                                } else {
+                                    !helper_ready
+                                        || client == "generic"
+                                        || matches!(
+                                            settings.external_mcp.transport,
+                                            nyaterm_core::ai::mcp_http::McpTransport::Unknown(_)
+                                        )
+                                })
                                 .on_click(cx.listener(
                                     move |panel, _, _, cx| {
                                         panel.copy_external_mcp_config(client, cx)

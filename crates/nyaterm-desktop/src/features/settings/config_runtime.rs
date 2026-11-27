@@ -649,6 +649,7 @@ impl NyaTermApp {
         self.recording
             .set_memory_limit(self.settings.summary().recording_memory_limit_bytes as usize);
         self.ai.replace_settings_config(snapshot.ai_settings, true);
+        self.schedule_http_mcp(false, cx);
         self.sync_ai_drafts_from_active_profile();
         self.settings.rebase_master_password();
         self.cloud_sync
@@ -778,7 +779,9 @@ impl NyaTermApp {
         if !settings_blocked
             && matches!(event.domain, SharedStateDomain::Ai | SharedStateDomain::All)
         {
+            let previous_mcp = self.http_mcp_settings();
             self.ai.replace_settings_config(snapshot.ai_settings, true);
+            self.reconcile_mcp_after_shared_settings(&previous_mcp, cx);
             self.sync_ai_drafts_from_active_profile();
         }
         if !settings_blocked

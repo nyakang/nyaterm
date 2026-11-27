@@ -79,3 +79,52 @@ starts an independent interactive session. Jobs and bounded output stay in
 memory; completed jobs expire after ten minutes. Locking the app, revoking MCP
 access or closing the workspace requests bounded shutdown, retaining unknown
 remote state when exit cannot be confirmed.
+
+## Streamable HTTP
+
+In **Settings → AI → Agents → MCP**, select **Streamable HTTP**, set a port (default
+8002), and enable external MCP access. NyaTerm starts and supervises the helper.
+The endpoint is `http://127.0.0.1:8002/mcp`; the bind address and path are fixed.
+Use **Copy config** for Codex (TOML), Claude Code, Cursor, or generic HTTP settings.
+Each service start generates a fresh bearer token. After restarting, unlocking,
+changing HTTP/permission settings, or switching the owning window, copy the
+configuration again. Tokens are not stored in application settings or sync data.
+
+There is one HTTP service per application process. **Use this window / Retry**
+selects its owning window and restarts it. Focusing another window does not move
+it. Closing the owner stops the service until a window is explicitly selected.
+The existing current-window/all-sessions scope and approval policy still apply.
+Port conflicts are reported; the service never silently chooses another port.
+
+Browser clients must add their exact origin (scheme, hostname, port) to the
+allowlist, one per line, then apply the HTTP settings. The empty list rejects all
+browser origins; native clients without Origin still authenticate normally.
+Wildcards, opaque `null` origins and URL paths are rejected. Browsers must use a
+fetch-based MCP client supporting Authorization headers, and may ask permission
+for local-network access. CORS exposes the MCP session header. There is no public
+web UI, token endpoint, cookie authentication, or unauthenticated MCP access.
+Remote clients need a separately configured tunnel to this loopback endpoint.
+
+The HTTP service negotiates 2025-03-26, 2025-06-18 and 2025-11-25. It implements
+POST, GET/SSE and DELETE on `/mcp`; OPTIONS only handles authorized-origin
+preflight. 2025-03-26 batches share a response stream without a replay cursor.
+There are limits of 64 HTTP sessions, 64 batch members and 4 MiB per request.
+Sessions expire after ten minutes of inactivity. Disconnecting an SSE stream
+neither cancels nor replays submitted commands. Service restarts invalidate all
+HTTP sessions and credentials.
+Stopping the service cancels its clients' background jobs and pending starts;
+embedded Agent jobs keep their independent credentials and lifetime.
+
+No-argument execution of `nyaterm-mcp` remains stdio, including embedded Agents.
+The `--transport streamable-http --managed` mode is a private, versioned desktop
+control-pipe interface; it does not read tokens from command-line arguments.
+
+For browser regression testing, install Playwright and its Chromium/Firefox
+browsers outside the repository, build `nyaterm-mcp`, and run:
+
+```sh
+NYATERM_PLAYWRIGHT_MODULE=/path/to/playwright node scripts/tests/mcp_http/browser.cjs /path/to/nyaterm-mcp
+```
+
+The test runs an isolated mock bridge and temporary local browser origin; it does
+not access a user's NyaTerm instance or print credentials.

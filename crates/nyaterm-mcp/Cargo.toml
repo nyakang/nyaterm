@@ -12,10 +12,20 @@ name = "nyaterm-mcp"
 path = "src/main.rs"
 
 [dependencies]
+bytes.workspace = true
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+rand.workspace = true
+sha2.workspace = true
+
 dirs.workspace = true
 nyaterm-core.workspace = true
 nyaterm-mcp-protocol.workspace = true
-rmcp = { workspace = true, features = ["server", "transport-io"] }
+rmcp = { workspace = true, features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +35,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]
+reqwest = { workspace = true, features = ["stream"] }
 jsonschema = { version = "=0.33.0", default-features = false }
 nyaterm-core = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

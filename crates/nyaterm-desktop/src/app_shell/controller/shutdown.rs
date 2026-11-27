@@ -207,6 +207,7 @@ impl DesktopController {
         next_recent: Option<WorkspaceId>,
         cx: &mut Context<Self>,
     ) {
+        self.http_mcp_owner_closed(workspace_id, cx);
         self.tab_drag.close(workspace_id);
         let Some(entry) = self.windows.remove(&workspace_id) else {
             self.closing_workspaces.remove(&workspace_id);
@@ -674,6 +675,8 @@ impl DesktopController {
         else {
             return;
         };
+        self.stop_http_mcp(cx);
+        let http_shutdown = self.http_mcp.previous.take();
         let started_at = std::time::Instant::now();
         tracing::info!(
             pid = std::process::id(),
@@ -693,6 +696,9 @@ impl DesktopController {
         });
         cx.spawn(async move |this, cx| {
             cleanup.await;
+            if let Some(shutdown) = http_shutdown {
+                let _ = shutdown.await;
+            }
             let _ = this.update(cx, |_, cx| {
                 tracing::info!(
                     pid = std::process::id(),

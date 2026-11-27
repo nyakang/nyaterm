@@ -144,7 +144,7 @@ impl NyaTermApp {
         if self.ai.request_settings_permission_mode(setting, mode) {
             self.persist_ai_settings_now(cx);
             if setting == AiFullAccessSetting::McpHost {
-                self.reconfigure_mcp_host_and_report();
+                self.reconfigure_mcp_host_and_report(cx);
             }
         }
         cx.notify();
@@ -165,7 +165,7 @@ impl NyaTermApp {
         };
         self.persist_ai_settings_now(cx);
         if setting == AiFullAccessSetting::McpHost {
-            self.reconfigure_mcp_host_and_report();
+            self.reconfigure_mcp_host_and_report(cx);
         }
         cx.notify();
     }
@@ -173,7 +173,7 @@ impl NyaTermApp {
     pub(in crate::features) fn toggle_ai_mcp_enabled(&mut self, cx: &mut Context<Self>) {
         self.ai.toggle_settings_mcp_enabled();
         self.persist_ai_settings_now(cx);
-        self.reconfigure_mcp_host_and_report();
+        self.reconfigure_mcp_host_and_report(cx);
         cx.notify();
     }
 
@@ -193,7 +193,7 @@ impl NyaTermApp {
     ) {
         self.ai.set_settings_mcp_scope(scope);
         self.persist_ai_settings_now(cx);
-        self.reconfigure_mcp_host_and_report();
+        self.reconfigure_mcp_host_and_report(cx);
         cx.notify();
     }
 
@@ -217,7 +217,11 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    fn reconfigure_mcp_host_and_report(&mut self) {
+    fn reconfigure_mcp_host_and_report(&mut self, cx: &mut Context<Self>) {
+        self.schedule_http_mcp(false, cx);
+        if self.http_mcp_settings().transport != nyaterm_core::ai::mcp_http::McpTransport::Stdio {
+            return;
+        }
         if let Err(error) = self.reconfigure_mcp_host() {
             tracing::warn!(error = %error, "MCP Host reconfiguration failed");
             self.ai

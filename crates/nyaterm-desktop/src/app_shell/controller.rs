@@ -30,6 +30,7 @@ use std::collections::VecDeque;
 mod auto_sync;
 mod bootstrap;
 mod configuration_replacement;
+pub(crate) mod mcp_http;
 pub(crate) mod native_menu;
 mod restart;
 mod shutdown;
@@ -126,6 +127,7 @@ pub struct DesktopController {
     shared_refresh_generation: u64,
     applied_shared_refresh_generation: u64,
     auto_sync: AutoSyncCoordinator,
+    http_mcp: mcp_http::HttpMcpState,
     native_menu: native_menu::NativeMenuState,
 }
 
@@ -161,6 +163,7 @@ impl DesktopController {
             pending_tab_moves: HashMap::new(),
             tab_drag: TabDragCoordinator::default(),
             settings_owners: Vec::new(),
+            http_mcp: Default::default(),
             tray: None,
             screen_locked: false,
             recent_activations: RecentActivationCache::default(),

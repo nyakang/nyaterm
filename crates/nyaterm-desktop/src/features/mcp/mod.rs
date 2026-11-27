@@ -1,5 +1,6 @@
 mod approval_dialog;
 mod discovery;
+mod http;
 pub(in crate::features) mod server;
 pub(in crate::features) mod tasks;
 
@@ -24,6 +25,7 @@ const MCP_WINDOW_OWNER_PREFIX: &str = "mcp-window-";
 
 pub(in crate::features) struct McpHostFeatureState {
     runtime: Option<McpHostRuntime>,
+    public_http: bool,
     helper_status: McpHelperStatus,
     requests: Option<futures::channel::mpsc::UnboundedReceiver<McpHostEvent>>,
     request_sender: futures::channel::mpsc::UnboundedSender<McpHostEvent>,
@@ -101,7 +103,9 @@ impl McpHostFeatureState {
         let owner_window_label = format!("{MCP_WINDOW_OWNER_PREFIX}{}", uuid::Uuid::new_v4());
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let helper_status = mcp_helper_status();
-        if !settings.enabled {
+        if !settings.enabled
+            || settings.transport != nyaterm_core::ai::mcp_http::McpTransport::Stdio
+        {
             return Self::with_channel(owner_window_label, sender, receiver, helper_status);
         }
         let scope = match settings.session_scope {
@@ -124,6 +128,7 @@ impl McpHostFeatureState {
                 let generation = Some(runtime.endpoint().generation.clone());
                 Self {
                     runtime: Some(runtime),
+                    public_http: false,
                     helper_status,
                     requests: Some(receiver),
                     request_sender: sender,
@@ -150,6 +155,7 @@ impl McpHostFeatureState {
     ) -> Self {
         Self {
             runtime: None,
+            public_http: false,
             helper_status,
             requests: Some(requests),
             request_sender,
@@ -256,15 +262,15 @@ impl McpHostFeatureState {
     }
 
     fn reconfigure(&mut self, settings: &ExternalMcpSettings) -> Result<(), String> {
-        self.capabilities
-            .terminal_executions
-            .request_background_shutdown();
         self.helper_status = mcp_helper_status();
         self.runtime.take();
+        self.public_http = false;
         if let Some(generation) = self.generation.take() {
             self.capabilities.revoke_generation(&generation);
         }
-        if !settings.enabled {
+        if !settings.enabled
+            || settings.transport != nyaterm_core::ai::mcp_http::McpTransport::Stdio
+        {
             return Ok(());
         }
         let scope = match settings.session_scope {

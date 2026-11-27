@@ -224,6 +224,16 @@ impl AiFeatureState {
         self.settings.config.codex.thread_mode = mode;
     }
 
+    pub(in crate::features) fn set_settings_mcp_transport(
+        &mut self,
+        transport: nyaterm_core::ai::mcp_http::McpTransport,
+    ) {
+        self.settings.config.external_mcp.transport = transport;
+    }
+    pub(in crate::features) fn set_settings_mcp_http(&mut self, port: u16, origins: Vec<String>) {
+        self.settings.config.external_mcp.http_port = port;
+        self.settings.config.external_mcp.http_allowed_origins = origins;
+    }
     pub(in crate::features) fn set_settings_mcp_scope(&mut self, scope: ExternalMcpSessionScope) {
         self.settings.config.external_mcp.session_scope = scope;
     }
