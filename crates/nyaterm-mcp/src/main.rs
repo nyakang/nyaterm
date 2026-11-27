@@ -234,6 +234,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+mod schema_tests;
+
+#[cfg(test)]
 mod tests {
     use nyaterm_mcp_protocol::{MCP_TOOL_REGISTRY, RpcRequest, RpcResponse, tool};
     use rmcp::ServiceExt;

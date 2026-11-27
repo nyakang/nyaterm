@@ -1049,25 +1049,35 @@ fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).expect("serializable tool schema")
 }
 
+fn input_schema<T: JsonSchema>() -> Value {
+    // Model providers such as Kimi reject references even for non-recursive
+    // tool parameters. Generate inline schemas without weakening constraints.
+    let generator = schemars::generate::SchemaSettings::default()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    serde_json::to_value(generator.into_root_schema_for::<T>())
+        .expect("serializable tool input schema")
+}
+
 /// Canonical schemas shared by the MCP sidecar and the native agent providers.
 pub fn tool_input_schema(name: &str) -> Result<Value, ToolContractError> {
     let mut result = match name {
-        tool::GET_ENVIRONMENT | tool::CONNECTION_LIST => schema::<EmptyArgs>(),
-        tool::SESSION_OPEN => schema::<SessionOpenArgs>(),
-        tool::SESSION_GET => schema::<SessionArgs>(),
-        tool::SFTP_HOME => schema::<FileTargetArgs>(),
-        tool::TERMINAL_EXECUTE => schema::<TerminalExecuteArgs>(),
-        tool::TERMINAL_START => schema::<TerminalStartArgs>(),
-        tool::TERMINAL_POLL => schema::<TerminalPollArgs>(),
-        tool::TERMINAL_STOP => schema::<TerminalStopArgs>(),
-        tool::TERMINAL_RECENT_OUTPUT => schema::<TerminalRecentOutputArgs>(),
-        tool::SFTP_LIST | tool::SFTP_STAT | tool::SFTP_DELETE => schema::<PathArgs>(),
-        tool::SFTP_READ_TEXT => schema::<SftpReadTextArgs>(),
-        tool::SFTP_WRITE_TEXT => schema::<SftpWriteTextArgs>(),
-        tool::SFTP_MKDIR => schema::<SftpMkdirArgs>(),
-        tool::SFTP_RENAME => schema::<SftpRenameArgs>(),
-        tool::SFTP_CHMOD => schema::<SftpChmodArgs>(),
-        tool::OUTPUT_READ => schema::<OutputReadArgs>(),
+        tool::GET_ENVIRONMENT | tool::CONNECTION_LIST => input_schema::<EmptyArgs>(),
+        tool::SESSION_OPEN => input_schema::<SessionOpenArgs>(),
+        tool::SESSION_GET => input_schema::<SessionArgs>(),
+        tool::SFTP_HOME => input_schema::<FileTargetArgs>(),
+        tool::TERMINAL_EXECUTE => input_schema::<TerminalExecuteArgs>(),
+        tool::TERMINAL_START => input_schema::<TerminalStartArgs>(),
+        tool::TERMINAL_POLL => input_schema::<TerminalPollArgs>(),
+        tool::TERMINAL_STOP => input_schema::<TerminalStopArgs>(),
+        tool::TERMINAL_RECENT_OUTPUT => input_schema::<TerminalRecentOutputArgs>(),
+        tool::SFTP_LIST | tool::SFTP_STAT | tool::SFTP_DELETE => input_schema::<PathArgs>(),
+        tool::SFTP_READ_TEXT => input_schema::<SftpReadTextArgs>(),
+        tool::SFTP_WRITE_TEXT => input_schema::<SftpWriteTextArgs>(),
+        tool::SFTP_MKDIR => input_schema::<SftpMkdirArgs>(),
+        tool::SFTP_RENAME => input_schema::<SftpRenameArgs>(),
+        tool::SFTP_CHMOD => input_schema::<SftpChmodArgs>(),
+        tool::OUTPUT_READ => input_schema::<OutputReadArgs>(),
         _ => return contract_error(name, "unknown NyaTerm MCP tool"),
     };
     if supports_connection_target(name) {
@@ -1088,9 +1098,10 @@ pub fn tool_input_schema_for_features(
     let mut result = tool_input_schema(name)?;
     if !connection_targets && supports_connection_target(name) {
         if name == tool::TERMINAL_START {
-            result["properties"]["backend"] = serde_json::json!({
-                "$ref": "#/$defs/TerminalBackend", "default": "inline_pty"
-            });
+            let mut backend = input_schema::<TerminalBackend>();
+            backend.as_object_mut().unwrap().remove("$schema");
+            backend["default"] = serde_json::json!(TerminalBackend::InlinePty);
+            result["properties"]["backend"] = backend;
         }
         result["properties"]
             .as_object_mut()
@@ -1752,3 +1763,6 @@ mod lifecycle_contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod input_schema_tests;
