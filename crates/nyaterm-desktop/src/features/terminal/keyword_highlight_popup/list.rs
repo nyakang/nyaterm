@@ -75,6 +75,9 @@ impl Render for KeywordDragPreview {
     }
 }
 
+type RuleToggleHandler = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
+type RuleDeleteHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
 /// One rule row of the list.
 ///
 /// The editor owns the selection state, so the list's own `selected` flag is
@@ -92,8 +95,8 @@ pub(super) struct KeywordRuleItem {
     controls_enabled: bool,
     switch_id: SharedString,
     delete_id: SharedString,
-    on_toggle: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
-    on_delete: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    on_toggle: Option<RuleToggleHandler>,
+    on_delete: Option<RuleDeleteHandler>,
 }
 
 impl KeywordRuleItem {
@@ -107,8 +110,8 @@ impl KeywordRuleItem {
         selected: bool,
         drop_position: Option<DropPosition>,
         controls_enabled: bool,
-        on_toggle: Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>,
-        on_delete: Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+        on_toggle: RuleToggleHandler,
+        on_delete: RuleDeleteHandler,
     ) -> Self {
         let id = rule.id.clone();
         let label = if rule.name.trim().is_empty() {

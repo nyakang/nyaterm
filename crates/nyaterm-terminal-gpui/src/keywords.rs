@@ -1493,9 +1493,7 @@ fn compile_keyword_rule_sets(
             color,
             background,
             priority,
-            rule.case_sensitive,
-            rule.whole_word,
-            rule.use_regex,
+            rule,
             &mut regex_rules,
         );
     }
@@ -1545,16 +1543,7 @@ fn compile_keyword_rules_with_filter(
             continue;
         }
         let priority = compiled.len();
-        compile_keyword_regex_alternatives(
-            alts,
-            color,
-            background,
-            priority,
-            rule.case_sensitive,
-            rule.whole_word,
-            rule.use_regex,
-            &mut compiled,
-        );
+        compile_keyword_regex_alternatives(alts, color, background, priority, rule, &mut compiled);
     }
     compiled
 }
@@ -1564,16 +1553,16 @@ fn compile_keyword_regex_alternatives(
     color: u32,
     background: Option<u32>,
     priority: usize,
-    case_sensitive: bool,
-    whole_word: bool,
-    use_regex: bool,
+    rule: &ResolvedKeywordHighlightRule,
     out: &mut CompiledKeywordRules,
 ) {
     // Every alternative carries its own case and word boundary handling, so
     // one alternative cannot change the match of the next one.
     let alts = alts
         .iter()
-        .map(|alt| keyword_pattern_source(alt, case_sensitive, whole_word, use_regex))
+        .map(|alt| {
+            keyword_pattern_source(alt, rule.case_sensitive, rule.whole_word, rule.use_regex)
+        })
         .collect::<Vec<_>>();
     let combined = if alts.len() == 1 {
         alts[0].clone()

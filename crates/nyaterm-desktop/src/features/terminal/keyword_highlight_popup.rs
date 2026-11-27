@@ -66,7 +66,7 @@ impl PopupColorPickerControls {
         format!("{}:{}", rule_id, field.input_key())
     }
 
-    fn color_of<'a>(rule: &'a KeywordHighlightRule, field: KeywordHighlightEditorField) -> &'a str {
+    fn color_of(rule: &KeywordHighlightRule, field: KeywordHighlightEditorField) -> &str {
         match field {
             KeywordHighlightEditorField::ColorDark => &rule.color_dark,
             KeywordHighlightEditorField::BgDark => &rule.bg_color_dark,
@@ -2016,7 +2016,7 @@ fn popup_icon_button(
         rgba((palette.hover << 8) | 0x40)
     };
     div()
-        .id(SharedString::from(id.into()))
+        .id(id.into())
         .size(px(28.))
         .flex()
         .items_center()

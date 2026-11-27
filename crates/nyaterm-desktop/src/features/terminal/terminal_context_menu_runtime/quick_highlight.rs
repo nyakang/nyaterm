@@ -157,9 +157,7 @@ impl NyaTermApp {
         session_id: &str,
         selected: &str,
     ) -> Option<usize> {
-        if keyword_highlight_content_key(selected).is_none() {
-            return None;
-        }
+        keyword_highlight_content_key(selected)?;
         let session = self.session_keyword_rules(session_id)?;
         (0..VISIBLE_QUICK_COLOR_COUNT).find(|&index| {
             let color = quick_color(index).expect("index from quick color range");
@@ -179,9 +177,7 @@ impl NyaTermApp {
         session_id: &str,
         selected: &str,
     ) -> Option<KeywordHighlightRule> {
-        if keyword_highlight_content_key(selected).is_none() {
-            return None;
-        }
+        keyword_highlight_content_key(selected)?;
         let session = self.session_keyword_rules(session_id)?;
         session
             .iter()

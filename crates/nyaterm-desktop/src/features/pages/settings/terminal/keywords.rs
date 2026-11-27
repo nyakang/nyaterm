@@ -24,16 +24,9 @@ use super::helpers::parse_keyword_swatch;
 
 /// Colour-select controls for the custom-rule editor. Keyed by
 /// `{rule_id}:{field}` so a control is stable across presentation refreshes.
+#[derive(Default)]
 pub(in crate::features::pages::settings) struct KeywordColorPickerControls {
     fields: std::collections::HashMap<String, (Entity<NyaColorPickerState>, Subscription, String)>,
-}
-
-impl Default for KeywordColorPickerControls {
-    fn default() -> Self {
-        Self {
-            fields: std::collections::HashMap::new(),
-        }
-    }
 }
 
 impl KeywordColorPickerControls {
