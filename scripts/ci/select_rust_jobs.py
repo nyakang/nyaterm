@@ -26,6 +26,7 @@ KNOWN_CRATES = frozenset({
     "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
     "nyaterm-agent-client", "nyaterm-app", "nyaterm-core",
     "nyaterm-android", "nyaterm-desktop", "nyaterm-mcp",
+    "nyaterm-mosh", "nyaterm-x11",
     "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
     "nyaterm-mcp-host", "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
     "nyaterm-plugin-host", "nyaterm-windows-rdp",
@@ -38,7 +39,7 @@ KNOWN_CRATES = frozenset({
 # Manifest-closure tests guard both sets against dependency drift.
 TMUX_CRATES = frozenset({
     "nyaterm-transport", "nyaterm-terminal", "nyaterm-core", "nyaterm-android",
-    "nyaterm-plugin-api", "nyaterm-mcp-protocol",
+    "nyaterm-plugin-api", "nyaterm-mcp-protocol", "nyaterm-mosh",
 })
 PLUGIN_SDK_CRATES = frozenset({
     "nyaterm-plugin-api", "nyaterm-plugin-host", "nyaterm-core",
