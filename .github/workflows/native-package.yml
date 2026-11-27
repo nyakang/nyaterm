@@ -93,6 +93,9 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
+      - name: Test AppImage runtime bundling
+        if: runner.os == 'Linux'
+        run: python -m unittest scripts.tests.test_linux_appimage -v
       - name: Install NSIS
         if: runner.os == 'Windows'
         shell: pwsh

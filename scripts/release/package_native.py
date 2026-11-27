@@ -21,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import prepare_conpty
+import linux_appimage
 import linux_icons
 import spice_associations
 import windows_msi
@@ -770,7 +771,8 @@ def create_linux_appimage(
     app_binary = usr_bin / APP_BIN
     shutil.copy2(binary, app_binary)
     make_executable(app_binary)
-    copy_helpers(usr_bin, info.target)
+    helpers = copy_helpers(usr_bin, info.target)
+    linux_appimage.bundle_openssl(appdir, [app_binary, *helpers])
     copy_release_documents(appdir / "usr" / "share" / "doc" / identity.desktop_id, version)
 
     applications = appdir / "usr" / "share" / "applications"

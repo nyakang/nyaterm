@@ -60,6 +60,7 @@ def staged_package(target: str):
             mock.patch.object(package_native.windows_msi, "find_wix", return_value="wix"),
             mock.patch.object(package_native, "run", side_effect=run),
             mock.patch.object(package_native, "linux_deb_dependencies", return_value="libc6"),
+            mock.patch.object(package_native.linux_appimage, "bundle_openssl"),
             mock.patch.object(package_native, "spice_glibc_requirement", return_value="2.35"),
             mock.patch.object(package_native, "copy_spice_resources", side_effect=stage_spice_fixture),
             mock.patch.object(spice_release, "locked_files", side_effect=fixture_spice_locked_files),

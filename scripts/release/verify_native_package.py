@@ -18,6 +18,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import package_native
+import linux_appimage
 import windows_msi
 import windows_portable
 from native_headers import elf_machine, macho_cpu_type, pe_header_offset, pe_machine
@@ -810,6 +811,7 @@ def verify_appimage(path: Path, target: str, version: str) -> None:
         missing = [item for item in required if not item.exists()]
         if missing:
             raise RuntimeError(f"{path.name} is missing AppImage entries: {missing}")
+        linux_appimage.verify_openssl(root, executables, expected_machine)
         packaged_version = version_file.read_text(encoding="utf-8").strip()
         desktop_content = desktop_file.read_text(encoding="utf-8")
         package_native.spice_associations.verify_linux_mime(
