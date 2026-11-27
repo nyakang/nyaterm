@@ -111,6 +111,24 @@ fn every_shipped_locale_translates_secret_input_actions() {
 }
 
 #[test]
+fn operating_system_filter_labels_keep_product_names() {
+    crate::preload().unwrap();
+    for (locale, json) in CATALOGS {
+        let catalog = flatten(json);
+        assert_eq!(catalog["assets.linux"], "Linux", "{locale}: assets.linux");
+        assert_eq!(
+            catalog["assets.windows"], "Windows",
+            "{locale}: assets.windows"
+        );
+        assert_eq!(
+            text(locale, "assets.windows"),
+            "Windows",
+            "{locale}: assets.windows"
+        );
+    }
+}
+
+#[test]
 fn normalizes_region_and_script_aliases_onto_canonical_ids() {
     crate::preload().unwrap();
     for simplified in [
