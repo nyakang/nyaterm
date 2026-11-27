@@ -748,6 +748,9 @@ pub(in crate::features::settings) fn copy_workspace_state(
         .ui_quick_cmd_selected_category
         .clone_from(&live.ui_quick_cmd_selected_category);
     settings
+        .ui_quick_cmd_sidebar_expanded_category_ids
+        .clone_from(&live.ui_quick_cmd_sidebar_expanded_category_ids);
+    settings
         .ui_saved_connections_sort_mode
         .clone_from(&live.ui_saved_connections_sort_mode);
     settings
@@ -897,6 +900,7 @@ fn merge_workspace_draft(
         ui_quick_cmd_view_mode,
         ui_quick_cmd_sort_mode,
         ui_quick_cmd_selected_category,
+        ui_quick_cmd_sidebar_expanded_category_ids,
         ui_file_manager.open,
         ui_file_manager.left,
         ui_file_manager.right,

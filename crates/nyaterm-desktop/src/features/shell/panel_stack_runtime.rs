@@ -1041,7 +1041,7 @@ impl NyaTermApp {
             NavItem::Connections => SharedString::from(""),
             NavItem::AiAssistant => SharedString::from(""),
             NavItem::ActiveSessions => SharedString::from(""),
-            NavItem::QuickCommands => self.quick_commands_sidebar_meta(),
+            NavItem::QuickCommands => SharedString::from(""),
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
                 .session
@@ -1465,7 +1465,7 @@ impl NyaTermApp {
                         .into_any_element(),
                 )
             }
-            NavItem::QuickCommands => Some(self.quick_commands_sidebar_header_actions(cx)),
+            NavItem::QuickCommands => self.quick_commands_sidebar_header_count(),
             _ => None,
         }
     }

@@ -2623,6 +2623,8 @@
     "moveToCategory": "Move to Category",
     "moreCommands": "More commands · %{count}",
     "manageCommands": "Manage Quick Commands",
+    "expandAllCategories": "Expand All Categories",
+    "collapseAllCategories": "Collapse All Categories",
     "title": "Quick Commands",
     "uncategorized": "Uncat.",
     "view": "View",

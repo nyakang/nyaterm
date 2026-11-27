@@ -2623,6 +2623,8 @@
     "moveToCategory": "移動分類",
     "moreCommands": "更多命令 · %{count}",
     "manageCommands": "管理快捷命令",
+    "expandAllCategories": "展開所有分類",
+    "collapseAllCategories": "收合所有分類",
     "title": "快捷命令",
     "uncategorized": "未分類",
     "view": "檢視",

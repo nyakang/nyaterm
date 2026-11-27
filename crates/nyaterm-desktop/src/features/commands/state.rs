@@ -55,6 +55,7 @@ pub(in crate::features) struct CommandFeatureInit {
     pub sort_mode: QuickCommandSortMode,
     pub view_mode: QuickCommandViewMode,
     pub selected_category: String,
+    pub sidebar_expanded_category_ids: Vec<String>,
     pub focus: QuickCommandFeatureFocus,
     pub store: StoreBlockingClient,
     pub scheduler: BlockingJobScheduler,
@@ -78,6 +79,17 @@ fn valid_quick_category(category_id: &str, categories: &[QuickCommandCategory]) 
     }
 }
 
+fn valid_quick_sidebar_expanded_categories(
+    ids: impl IntoIterator<Item = String>,
+    categories: &[QuickCommandCategory],
+) -> std::collections::HashSet<String> {
+    let known: std::collections::HashSet<&str> =
+        categories.iter().map(|cat| cat.id.as_str()).collect();
+    ids.into_iter()
+        .filter(|id| id == "__pinned__" || id == "uncategorized" || known.contains(id.as_str()))
+        .collect()
+}
+
 struct QuickCommandFeatureState {
     list: QuickCommandListState,
     editor: QuickCommandEditorFeatureState,
@@ -97,6 +109,10 @@ impl CommandFeatureState {
     pub(in crate::features) fn new(init: CommandFeatureInit) -> Self {
         let catalog = CommandCatalogState::new(init.commands, init.categories);
         let selected_category = valid_quick_category(&init.selected_category, &catalog.categories);
+        let sidebar_expanded_categories = valid_quick_sidebar_expanded_categories(
+            init.sidebar_expanded_category_ids,
+            &catalog.categories,
+        );
         let runtime = CommandRuntimeState::new(init.store.clone(), init.scheduler);
         let completion = CompletionRuntime::new_with_user_specs(
             init.store,
@@ -109,6 +125,7 @@ impl CommandFeatureState {
                 init.sort_mode,
                 init.view_mode,
                 selected_category,
+                sidebar_expanded_categories,
                 init.focus,
             ),
             history: Arc::from(init.history),
@@ -494,22 +511,117 @@ impl CommandFeatureState {
         &self.quick.list.sidebar_scroll
     }
 
-    pub(in crate::features) fn quick_sidebar_category_is_collapsed(&self, id: &str) -> bool {
-        self.quick.list.sidebar_collapsed_categories.contains(id)
+    pub(in crate::features) fn quick_sidebar_expanded_categories(
+        &self,
+    ) -> &std::collections::HashSet<String> {
+        &self.quick.list.sidebar_expanded_categories
+    }
+
+    pub(in crate::features) fn quick_sidebar_expanded_category_ids_sorted(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .quick
+            .list
+            .sidebar_expanded_categories
+            .iter()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    pub(in crate::features) fn set_quick_sidebar_expanded_categories(
+        &mut self,
+        ids: impl IntoIterator<Item = String>,
+    ) -> bool {
+        let next = valid_quick_sidebar_expanded_categories(ids, &self.catalog.categories);
+        if self.quick.list.sidebar_expanded_categories == next {
+            return false;
+        }
+        self.quick.list.sidebar_expanded_categories = next;
+        true
     }
 
     pub(in crate::features) fn toggle_quick_sidebar_category(&mut self, id: String) -> bool {
-        if !self
-            .quick
-            .list
-            .sidebar_collapsed_categories
-            .insert(id.clone())
-        {
-            self.quick.list.sidebar_collapsed_categories.remove(&id);
-            true
-        } else {
+        if self.quick.list.sidebar_expanded_categories.remove(&id) {
             false
+        } else {
+            self.quick.list.sidebar_expanded_categories.insert(id);
+            true
         }
+    }
+
+    pub(in crate::features) fn expand_quick_sidebar_category(&mut self, id: String) -> bool {
+        let mut changed = false;
+        let mut cursor = Some(id);
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = cursor {
+            if !visited.insert(current.clone()) {
+                break;
+            }
+            if current == "__pinned__"
+                || current == "uncategorized"
+                || self.catalog.categories.iter().any(|cat| cat.id == current)
+            {
+                changed |= self
+                    .quick
+                    .list
+                    .sidebar_expanded_categories
+                    .insert(current.clone());
+            }
+            cursor = self
+                .catalog
+                .categories
+                .iter()
+                .find(|cat| cat.id == current)
+                .and_then(|cat| cat.parent_id.clone());
+        }
+        changed
+    }
+
+    pub(in crate::features) fn set_all_quick_sidebar_categories_expanded(
+        &mut self,
+        expanded: bool,
+    ) -> bool {
+        if !expanded {
+            if self.quick.list.sidebar_expanded_categories.is_empty() {
+                return false;
+            }
+            self.quick.list.sidebar_expanded_categories.clear();
+            return true;
+        }
+        let mut next: std::collections::HashSet<String> = self
+            .catalog
+            .categories
+            .iter()
+            .map(|cat| cat.id.clone())
+            .collect();
+        if self
+            .catalog
+            .commands
+            .iter()
+            .any(|cmd| cmd.pinned.unwrap_or_default())
+        {
+            next.insert("__pinned__".to_string());
+        }
+        let known: std::collections::HashSet<&str> = self
+            .catalog
+            .categories
+            .iter()
+            .map(|cat| cat.id.as_str())
+            .collect();
+        if self.catalog.commands.iter().any(|cmd| {
+            cmd.category_id
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|id| id.is_empty() || !known.contains(id))
+        }) {
+            next.insert("uncategorized".to_string());
+        }
+        if self.quick.list.sidebar_expanded_categories == next {
+            return false;
+        }
+        self.quick.list.sidebar_expanded_categories = next;
+        true
     }
 
     pub(in crate::features) fn quick_last_bottom_view_mode(&self) -> QuickCommandViewMode {
@@ -647,6 +759,10 @@ impl CommandFeatureState {
     fn reconcile_quick_category(&mut self) {
         self.quick.list.selected_category =
             valid_quick_category(&self.quick.list.selected_category, &self.catalog.categories);
+        self.quick.list.sidebar_expanded_categories = valid_quick_sidebar_expanded_categories(
+            std::mem::take(&mut self.quick.list.sidebar_expanded_categories),
+            &self.catalog.categories,
+        );
         if self.quick.editor.category_picker_open {
             self.reset_quick_editor_category_highlight();
         }
@@ -1368,8 +1484,8 @@ struct QuickCommandListState {
     command_bar_popup_open: bool,
     command_bar_popup_highlight: usize,
     command_bar_popup_scroll: ScrollHandle,
-    /// Explicitly collapsed category ids in Sidebar tree mode; untouched during search.
-    sidebar_collapsed_categories: std::collections::HashSet<String>,
+    /// Explicitly expanded category ids in Sidebar tree mode; untouched during search.
+    sidebar_expanded_categories: std::collections::HashSet<String>,
     /// Owned by the sidebar tree so scroll position survives re-renders and switches.
     sidebar_scroll: ScrollHandle,
 }
@@ -1440,6 +1556,7 @@ impl QuickCommandFeatureState {
         sort_mode: QuickCommandSortMode,
         view_mode: QuickCommandViewMode,
         selected_category: String,
+        sidebar_expanded_categories: std::collections::HashSet<String>,
         focus: QuickCommandFeatureFocus,
     ) -> Self {
         Self {
@@ -1459,7 +1576,7 @@ impl QuickCommandFeatureState {
                 command_bar_popup_open: false,
                 command_bar_popup_highlight: 0,
                 command_bar_popup_scroll: ScrollHandle::new(),
-                sidebar_collapsed_categories: std::collections::HashSet::new(),
+                sidebar_expanded_categories,
                 sidebar_scroll: ScrollHandle::new(),
             },
             editor: QuickCommandEditorFeatureState {
@@ -1565,6 +1682,7 @@ mod tests {
             sort_mode: QuickCommandSortMode::Usage,
             view_mode: QuickCommandViewMode::List,
             selected_category: selected_category.to_string(),
+            sidebar_expanded_category_ids: Vec::new(),
             focus: QuickCommandFeatureFocus {
                 editor: focus(),
                 category_trigger: focus(),

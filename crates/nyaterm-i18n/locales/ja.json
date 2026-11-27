@@ -2623,6 +2623,8 @@
     "moveToCategory": "カテゴリへ移動",
     "moreCommands": "その他のコマンド · %{count}",
     "manageCommands": "クイックコマンドを管理",
+    "expandAllCategories": "すべてのカテゴリを展開",
+    "collapseAllCategories": "すべてのカテゴリを折りたたむ",
     "title": "クイックコマンド",
     "uncategorized": "未分類",
     "view": "表示",

@@ -358,6 +358,11 @@ impl ConnectionStore {
                 &["ui", "quick_cmd_selected_category"],
                 "all",
             ),
+            ui_quick_cmd_sidebar_expanded_category_ids: json_string_vec(
+                &value,
+                &["ui", "quick_cmd_sidebar_expanded_category_ids"],
+                512,
+            ),
             ui_saved_connections_sort_mode: normalize_saved_connections_sort_mode(&json_string(
                 &value,
                 &["ui", "saved_connections_sort_mode"],
@@ -1065,6 +1070,11 @@ impl ConnectionStore {
             &mut value,
             &["ui", "quick_cmd_selected_category"],
             settings.ui_quick_cmd_selected_category.clone(),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["ui", "quick_cmd_sidebar_expanded_category_ids"],
+            string_vec_json_value(&settings.ui_quick_cmd_sidebar_expanded_category_ids, 512),
         );
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()

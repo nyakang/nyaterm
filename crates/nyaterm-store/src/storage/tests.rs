@@ -4798,6 +4798,8 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     quick_command_update.ui_quick_cmd_view_mode = "list".to_string();
     quick_command_update.ui_quick_cmd_sort_mode = "name".to_string();
     quick_command_update.ui_quick_cmd_selected_category = "category-1".to_string();
+    quick_command_update.ui_quick_cmd_sidebar_expanded_category_ids =
+        vec!["__pinned__".to_string(), "category-1".to_string()];
     let saved_quick_command_ui = store
         .save_quick_command_ui_settings(&quick_command_update)
         .expect("save quick command ui settings");
@@ -4806,6 +4808,10 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(
         saved_quick_command_ui.ui_quick_cmd_selected_category,
         "category-1"
+    );
+    assert_eq!(
+        saved_quick_command_ui.ui_quick_cmd_sidebar_expanded_category_ids,
+        vec!["__pinned__".to_string(), "category-1".to_string()]
     );
     assert_eq!(
         store

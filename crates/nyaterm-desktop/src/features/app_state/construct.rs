@@ -368,6 +368,9 @@ impl NyaTermApp {
                 sort_mode: quick_command_sort_mode_from_setting(&settings.ui_quick_cmd_sort_mode),
                 view_mode: quick_view_mode,
                 selected_category: settings.ui_quick_cmd_selected_category.clone(),
+                sidebar_expanded_category_ids: settings
+                    .ui_quick_cmd_sidebar_expanded_category_ids
+                    .clone(),
                 focus: QuickCommandFeatureFocus {
                     editor: cx.focus_handle(),
                     category_trigger: cx.focus_handle(),

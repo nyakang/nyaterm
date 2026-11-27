@@ -1,9 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use gpui::{
-    Anchor, AnyElement, AppContext as _, Context, FontWeight, IntoElement, KeyDownEvent,
-    MouseButton, SharedString, Window, anchored, canvas, deferred, div, point, prelude::*, px, rgb,
-    rgba, svg,
+    Anchor, AnyElement, AppContext as _, Bounds, Context, DispatchPhase, FontWeight, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, Pixels, SharedString, Window, anchored, canvas,
+    deferred, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::QuickCommand;
 use nyaterm_ui::{
@@ -303,10 +307,13 @@ impl NyaTermApp {
         .inset_0();
 
         let popup_open = self.commands.quick_command_bar_popup_is_open();
+        let trigger_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+        let trigger_bounds_for_probe = trigger_bounds.clone();
         let popup_element = popup_open.then(|| {
             self.quick_command_bar_overflow_popup(
                 &bar_commands[visible_count..],
                 overflow_count,
+                trigger_bounds,
                 palette,
                 card_surface,
                 cx,
@@ -415,9 +422,20 @@ impl NyaTermApp {
             )
             .child(
                 div()
+                    .relative()
                     .flex_none()
                     .flex()
                     .items_center()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| {
+                                trigger_bounds_for_probe.set(Some(bounds));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .child(overflow_or_search_trigger)
                     .when_some(popup_element, |anchor_host, popup| {
                         // Zero-width anchor at the right edge of the trigger so
@@ -732,6 +750,7 @@ impl NyaTermApp {
         &mut self,
         overflow_slice: &[QuickCommand],
         overflow_count: usize,
+        trigger_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
         palette: crate::theme::ThemePalette,
         popover_bg: gpui::Rgba,
         cx: &mut Context<Self>,
@@ -868,11 +887,14 @@ impl NyaTermApp {
                     cx.entity().downgrade(),
                 ),
             )
+            .flexible_trigger()
             .placement(NyaPopoverPlacement::Left)
+            .offset(px(12.))
+            .open_delay(Duration::from_millis(320))
             .appearance(false)
             .into_any_element();
 
-            list_rows.push(div().w_full().child(hover_row).into_any_element());
+            list_rows.push(div().w_full().flex().child(hover_row).into_any_element());
         }
 
         let search_header = div()
@@ -957,6 +979,44 @@ impl NyaTermApp {
         )
         .min_width(px(QUICK_COMMAND_MENU_WIDTH));
 
+        // Dismiss on outside press during Bubble phase rather than `on_mouse_down_out`
+        // (which runs in Capture phase). Higher-priority `POPUP_PRIORITY` surfaces
+        // spawned from rows inside this popup—such as `NyaHoverCard` (copy button) and
+        // `NyaContextMenu`—stop mouse-down propagation in Bubble phase first, so
+        // clicking inside them completes `on_click` without unmounting the popup.
+        let popup_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+        let popup_bounds_for_prepaint = popup_bounds.clone();
+        let dismiss_app = cx.weak_entity();
+        let outside_dismiss_probe = canvas(
+            move |bounds, _, _| {
+                popup_bounds_for_prepaint.set(Some(bounds));
+            },
+            move |_, _, window, _| {
+                let popup_bounds = popup_bounds.clone();
+                let trigger_bounds = trigger_bounds.clone();
+                let dismiss_app = dismiss_app.clone();
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble
+                        && !window.has_active_prompt()
+                        && popup_bounds
+                            .get()
+                            .is_some_and(|bounds| !bounds.contains(&event.position))
+                        && trigger_bounds
+                            .get()
+                            .is_none_or(|bounds| !bounds.contains(&event.position))
+                    {
+                        let _ = dismiss_app.update(cx, |this, cx| {
+                            if this.commands.close_quick_command_bar_popup() {
+                                cx.notify();
+                            }
+                        });
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
+
         deferred(
             anchored()
                 .anchor(Anchor::BottomRight)
@@ -966,6 +1026,7 @@ impl NyaTermApp {
                     div()
                         .id("quick-command-bar-popup")
                         .debug_selector(|| "quick-command-bar-popup".to_string())
+                        .relative()
                         .occlude()
                         .w(px(312.))
                         .rounded_lg()
@@ -976,14 +1037,10 @@ impl NyaTermApp {
                         .flex()
                         .flex_col()
                         .overflow_hidden()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        .on_any_mouse_down(|_, _, cx| {
                             cx.stop_propagation();
                         })
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            if this.commands.close_quick_command_bar_popup() {
-                                cx.notify();
-                            }
-                        }))
+                        .child(outside_dismiss_probe)
                         .child(search_header)
                         .child(
                             div()

@@ -327,6 +327,8 @@ impl NyaTermApp {
             return;
         };
         let label = command.label.clone();
+        let saved_category_id = command.category_id.clone();
+        let saved_pinned = command.pinned.unwrap_or_default();
         let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Commands, move |store| {
@@ -337,6 +339,22 @@ impl NyaTermApp {
                 match event.outcome {
                     Ok(config) => {
                         this.replace_quick_command_catalog(config.commands, config.categories, cx);
+                        if this.commands.quick_view_mode().is_sidebar() {
+                            let target_group = saved_category_id
+                                .as_deref()
+                                .unwrap_or("uncategorized")
+                                .to_string();
+                            let mut expanded_changed =
+                                this.commands.expand_quick_sidebar_category(target_group);
+                            if saved_pinned {
+                                expanded_changed |= this
+                                    .commands
+                                    .expand_quick_sidebar_category("__pinned__".to_string());
+                            }
+                            if expanded_changed {
+                                this.save_quick_command_ui_settings(cx);
+                            }
+                        }
                         if current {
                             this.commands.close_quick_editor();
                         }

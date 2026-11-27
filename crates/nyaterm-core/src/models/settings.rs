@@ -532,6 +532,8 @@ pub struct AppSettingsSummary {
     pub ui_quick_cmd_sort_mode: String,
     #[serde(default = "default_quick_cmd_selected_category")]
     pub ui_quick_cmd_selected_category: String,
+    #[serde(default)]
+    pub ui_quick_cmd_sidebar_expanded_category_ids: Vec<String>,
     #[serde(default = "default_saved_connections_sort_mode")]
     pub ui_saved_connections_sort_mode: String,
     #[serde(default)]
@@ -874,6 +876,7 @@ impl Default for AppSettingsSummary {
             ui_quick_cmd_view_mode: default_quick_cmd_view_mode(),
             ui_quick_cmd_sort_mode: default_quick_cmd_sort_mode(),
             ui_quick_cmd_selected_category: default_quick_cmd_selected_category(),
+            ui_quick_cmd_sidebar_expanded_category_ids: Vec::new(),
             ui_saved_connections_sort_mode: default_saved_connections_sort_mode(),
             ui_saved_connections_expanded_group_ids: Vec::new(),
             ui_start_workspace_mode: default_start_workspace_mode(),
@@ -1502,6 +1505,11 @@ mod tests {
     fn summary_default_start_workspace_and_asset_sort() {
         let summary = AppSettingsSummary::default();
         assert_eq!(summary.ui_quick_cmd_selected_category, "all");
+        assert!(
+            summary
+                .ui_quick_cmd_sidebar_expanded_category_ids
+                .is_empty()
+        );
         assert_eq!(summary.ui_start_workspace_mode, "workbench");
         assert!(summary.ui_asset_sort_key.is_none());
         assert!(summary.ui_asset_sort_direction.is_none());
@@ -1578,6 +1586,11 @@ mod tests {
             .remove("ui_quick_cmd_selected_category");
         let summary: AppSettingsSummary = serde_json::from_value(value).expect("legacy settings");
         assert_eq!(summary.ui_quick_cmd_selected_category, "all");
+        assert!(
+            summary
+                .ui_quick_cmd_sidebar_expanded_category_ids
+                .is_empty()
+        );
     }
 }
 

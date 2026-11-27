@@ -79,6 +79,13 @@ impl NyaTermApp {
             .ui_quick_cmd_selected_category
             .clone();
         self.commands.select_quick_category(selected);
+        let expanded = self
+            .settings
+            .summary()
+            .ui_quick_cmd_sidebar_expanded_category_ids
+            .clone();
+        self.commands
+            .set_quick_sidebar_expanded_categories(expanded);
         let configured_view_mode = crate::features::commands::quick_command_view_mode_from_setting(
             &self.settings.summary().ui_quick_cmd_view_mode,
         );

@@ -396,6 +396,7 @@
       "ui_quick_cmd_view_mode": "local",
       "ui_quick_cmd_sort_mode": "local",
       "ui_quick_cmd_selected_category": "local",
+      "ui_quick_cmd_sidebar_expanded_category_ids": "local",
       "ui_saved_connections_sort_mode": "local",
       "ui_saved_connections_expanded_group_ids": "local",
       "ui_start_workspace_mode": "local",

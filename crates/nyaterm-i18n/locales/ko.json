@@ -2623,6 +2623,8 @@
     "moveToCategory": "카테고리로 이동",
     "moreCommands": "더 많은 명령 · %{count}",
     "manageCommands": "빠른 명령 관리",
+    "expandAllCategories": "모든 카테고리 펼치기",
+    "collapseAllCategories": "모든 카테고리 접기",
     "title": "빠른 명령",
     "uncategorized": "분류 없음",
     "view": "보기",

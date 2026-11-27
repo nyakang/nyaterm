@@ -2623,6 +2623,8 @@
     "moveToCategory": "Déplacer vers la catégorie",
     "moreCommands": "Plus de commandes · %{count}",
     "manageCommands": "Gérer les commandes rapides",
+    "expandAllCategories": "Développer toutes les catégories",
+    "collapseAllCategories": "Réduire toutes les catégories",
     "title": "Commandes rapides",
     "uncategorized": "Sans cat.",
     "view": "Afficher",

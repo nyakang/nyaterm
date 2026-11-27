@@ -440,6 +440,12 @@ impl SettingsFeatureState {
     pub(in crate::features) fn set_quick_command_selected_category(&mut self, category: String) {
         self.summary.ui_quick_cmd_selected_category = category;
     }
+    pub(in crate::features) fn set_quick_command_sidebar_expanded_categories(
+        &mut self,
+        ids: Vec<String>,
+    ) {
+        self.summary.ui_quick_cmd_sidebar_expanded_category_ids = ids;
+    }
     pub(in crate::features) fn set_saved_connections_sort_mode(&mut self, mode: String) {
         self.summary.ui_saved_connections_sort_mode = mode;
     }

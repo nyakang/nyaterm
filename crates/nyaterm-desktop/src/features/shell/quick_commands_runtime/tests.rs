@@ -461,3 +461,255 @@ fn switching_across_all_five_modes_preserves_state_and_prevents_duplicate_mounts
         });
     });
 }
+
+#[test]
+fn overflow_popup_hover_card_copy_button_copies_script_without_closing_popup() {
+    let mut test_cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&test_cx);
+    let root = TestTempDir::new("nyaterm-command-bar-hover-copy");
+    let app = app_with_visible_local_session(&mut test_cx, root.path(), "local");
+
+    let commands: Vec<nyaterm_core::QuickCommand> = (0..12)
+        .map(|index| nyaterm_core::QuickCommand {
+            id: format!("cmd-{index}"),
+            label: format!("移除文件中的 CR 字符与空白-{index}"),
+            command: format!("sed -i \"s/\\r//g\" file-{index}.txt"),
+            category_id: None,
+            description: Some("用于去掉 Windows CR 字符".into()),
+            color_tag: None,
+            icon_tag: None,
+            pinned: (index < 2).then_some(true),
+            execution_mode: Some("append".into()),
+            segmented_send: None,
+            raw_send: None,
+            source: None,
+            risk_level: None,
+            updated_at: None,
+            created_at: None,
+            use_count: None,
+            sort_order: Some(index),
+            extra: Default::default(),
+        })
+        .collect();
+
+    app.update(&mut test_cx, |app, cx| {
+        app.replace_quick_command_catalog(commands, Vec::new(), cx);
+        app.commands
+            .set_quick_sort_mode(QuickCommandSortMode::Custom);
+        app.set_quick_command_view_mode(QuickCommandViewMode::CommandBar, cx);
+        app.shell.set_command_bar_visible(true);
+    });
+
+    let cx = window(&mut test_cx, &app, false, true, HashMap::new());
+    cx.update(|window, _| window.activate_window());
+    draw(cx);
+
+    let overflow_bounds = cx
+        .debug_bounds("quick-command-bar-overflow")
+        .expect("overflow trigger visible");
+    cx.simulate_click(overflow_bounds.center(), Modifiers::default());
+    draw(cx);
+    assert!(app.read_with(cx, |app, _| app.commands.quick_command_bar_popup_is_open()));
+
+    let popup_bounds = cx
+        .debug_bounds("quick-command-bar-popup")
+        .expect("overflow popup rendered");
+    const ROW_SELECTORS: [&str; 12] = [
+        "quick-command-bar-popup-row-cmd-0",
+        "quick-command-bar-popup-row-cmd-1",
+        "quick-command-bar-popup-row-cmd-2",
+        "quick-command-bar-popup-row-cmd-3",
+        "quick-command-bar-popup-row-cmd-4",
+        "quick-command-bar-popup-row-cmd-5",
+        "quick-command-bar-popup-row-cmd-6",
+        "quick-command-bar-popup-row-cmd-7",
+        "quick-command-bar-popup-row-cmd-8",
+        "quick-command-bar-popup-row-cmd-9",
+        "quick-command-bar-popup-row-cmd-10",
+        "quick-command-bar-popup-row-cmd-11",
+    ];
+    let (row_bounds, expected_script) = ROW_SELECTORS
+        .iter()
+        .enumerate()
+        .find_map(|(index, selector)| {
+            cx.debug_bounds(selector)
+                .map(|bounds| (bounds, format!("sed -i \"s/\\r//g\" file-{index}.txt")))
+        })
+        .expect("at least one overflow row rendered");
+
+    cx.simulate_mouse_move(row_bounds.center(), None, Modifiers::default());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(360));
+    cx.run_until_parked();
+    draw(cx);
+    draw(cx);
+
+    let hover_bounds = cx
+        .debug_bounds("quick-command-hover-surface")
+        .expect("hover card opened beside overflow popup");
+    assert!(
+        hover_bounds.right() <= popup_bounds.left(),
+        "hover card sits outside the popup bounds on the left"
+    );
+
+    let copy_bounds = cx
+        .debug_bounds("quick-command-tile-copy")
+        .expect("copy button inside hover card");
+    cx.simulate_mouse_move(copy_bounds.center(), None, Modifiers::default());
+    cx.simulate_click(copy_bounds.center(), Modifiers::default());
+    draw(cx);
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_script)
+    );
+    assert!(
+        app.read_with(cx, |app, _| app.commands.quick_command_bar_popup_is_open()),
+        "clicking copy inside the hover card must not close the overflow popup"
+    );
+
+    // Clicking genuinely outside both surfaces dismisses the popup.
+    cx.simulate_click(gpui::point(px(24.), px(24.)), Modifiers::default());
+    draw(cx);
+    assert!(!app.read_with(cx, |app, _| app.commands.quick_command_bar_popup_is_open()));
+}
+
+#[test]
+fn sidebar_categories_default_to_collapsed_and_persist_expanded_ids_across_restart() {
+    let shared_root = TestTempDir::new("nyaterm-sidebar-shared-config");
+    let data_initial = TestTempDir::new("nyaterm-sidebar-data-initial");
+    let data_restarted = TestTempDir::new("nyaterm-sidebar-data-restarted");
+
+    {
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            data_initial.path().to_path_buf(),
+            shared_root.path().join("config"),
+            shared_root.path().join("logs"),
+            shared_root.path().join("cache"),
+            None,
+        );
+        let stores = UiStoreHandles {
+            startup_restore: cx.new(|_| StartupRestoreStore::default()),
+            overlays: cx.new(|_| OverlayStore::default()),
+        };
+        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+        app.update(&mut cx, |app, cx| {
+            let categories = vec![
+                nyaterm_core::QuickCommandCategory {
+                    id: "docker".into(),
+                    name: "Docker".into(),
+                    parent_id: None,
+                    sort_order: 0,
+                },
+                nyaterm_core::QuickCommandCategory {
+                    id: "k8s".into(),
+                    name: "Kubernetes".into(),
+                    parent_id: None,
+                    sort_order: 1,
+                },
+            ];
+            let commands = vec![nyaterm_core::QuickCommand {
+                id: "c1".into(),
+                label: "列出镜像".into(),
+                command: "docker images".into(),
+                category_id: Some("docker".into()),
+                description: None,
+                color_tag: None,
+                icon_tag: None,
+                pinned: Some(true),
+                execution_mode: None,
+                segmented_send: None,
+                raw_send: None,
+                source: None,
+                risk_level: None,
+                updated_at: None,
+                created_at: None,
+                use_count: None,
+                sort_order: Some(0),
+                extra: Default::default(),
+            }];
+            let seed_commands = commands.clone();
+            let seed_categories = categories.clone();
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Commands, move |store| {
+                    store.save_quick_commands(nyaterm_core::QuickCommandsConfig {
+                        commands: seed_commands,
+                        categories: seed_categories,
+                    })
+                })
+                .expect("seed quick commands");
+            app.replace_quick_command_catalog(commands, categories, cx);
+
+            // Fresh default: all categories start collapsed rather than expanding everything.
+            assert!(app.commands.quick_sidebar_expanded_categories().is_empty());
+            app.set_quick_command_view_mode(QuickCommandViewMode::Sidebar, cx);
+            app.toggle_quick_command_sidebar_category("docker".into(), cx);
+            assert!(
+                app.commands
+                    .quick_sidebar_expanded_categories()
+                    .contains("docker")
+            );
+            assert!(
+                !app.commands
+                    .quick_sidebar_expanded_categories()
+                    .contains("k8s")
+            );
+        });
+        // Drain both in-flight and coalesced follow-up settings saves on the FIFO store worker.
+        for _ in 0..2 {
+            cx.run_until_parked();
+            let _ = cx.update_entity(&app, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .expect("drain store queue")
+            });
+        }
+        cx.run_until_parked();
+        let flushed = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .expect("flush settings")
+        });
+        assert_eq!(flushed.ui_quick_cmd_view_mode, "sidebar");
+        assert_eq!(
+            flushed.ui_quick_cmd_sidebar_expanded_category_ids,
+            vec!["docker".to_string()]
+        );
+    }
+
+    // Simulate application restart over the same config directory.
+    let mut restart_cx = TestAppContext::single();
+    let _restart_cleanup = TestAppCleanup::new(&restart_cx);
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        data_restarted.path().to_path_buf(),
+        shared_root.path().join("config"),
+        shared_root.path().join("logs"),
+        shared_root.path().join("cache"),
+        None,
+    );
+    let stores = UiStoreHandles {
+        startup_restore: restart_cx.new(|_| StartupRestoreStore::default()),
+        overlays: restart_cx.new(|_| OverlayStore::default()),
+    };
+    let restarted_app = restart_cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+    restart_cx.run_until_parked();
+
+    restarted_app.read_with(&restart_cx, |app, _| {
+        assert_eq!(
+            app.commands.quick_view_mode(),
+            QuickCommandViewMode::Sidebar
+        );
+        assert_eq!(
+            app.commands.quick_sidebar_expanded_category_ids_sorted(),
+            vec!["docker".to_string()]
+        );
+    });
+}

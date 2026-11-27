@@ -125,6 +125,49 @@ impl NyaTermApp {
         self.commands
             .replace_quick_command_catalog(commands, categories);
         self.sync_quick_command_selected_category(cx);
+        self.sync_quick_command_sidebar_expanded_categories(cx);
+    }
+
+    pub(in crate::features) fn sync_quick_command_sidebar_expanded_categories(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let expanded = self.commands.quick_sidebar_expanded_category_ids_sorted();
+        if self
+            .settings
+            .summary()
+            .ui_quick_cmd_sidebar_expanded_category_ids
+            == expanded
+        {
+            return;
+        }
+        self.settings
+            .set_quick_command_sidebar_expanded_categories(expanded);
+        self.save_quick_command_ui_settings(cx);
+    }
+
+    pub(in crate::features) fn toggle_quick_command_sidebar_category(
+        &mut self,
+        category_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.commands.toggle_quick_sidebar_category(category_id);
+        self.save_quick_command_ui_settings(cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn set_all_quick_command_sidebar_categories_expanded(
+        &mut self,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .commands
+            .set_all_quick_sidebar_categories_expanded(expanded)
+        {
+            self.save_quick_command_ui_settings(cx);
+            cx.notify();
+        }
     }
 
     pub(in crate::features) fn sync_quick_command_selected_category(
@@ -302,6 +345,9 @@ impl NyaTermApp {
         );
         self.settings.set_quick_command_selected_category(
             self.commands.quick_selected_category().to_string(),
+        );
+        self.settings.set_quick_command_sidebar_expanded_categories(
+            self.commands.quick_sidebar_expanded_category_ids_sorted(),
         );
         self.queue_settings_save(SettingsSaveKind::QuickCommands, cx);
     }
