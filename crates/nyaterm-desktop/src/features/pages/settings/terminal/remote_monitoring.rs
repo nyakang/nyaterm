@@ -30,7 +30,7 @@ impl SettingsPanel {
                     "remote-monitoring-reset",
                     t!("settings.remoteMonitoringReset"),
                 )
-                .small()
+                .form_control()
                 .variant(NyaButtonVariant::Ghost)
                 .disabled(is_default)
                 .on_click(cx.listener(|this, _, _, cx| this.reset_remote_monitoring(cx))),

@@ -87,21 +87,21 @@ impl SettingsPanel {
                 self.image_opacity_slider.clone(),
                 self.image_opacity_focus.clone(),
                 t!("settings.backgroundImageOpacity"),
-                t!("settings.backgroundImageOpacityDesc"),
+                None,
             ),
             AppearanceOpacity::Content => (
                 self.settings.summary().background_content_opacity,
                 self.content_opacity_slider.clone(),
                 self.content_opacity_focus.clone(),
                 t!("settings.backgroundContentOpacity"),
-                t!("settings.backgroundContentOpacityDesc"),
+                Some(t!("settings.backgroundContentOpacityDesc")),
             ),
             AppearanceOpacity::Window => (
                 self.settings.summary().window_background_opacity,
                 self.window_opacity_slider.clone(),
                 self.window_opacity_focus.clone(),
                 t!("settings.windowBackgroundOpacity"),
-                t!("settings.windowBackgroundOpacityDesc"),
+                None,
             ),
         };
         let mouse_focus = focus.clone();
@@ -156,13 +156,15 @@ impl SettingsPanel {
                                     .text_color(rgb(palette.text))
                                     .child(label),
                             )
-                            .child(
-                                div()
-                                    .mt_1()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.text_dimmed))
-                                    .child(desc),
-                            ),
+                            .when_some(desc, |this, desc| {
+                                this.child(
+                                    div()
+                                        .mt_1()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette.text_dimmed))
+                                        .child(desc),
+                                )
+                            }),
                     )
                     .child(
                         div()

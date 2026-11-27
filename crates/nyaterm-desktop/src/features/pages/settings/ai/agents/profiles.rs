@@ -49,7 +49,7 @@ impl SettingsPanel {
             .child(ai_field(
                 palette,
                 t!("ai.defaultAgent"),
-                Some(t!("ai.acp.defaultHint").into()),
+                None,
                 default_agent,
             ))
             .child(
@@ -57,19 +57,13 @@ impl SettingsPanel {
                     .text_size(px(12.))
                     .text_color(rgb(palette.text_muted))
                     .child(t!("ai.acp.draftHint")),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!("ai.acp.installHint")),
             );
         if profiles(settings).is_empty() {
             content = content.child(div().py_4().child(t!("ai.acp.empty")));
         }
         let mut actions = div().flex().flex_wrap().gap_2().child(
             NyaButton::new("acp-refresh", t!("ai.acp.refresh"))
-                .small()
+                .form_control()
                 .loading(status.pending)
                 .disabled(status.pending)
                 .on_click(cx.listener(|panel, _, _, cx| panel.refresh_ai_agents(cx))),
@@ -77,7 +71,7 @@ impl SettingsPanel {
         if status.pending {
             actions = actions.child(
                 NyaButton::new("acp-cancel-inspect", t!("ai.acp.cancel"))
-                    .small()
+                    .form_control()
                     .on_click(cx.listener(|panel, _, _, cx| {
                         panel.with_app(cx, |app, cx| {
                             app.ai.cancel_agent_management();
@@ -89,7 +83,7 @@ impl SettingsPanel {
         for (strategy, label) in [("claude", "+ Claude Code"), ("codex", "+ Codex")] {
             actions = actions.child(
                 NyaButton::new(format!("acp-add-{strategy}"), label)
-                    .small()
+                    .form_control()
                     .tooltip(t!(if strategy == "codex" {
                         "ai.acp.detectionOnly"
                     } else {
@@ -218,7 +212,7 @@ impl SettingsPanel {
                             "ai.acp.check"
                         }),
                     )
-                    .small()
+                    .form_control()
                     .variant(NyaButtonVariant::Primary)
                     .loading(busy)
                     .disabled(
@@ -240,7 +234,7 @@ impl SettingsPanel {
                             "ai.acp.advanced"
                         }),
                     )
-                    .small()
+                    .form_control()
                     .on_click(cx.listener(move |panel, _, _, cx| {
                         panel.with_app(cx, |app, cx| {
                             app.edit_acp_profile(&advanced_id, "advanced", String::new(), cx)
@@ -249,7 +243,7 @@ impl SettingsPanel {
                 )
                 .child(
                     NyaButton::new(format!("acp-{id}-copy"), t!("ai.acp.copy"))
-                        .small()
+                        .form_control()
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
                                 app.edit_acp_profile(&copy_id, "copy", String::new(), cx)
@@ -258,7 +252,7 @@ impl SettingsPanel {
                 )
                 .child(
                     NyaButton::new(format!("acp-{id}-delete"), t!("ai.acp.delete"))
-                        .small()
+                        .form_control()
                         .variant(NyaButtonVariant::Ghost)
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
@@ -284,7 +278,7 @@ impl SettingsPanel {
                     .child(div().text_size(px(12.)).child(t!("ai.acp.deleteHint")))
                     .child(
                         NyaButton::new(format!("acp-confirm-delete-{id}"), t!("ai.acp.delete"))
-                            .small()
+                            .form_control()
                             .variant(NyaButtonVariant::Danger)
                             .on_click(cx.listener(move |panel, _, _, cx| {
                                 panel.with_app(cx, |app, cx| {
@@ -294,7 +288,7 @@ impl SettingsPanel {
                     )
                     .child(
                         NyaButton::new(format!("acp-cancel-delete-{id}"), t!("common.cancel"))
-                            .small()
+                            .form_control()
                             .on_click(cx.listener(move |panel, _, _, cx| {
                                 panel.with_app(cx, |app, cx| {
                                     app.edit_acp_profile(
@@ -332,7 +326,7 @@ impl SettingsPanel {
                 let (id, method) = (id.clone(), method.clone());
                 account = account.child(
                     NyaButton::new(format!("acp-login-{id}-{method}"), label.clone())
-                        .small()
+                        .form_control()
                         .disabled(status.pending)
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
@@ -345,7 +339,7 @@ impl SettingsPanel {
                 let id = id.clone();
                 account = account.child(
                     NyaButton::new(format!("acp-logout-{id}"), t!("ai.acp.logout"))
-                        .small()
+                        .form_control()
                         .disabled(status.pending)
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| app.acp_account_action(&id, None, cx));
@@ -480,7 +474,7 @@ impl SettingsPanel {
                     )))
                     .child(
                         NyaButton::new(format!("acp-env-remove-{row_id}"), t!("ai.acp.delete"))
-                            .small()
+                            .form_control()
                             .on_click(cx.listener(move |panel, _, _, cx| {
                                 panel.with_app(cx, |app, cx| {
                                     app.edit_acp_profile(
@@ -497,7 +491,7 @@ impl SettingsPanel {
         let add_id = id.clone();
         advanced.child(
             NyaButton::new(format!("acp-{id}-add-env"), t!("ai.acp.addEnv"))
-                .small()
+                .form_control()
                 .on_click(cx.listener(move |panel, _, _, cx| {
                     panel.with_app(cx, |app, cx| {
                         app.edit_acp_profile(&add_id, "add-env", String::new(), cx)

@@ -4,8 +4,8 @@ use gpui::{Context, IntoElement, SharedString, div, prelude::*};
 use nyaterm_ui::NyaSelectOption;
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::pages::settings::settings_button;
 use crate::models::HeaderStatusMode;
-use crate::widgets::small_button;
 
 use super::super::{settings_form_row, settings_form_section, settings_switch};
 
@@ -76,7 +76,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.headerStatus"),
-                        Some(t!("settings.headerStatusDesc").into()),
+                        None,
                         self.settings_select_control(
                             "settings.general.header-status",
                             std::iter::once(NyaSelectOption::new(
@@ -130,9 +130,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.openNewConnectionAfterSave"),
-                        Some(SharedString::from(t!(
-                            "settings.openNewConnectionAfterSaveDesc"
-                        ))),
+                        None,
                         settings_switch(
                             palette,
                             "general-open-new-connection-after-save",
@@ -173,7 +171,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.logRetention"),
-                        Some(SharedString::from(t!("settings.logRetentionDesc"))),
+                        None,
                         self.settings_select_control(
                             "settings.general.diagnostics-retention",
                             [3_u32, 7, 14, 30]
@@ -193,7 +191,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.logShardSize"),
-                        Some(SharedString::from(t!("settings.logShardSizeDesc"))),
+                        None,
                         self.settings_select_control(
                             "settings.general.diagnostics-shard-size",
                             shard_options,
@@ -205,27 +203,27 @@ impl SettingsPanel {
                             cx,
                         ),
                     ))
-                    .child(div().flex().justify_end().child(small_button(
-                        palette,
-                        "general-open-logs",
-                        t!("settings.openLogs"),
-                        cx.listener(|this, _, _, cx| {
-                            this.reveal_log_dir(cx);
-                        }),
-                    )))
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.exportDiagnostics"),
-                        Some(SharedString::from(t!("settings.exportDiagnosticsDesc"))),
-                        small_button(
-                            palette,
-                            "general-export-diagnostics",
-                            t!("settings.exportDiagnostics"),
-                            cx.listener(|this, _, _, cx| {
-                                this.prompt_diagnostics_export(cx);
-                            }),
-                        ),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .justify_end()
+                            .gap_2()
+                            .child(settings_button(
+                                "general-open-logs",
+                                t!("settings.openLogs"),
+                                cx.listener(|this, _, _, cx| {
+                                    this.reveal_log_dir(cx);
+                                }),
+                            ))
+                            .child(settings_button(
+                                "general-export-diagnostics",
+                                t!("settings.exportDiagnostics"),
+                                cx.listener(|this, _, _, cx| {
+                                    this.prompt_diagnostics_export(cx);
+                                }),
+                            )),
+                    ),
             ))
     }
 }

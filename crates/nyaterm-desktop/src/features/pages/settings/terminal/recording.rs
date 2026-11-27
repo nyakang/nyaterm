@@ -48,7 +48,7 @@ impl SettingsPanel {
         div().flex().flex_col().gap_3().child(settings_form_section(
             palette,
             Some(t!("settings.recordingSettings")),
-            Some(t!("settings.recordingSettingsDesc")),
+            None,
             div()
                 .flex()
                 .flex_col()
@@ -56,7 +56,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingDefaultMode"),
-                    Some(SharedString::from(t!("settings.recordingDefaultModeDesc"))),
+                    None,
                     self.settings_select_control(
                         "settings.recording.default-mode",
                         vec![
@@ -115,7 +115,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingAutoStart"),
-                    Some(SharedString::from(t!("settings.recordingAutoStartDesc"))),
+                    None,
                     settings_switch(
                         palette,
                         "settings-recording-auto",
@@ -174,9 +174,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingIncludeIoLabels"),
-                    Some(SharedString::from(t!(
-                        "settings.recordingIncludeIoLabelsDesc"
-                    ))),
+                    None,
                     settings_switch(
                         palette,
                         "settings-recording-labels",
@@ -189,9 +187,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingIncludeTimestamps"),
-                    Some(SharedString::from(t!(
-                        "settings.recordingIncludeTimestampsDesc"
-                    ))),
+                    None,
                     settings_switch(
                         palette,
                         "settings-recording-timestamps",
@@ -204,7 +200,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingRotation"),
-                    Some(SharedString::from(t!("settings.recordingRotationDesc"))),
+                    None,
                     self.settings_select_control(
                         "settings.recording.rotation",
                         vec![
@@ -229,9 +225,7 @@ impl SettingsPanel {
                         this.child(settings_form_row(
                             palette,
                             t!("settings.recordingRotationSizeLimit"),
-                            Some(SharedString::from(t!(
-                                "settings.recordingRotationSizeLimitDesc"
-                            ))),
+                            None,
                             self.existing_number_input_box(
                                 "settings.number.recording-rotation-size",
                             ),
@@ -241,9 +235,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.recordingExistingFileBehavior"),
-                    Some(SharedString::from(t!(
-                        "settings.recordingExistingFileBehaviorDesc"
-                    ))),
+                    None,
                     self.settings_select_control(
                         "settings.recording.existing-file",
                         vec![

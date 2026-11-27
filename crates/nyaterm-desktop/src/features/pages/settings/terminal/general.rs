@@ -54,7 +54,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.scrollbackLines"),
-                        Some(SharedString::from(t!("settings.scrollbackLinesDesc"))),
+                        None,
                         self.existing_number_input_box("settings.number.terminal-scrollback-lines"),
                     ))
                     .child(settings_form_row(
@@ -158,9 +158,7 @@ impl SettingsPanel {
                                     .child(settings_form_row(
                                         palette,
                                         t!("settings.zebraStripesByRow"),
-                                        Some(SharedString::from(t!(
-                                            "settings.zebraStripesByRowDesc"
-                                        ))),
+                                        None,
                                         settings_switch(
                                             palette,
                                             "terminal-zebra-stripes-by-row",
@@ -255,7 +253,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.serialReconnectEnter"),
-                        Some(SharedString::from(t!("settings.serialReconnectEnterDesc"))),
+                        None,
                         settings_switch(
                             palette,
                             "terminal-serial-reconnect-send-enter",

@@ -3,10 +3,11 @@ use gpui::{
 };
 use nyaterm_core::app_identity::AppFlavor;
 use nyaterm_store::data_directory::{self, DataDirectoryError, PreparedSwitch, SwitchMode};
+use nyaterm_ui::NYA_FORM_CONTROL_HEIGHT_PX;
 use rust_i18n::t;
 
 use crate::features::pages::settings::panel::SettingsPanel;
-use crate::widgets::small_button;
+use crate::features::pages::settings::settings_button;
 
 use super::super::settings_form_section;
 
@@ -25,8 +26,7 @@ impl SettingsPanel {
         let choice = self.data_directory_choice.clone();
 
         let choose_button = editable.then(|| {
-            small_button(
-                palette,
+            settings_button(
                 "data-directory-choose",
                 t!("settings.dataDirectoryChange"),
                 cx.listener(|this, _, _, cx| {
@@ -35,8 +35,7 @@ impl SettingsPanel {
             )
         });
         let reset_button = (editable && custom).then(|| {
-            small_button(
-                palette,
+            settings_button(
                 "data-directory-reset",
                 t!("settings.dataDirectoryReset"),
                 cx.listener(|this, _, _, cx| {
@@ -110,9 +109,12 @@ impl SettingsPanel {
                                 .border_color(rgb(palette.border))
                                 .bg(rgb(palette.input))
                                 .px_3()
-                                .py_2()
+                                .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+                                .flex()
+                                .items_center()
                                 .child(
                                     div()
+                                        .min_w_0()
                                         .truncate()
                                         .text_size(px(12.))
                                         .text_color(rgb(palette.text))
@@ -194,8 +196,7 @@ impl SettingsPanel {
                     .flex()
                     .justify_end()
                     .gap_2()
-                    .child(small_button(
-                        palette,
+                    .child(settings_button(
                         "data-directory-confirm-cancel",
                         t!("settings.dataDirectoryCancel"),
                         cx.listener(|this, _, _, cx| {
@@ -204,8 +205,7 @@ impl SettingsPanel {
                         }),
                     ))
                     .when(choice.mode == SwitchMode::ReplaceWithBackup, |row| {
-                        row.child(small_button(
-                            palette,
+                        row.child(settings_button(
                             "data-directory-use-history",
                             t!("settings.dataDirectoryUseHistory"),
                             cx.listener(|this, _, _, cx| {
@@ -216,8 +216,7 @@ impl SettingsPanel {
                             }),
                         ))
                     })
-                    .child(small_button(
-                        palette,
+                    .child(settings_button(
                         "data-directory-confirm-apply",
                         t!("settings.dataDirectoryApply"),
                         cx.listener(|this, _, window, cx| {

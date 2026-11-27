@@ -17,11 +17,6 @@ impl SettingsPanel {
         let default_editor_input = self
             .existing_text_input_box("settings.transfer.default-editor", false)
             .into_any_element();
-        let editor_type_label = if editor_type == "internal" {
-            t!("settings.editorTypeInternal")
-        } else {
-            t!("settings.editorTypeExternal")
-        };
         let selected_editor_type = if editor_type == "internal" {
             "internal"
         } else {
@@ -35,7 +30,7 @@ impl SettingsPanel {
             .child(settings_form_row(
                 palette,
                 t!("settings.editorType"),
-                Some(SharedString::from(editor_type_label)),
+                None,
                 self.settings_select_control(
                     "settings.transfer.editor-type",
                     vec![
@@ -72,9 +67,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.internalEditorFontSize"),
-                    Some(SharedString::from(t!(
-                        "settings.internalEditorFontSizeDesc"
-                    ))),
+                    None,
                     self.existing_number_input_box(
                         "settings.number.transfer-internal-editor-font-size",
                     ),

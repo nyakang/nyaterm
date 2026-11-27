@@ -49,6 +49,7 @@ impl SettingsPanel {
             .gap_2()
             .child(
                 NyaIconButton::new("ai-provider-refresh", "icons/fe/refresh.svg")
+                    .form_control()
                     .tooltip(t!("ai.refreshProviders"))
                     .disabled(testing || credentials.is_empty())
                     .on_click(cx.listener(|panel, _, _, cx| {
@@ -57,6 +58,7 @@ impl SettingsPanel {
             )
             .child(
                 NyaButton::new("ai-provider-add", t!("ai.addProvider"))
+                    .form_control()
                     .icon("icons/settings/plus.svg")
                     .selected(view.choices_open)
                     .on_click(cx.listener(|panel, _, _, cx| {
@@ -197,13 +199,13 @@ impl SettingsPanel {
                     provider_label(&kind).to_string()
                 };
                 picker = picker.child(
-                    NyaButton::new(format!("ai-provider-preset-{kind:?}"), label).on_click(
-                        cx.listener(move |panel, _, _, cx| {
+                    NyaButton::new(format!("ai-provider-preset-{kind:?}"), label)
+                        .form_control()
+                        .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
                                 app.add_ai_provider_preset(kind.clone(), cx)
                             });
-                        }),
-                    ),
+                        })),
                 );
             }
         }
@@ -328,6 +330,7 @@ impl SettingsPanel {
             .child(status_dot(palette, status))
             .child(
                 NyaButton::new("ai-provider-test", t!("ai.connectionTest"))
+                    .form_control()
                     .disabled(
                         testing
                             || duplicate
@@ -453,6 +456,7 @@ impl SettingsPanel {
         }
         custom_headers = custom_headers.child(
             NyaButton::new("ai-provider-header-add", t!("ai.customHeaderAdd"))
+                .form_control()
                 .icon("icons/settings/plus.svg")
                 .disabled(credential.extra_headers.len() >= MAX_AI_CUSTOM_HEADERS)
                 .on_click(cx.listener({

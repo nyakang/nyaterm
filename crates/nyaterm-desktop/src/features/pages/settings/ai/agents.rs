@@ -200,7 +200,7 @@ impl SettingsPanel {
                                     format!("ai-mcp-copy-{client}"),
                                     t!("ai.externalMcpCopyConfig"),
                                 )
-                                .small()
+                                .form_control()
                                 .full_width()
                                 .disabled(!helper_ready)
                                 .on_click(cx.listener(

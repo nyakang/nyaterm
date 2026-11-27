@@ -3,7 +3,7 @@ use rust_i18n::t;
 
 use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
-    rgb, rgba, svg,
+    rgb, rgba,
 };
 use nyaterm_core::truncate_preview;
 
@@ -535,7 +535,7 @@ fn search_engine_settings_section(
 }
 
 fn search_engine_text_button(
-    palette: ThemePalette,
+    _palette: ThemePalette,
     id: impl Into<String>,
     icon_path: &'static str,
     label: impl Into<SharedString>,
@@ -543,41 +543,14 @@ fn search_engine_text_button(
     enabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    let hover = if destructive {
-        rgba((palette.danger << 8) | 0x18)
-    } else {
-        rgb(palette.hover)
-    };
-    div()
-        .id(SharedString::from(id.into()))
-        .h(px(28.))
-        .px_2()
-        .rounded_sm()
-        .flex()
-        .items_center()
-        .gap_1()
-        .text_size(px(11.))
-        .text_color(rgb(if destructive {
-            palette.danger
+    nyaterm_ui::NyaButton::new(id.into(), label)
+        .form_control()
+        .icon(icon_path)
+        .variant(if destructive {
+            nyaterm_ui::NyaButtonVariant::Danger
         } else {
-            palette.primary
-        }))
-        .opacity(if enabled { 1.0 } else { 0.45 })
-        .child(
-            svg()
-                .size(px(14.))
-                .path(icon_path)
-                .text_color(rgb(if destructive {
-                    palette.danger
-                } else {
-                    palette.primary
-                })),
-        )
-        .child(label)
-        .when(enabled, |this| {
-            this.cursor_pointer()
-                .hover(move |this| this.bg(hover))
-                .on_click(on_click)
+            nyaterm_ui::NyaButtonVariant::Secondary
         })
+        .disabled(!enabled)
+        .on_click(on_click)
 }

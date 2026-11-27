@@ -132,7 +132,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.mouseEventsRequireAlt"),
-                        Some(SharedString::from(t!("settings.mouseEventsRequireAltDesc"))),
+                        None,
                         settings_switch(
                             palette,
                             "interaction-mouse-requires-alt",
@@ -196,7 +196,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.commandSuggestions"),
-                        Some(SharedString::from(t!("settings.commandSuggestionsDesc"))),
+                        None,
                         settings_switch(
                             palette,
                             "interaction-cmd-suggestions",
@@ -238,12 +238,6 @@ impl SettingsPanel {
                                 "settings.number.command-suggestion-max-chars",
                             ),
                         ))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .child(t!("settings.commandSuggestionsLengthDesc")),
-                        )
                     })
                     .child(
                         div()

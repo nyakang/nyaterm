@@ -1391,7 +1391,7 @@ impl SettingsPanel {
             .justify_between()
             .gap_3()
             .px_5()
-            .py_3()
+            .py_2()
             .border_t_1()
             .border_color(rgb(palette.border))
             .bg(snapshot.chrome.transparent_section_header)
@@ -1408,82 +1408,44 @@ impl SettingsPanel {
             )
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(super::settings_button(
+                        "settings-cancel",
+                        cancel_label,
+                        cx.listener(|panel, _, _, cx| {
+                            panel.with_app(cx, |app, cx| app.cancel_settings(cx));
+                        }),
+                    ))
                     .child(
-                        div()
-                            .id("settings-cancel")
-                            .h(px(28.))
-                            .min_w(px(64.))
-                            .px_4()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(palette.border))
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text))
-                            .cursor_pointer()
-                            .hover(move |this| this.bg(rgb(palette.hover)))
-                            .child(cancel_label)
-                            .on_click(cx.listener(|panel, _, _, cx| {
-                                panel.with_app(cx, |app, cx| app.cancel_settings(cx));
-                            })),
+                        div().debug_selector(|| "settings-apply".into()).child(
+                            super::settings_button(
+                                "settings-apply",
+                                apply_label,
+                                cx.listener(|panel, _, _, cx| {
+                                    panel.with_app(cx, |app, cx| {
+                                        app.apply_settings_draft(false, cx);
+                                    });
+                                }),
+                            )
+                            .disabled(apply_disabled),
+                        ),
                     )
                     .child(
-                        div()
-                            .id("settings-apply")
-                            .debug_selector(|| "settings-apply".into())
-                            .h(px(28.))
-                            .min_w(px(64.))
-                            .px_4()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(palette.border))
-                            .text_size(px(11.))
-                            .text_color(if apply_disabled {
-                                rgb(palette.text_dimmed)
-                            } else {
-                                rgb(palette.text)
-                            })
-                            .when(!apply_disabled, |this| {
-                                this.cursor_pointer()
-                                    .hover(move |this| this.bg(rgb(palette.hover)))
-                                    .on_click(cx.listener(|panel, _, _, cx| {
-                                        panel.with_app(cx, |app, cx| {
-                                            app.apply_settings_draft(false, cx);
-                                        });
-                                    }))
-                            })
-                            .child(apply_label),
-                    )
-                    .child(
-                        div()
-                            .id("settings-confirm")
-                            .debug_selector(|| "settings-confirm".into())
-                            .h(px(28.))
-                            .min_w(px(64.))
-                            .px_4()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .bg(rgb(palette.link))
-                            .text_size(px(11.))
-                            .font_weight(FontWeight(600.))
-                            .text_color(rgb(palette.text_on_fill(palette.link)))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|panel, _, _, cx| {
-                                panel.with_app(cx, |app, cx| {
-                                    app.confirm_settings_draft(cx);
-                                });
-                            }))
-                            .child(confirm_label),
+                        div().debug_selector(|| "settings-confirm".into()).child(
+                            super::settings_button(
+                                "settings-confirm",
+                                confirm_label,
+                                cx.listener(|panel, _, _, cx| {
+                                    panel.with_app(cx, |app, cx| {
+                                        app.confirm_settings_draft(cx);
+                                    });
+                                }),
+                            )
+                            .variant(nyaterm_ui::NyaButtonVariant::Primary),
+                        ),
                     ),
             )
     }

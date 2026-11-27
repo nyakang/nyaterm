@@ -4,12 +4,12 @@ use gpui::{Context, FontWeight, IntoElement, KeyDownEvent, div, prelude::*, px, 
 use nyaterm_ui::{NyaKbd, NyaSearchInput};
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::pages::settings::settings_button;
 use crate::shortcuts::{
     SHORTCUT_CATEGORIES, SHORTCUT_REGISTRY, ShortcutCategory, ShortcutDefinition,
     ShortcutDiagnosticKind, ShortcutNativeStatus, compact_indexed_hotkey_keystrokes_for_display,
     format_hotkey_for_display, hotkey_keystrokes_for_display, shortcut_keys_for,
 };
-use crate::widgets::small_button;
 
 use super::super::settings_form_section;
 
@@ -18,7 +18,6 @@ impl SettingsPanel {
         &mut self,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let palette = self.theme_palette();
         let overrides = self
             .settings
             .summary()
@@ -64,8 +63,7 @@ impl SettingsPanel {
                         ),
                     )
                     .when(overrides > 0, |this| {
-                        this.child(small_button(
-                            palette,
+                        this.child(settings_button(
                             "keybindings-reset-all",
                             t!("settings.keybindingsResetAll"),
                             cx.listener(|this, _, _, cx| {
@@ -307,16 +305,14 @@ impl SettingsPanel {
                     .items_center()
                     .gap_1()
                     .when(is_recording, |this| {
-                        this.child(small_button(
-                            palette,
+                        this.child(settings_button(
                             format!("keybinding-save-{}", shortcut.id.as_str()),
                             t!("common.confirm"),
                             cx.listener(|this, _, _, cx| {
                                 this.confirm_keybinding_recording(cx);
                             }),
                         ))
-                        .child(small_button(
-                            palette,
+                        .child(settings_button(
                             format!("keybinding-cancel-{}", shortcut.id.as_str()),
                             t!("common.cancel"),
                             cx.listener(|this, _, _, cx| {
@@ -325,8 +321,7 @@ impl SettingsPanel {
                         ))
                     })
                     .when(!is_recording, |this| {
-                        this.child(small_button(
-                            palette,
+                        this.child(settings_button(
                             format!("keybinding-record-{}", shortcut.id.as_str()),
                             t!("common.edit"),
                             cx.listener(move |this, _, window, cx| {
@@ -335,8 +330,7 @@ impl SettingsPanel {
                         ))
                     })
                     .when(is_custom && !is_recording, |this| {
-                        this.child(small_button(
-                            palette,
+                        this.child(settings_button(
                             format!("keybinding-reset-{}", shortcut.id.as_str()),
                             reset_label,
                             cx.listener(move |this, _, _, cx| {

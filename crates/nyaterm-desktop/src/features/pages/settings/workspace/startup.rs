@@ -1,4 +1,4 @@
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb};
+use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 use nyaterm_core::connection_tree::NodeKind;
 use nyaterm_core::models::sessions::{Group, SavedConnection};
 use nyaterm_core::models::startup::{StartupMode, supports_automatic_start};
@@ -9,7 +9,7 @@ use rust_i18n::t;
 use std::collections::HashMap;
 
 use crate::features::pages::settings::panel::SettingsPanel;
-use crate::widgets::small_button;
+use crate::features::pages::settings::settings_button;
 
 use super::super::{settings_form_row, settings_form_section, settings_switch};
 
@@ -118,9 +118,7 @@ impl SettingsPanel {
             content = content.child(settings_form_row(
                 palette,
                 t!("settings.startupRestoreWindowLayout"),
-                Some(SharedString::from(t!(
-                    "settings.startupRestoreWindowLayoutDesc"
-                ))),
+                None,
                 settings_switch(
                     palette,
                     "general-startup-restore-window-layout",
@@ -166,8 +164,7 @@ impl SettingsPanel {
                     .gap_2()
                     .child(div().flex_1().min_w_0().child(selector));
                 if index > 0 {
-                    row = row.child(small_button(
-                        palette,
+                    row = row.child(settings_button(
                         format!("startup-up-{index}"),
                         t!("settings.startupMoveUp"),
                         cx.listener(move |this, _, _, cx| {
@@ -178,8 +175,7 @@ impl SettingsPanel {
                     ));
                 }
                 if index + 1 < targets.len() {
-                    row = row.child(small_button(
-                        palette,
+                    row = row.child(settings_button(
                         format!("startup-down-{index}"),
                         t!("settings.startupMoveDown"),
                         cx.listener(move |this, _, _, cx| {
@@ -189,8 +185,7 @@ impl SettingsPanel {
                         }),
                     ));
                 }
-                rows = rows.child(row.child(small_button(
-                    palette,
+                rows = rows.child(row.child(settings_button(
                     format!("startup-remove-{index}"),
                     t!("common.delete"),
                     cx.listener(move |this, _, _, cx| {

@@ -50,7 +50,7 @@ impl SettingsPanel {
         let view = self.ai.background_tasks.clone();
         let mut body = div().flex().flex_col().gap_3().child(
             NyaButton::new("mcp-background-tasks", t!("ai.mcp.tasks.title"))
-                .small()
+                .form_control()
                 .on_click(cx.listener(|panel, _, _, cx| {
                     panel.with_app(cx, |app, cx| app.toggle_background_tasks(cx));
                 })),
@@ -82,7 +82,7 @@ impl SettingsPanel {
                             format!("mcp-job-{}", job.id),
                             format!("{} · {}", job.host, status_label(job.status)),
                         )
-                        .small()
+                        .form_control()
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel
                                 .with_app(cx, |app, cx| app.select_background_task(id.clone(), cx));
@@ -106,7 +106,7 @@ impl SettingsPanel {
                 .gap_2()
                 .child(
                     NyaButton::new("mcp-job-stop", t!("ai.mcp.tasks.stop"))
-                        .small()
+                        .form_control()
                         .disabled(!detail.can_stop)
                         .on_click(cx.listener(move |panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
@@ -116,7 +116,7 @@ impl SettingsPanel {
                 )
                 .child(
                     NyaButton::new("mcp-job-open-terminal", t!("ai.mcp.tasks.openTerminal"))
-                        .small()
+                        .form_control()
                         .on_click(cx.listener(move |panel, _, window, cx| {
                             panel.with_app(cx, |app, cx| {
                                 if let Some(connection) = app

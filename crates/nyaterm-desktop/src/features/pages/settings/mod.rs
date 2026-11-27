@@ -5,7 +5,7 @@ use gpui::{
 };
 
 use crate::theme::ThemePalette;
-use nyaterm_ui::NyaSwitch;
+use nyaterm_ui::{NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaSwitch};
 
 use super::super::NyaTermApp;
 
@@ -55,6 +55,7 @@ pub(super) fn settings_form_section_with_action(
 ) -> impl IntoElement {
     let has_header = title.is_some() || desc.is_some() || header_action.is_some();
     div()
+        .flex_none()
         .rounded_lg()
         .border_1()
         .border_color(rgba((palette.border << 8) | 0xb3))
@@ -68,7 +69,7 @@ pub(super) fn settings_form_section_with_action(
                     .border_b_1()
                     .border_color(rgba((palette.surface_elevated << 8) | 0x99))
                     .flex()
-                    .items_start()
+                    .items_center()
                     .justify_between()
                     .gap_3()
                     .child(
@@ -104,7 +105,7 @@ pub(super) fn settings_form_section_with_action(
         .child(div().px_4().py_4().flex().flex_col().gap_4().child(content))
 }
 
-/// Tauri SettingRow: label/desc left, control right.
+/// Labels and controls stay centered, including rows without a description.
 pub(super) fn settings_form_row(
     palette: ThemePalette,
     label: impl Into<SharedString>,
@@ -115,7 +116,8 @@ pub(super) fn settings_form_row(
     div()
         .flex()
         .flex_wrap()
-        .items_start()
+        .min_h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+        .items_center()
         .justify_between()
         .gap_4()
         .child(
@@ -154,6 +156,17 @@ pub(super) fn settings_form_row(
                 .gap_2()
                 .child(control),
         )
+}
+
+/// Settings actions use the same height as neighboring inputs and selects.
+fn settings_button(
+    id: impl Into<String>,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> NyaButton {
+    NyaButton::new(id.into(), label)
+        .form_control()
+        .on_click(on_click)
 }
 
 /// Gives an input a definite width inside a content-sized settings row control slot.

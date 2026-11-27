@@ -43,7 +43,7 @@ impl SettingsPanel {
             ),
         };
         let add = NyaButton::new(format!("ai-action-add-{kind:?}"), t!("common.add"))
-            .small()
+            .form_control()
             .icon("icons/settings/plus.svg")
             .on_click(
                 cx.listener(move |panel, _, window, cx| panel.add_ai_action(kind, window, cx)),

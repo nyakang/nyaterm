@@ -142,7 +142,7 @@ impl SettingsPanel {
                     "connection-types-reset",
                     t!("settings.connectionTypesReset"),
                 )
-                .small()
+                .form_control()
                 .variant(NyaButtonVariant::Ghost)
                 .disabled(is_default)
                 .on_click(cx.listener(|this, _, _, cx| {

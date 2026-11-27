@@ -42,7 +42,6 @@ impl SettingsPanel {
         } else {
             "settings.masterPassword"
         });
-        let master_input_desc = t!("settings.masterPasswordDesc");
         let session_security_label = t!("settings.sessionSecurity");
         let startup_lock_label = t!("settings.enableStartupLock");
         let idle_lock_switch_label = t!("settings.enableIdleLock");
@@ -99,7 +98,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         master_input_label,
-                        Some(SharedString::from(master_input_desc)),
+                        None,
                         settings_input_control(master_password_input)
                             .opacity(if master_password_enabled { 1.0 } else { 0.45 }),
                     )),

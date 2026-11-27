@@ -1,16 +1,14 @@
 use std::hash::{Hash, Hasher};
 
 use gpui::{
-    AnyElement, AnyView, App, ClickEvent, Context, IntoElement, SharedString, Window, div,
-    prelude::*, px, rgb,
+    AnyElement, AnyView, App, Context, IntoElement, SharedString, Window, div, prelude::*, px, rgb,
 };
 use nyaterm_ui::{NyaCheckbox, NyaScrollable as _, NyaTooltip};
 use rust_i18n::t;
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::pages::settings::settings_button;
 use crate::features::sync::V4ConflictSummary as ConflictSummary;
-use crate::theme::ThemePalette;
-use crate::widgets::small_button;
 
 /// Candidate previews are capped so text layout stays cheap, but the rendered
 /// element width decides where the ellipsis lands. Hovering a preview reveals
@@ -125,19 +123,6 @@ fn group_fields_tooltip(
     }
 }
 
-/// The per-group "apply to all" control. Instead of the shared small button it
-/// highlights itself on hover with an accent border, so the pointer clearly
-/// marks which candidate value the click would apply. All colors come from the
-/// active theme palette.
-fn group_apply_button(
-    palette: ThemePalette,
-    id: String,
-    label: impl Into<SharedString>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    small_button(palette, id, label, on_click)
-}
-
 impl SettingsPanel {
     pub(super) fn cloud_sync_preview(
         &mut self,
@@ -165,8 +150,7 @@ impl SettingsPanel {
 
         let mut content = div().flex().flex_col().gap_3();
         if actions_enabled {
-            content = content.child(small_button(
-                palette,
+            content = content.child(settings_button(
                 "sync-v3-preview",
                 t!("settings.syncV3Preview"),
                 cx.listener(|this, _, _, cx| {
@@ -220,8 +204,7 @@ impl SettingsPanel {
                 let keep_local = conflicts.clone();
                 let keep_remote = conflicts.clone();
                 toolbar = toolbar
-                    .child(small_button(
-                        palette,
+                    .child(settings_button(
                         "sync-conflict-clear",
                         t!("settings.syncConflictClearSelection"),
                         cx.listener(|this, _, _, cx| {
@@ -230,8 +213,7 @@ impl SettingsPanel {
                             cx.notify();
                         }),
                     ))
-                    .child(small_button(
-                        palette,
+                    .child(settings_button(
                         "sync-conflict-keep-local",
                         t!("settings.syncConflictKeepLocal"),
                         cx.listener(move |this, _, _, cx| {
@@ -247,8 +229,7 @@ impl SettingsPanel {
                             cx.notify();
                         }),
                     ))
-                    .child(small_button(
-                        palette,
+                    .child(settings_button(
                         "sync-conflict-keep-remote",
                         t!("settings.syncConflictKeepRemote"),
                         cx.listener(move |this, _, _, cx| {
@@ -284,8 +265,7 @@ impl SettingsPanel {
 
             // Groups are the primary surface; the per-field list is opt-in.
             let rows_visible = self.cloud_sync_conflict_rows_visible;
-            content = content.child(small_button(
-                palette,
+            content = content.child(settings_button(
                 "sync-conflict-toggle-details",
                 if rows_visible {
                     t!("settings.syncConflictHideDetails").to_string()
@@ -396,8 +376,7 @@ impl SettingsPanel {
                                     .child(truncated(label, CANDIDATE_CHARS))
                                     .tooltip(full_text_tooltip(label.clone())),
                             )
-                            .child(group_apply_button(
-                                palette,
+                            .child(settings_button(
                                 format!("sync-conflict-group-{group_index}-{candidate_index}"),
                                 t!("settings.syncConflictApplyGroupChoice"),
                                 cx.listener(move |this, _, _, cx| {
@@ -468,8 +447,7 @@ impl SettingsPanel {
                         } else {
                             ""
                         };
-                        row = row.child(small_button(
-                            palette,
+                        row = row.child(settings_button(
                             format!("sync-conflict-choice-{index}-{candidate_index}"),
                             format!("{staged_mark}{}", truncated(label, CANDIDATE_CHARS)),
                             cx.listener(move |this, _, _, cx| {
@@ -506,8 +484,7 @@ impl SettingsPanel {
             if actions_enabled && staged_count > 0 {
                 let decisions: Vec<(usize, usize)> =
                     choices.iter().map(|(c, v)| (*c, *v)).collect();
-                content = content.child(small_button(
-                    palette,
+                content = content.child(settings_button(
                     "sync-conflict-apply-staged",
                     t!("settings.syncConflictApplyStaged", count = staged_count),
                     cx.listener(move |this, _, _, cx| {
@@ -520,8 +497,7 @@ impl SettingsPanel {
         }
 
         if actions_enabled {
-            content = content.child(small_button(
-                palette,
+            content = content.child(settings_button(
                 "sync-v3-apply",
                 t!("settings.syncV3Apply"),
                 cx.listener(|this, _, _, cx| {

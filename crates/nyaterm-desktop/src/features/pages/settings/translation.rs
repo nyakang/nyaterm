@@ -4,8 +4,9 @@ use gpui::{AnyElement, Context, FontWeight, IntoElement, SharedString, div, prel
 use nyaterm_ui::NyaSelectOption;
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::pages::settings::settings_button;
 use crate::models::TranslateInputField;
-use crate::widgets::{small_button, status_pill};
+use crate::widgets::status_pill;
 
 use super::settings_form_section;
 
@@ -132,8 +133,7 @@ impl SettingsPanel {
                                 TranslateInputField::DeeplApiKey,
                                 cx,
                             ))
-                            .child(small_button(
-                                palette,
+                            .child(settings_button(
                                 "translation-clear-deepl",
                                 remove_label.clone(),
                                 cx.listener(|this, _, _, cx| {
@@ -175,8 +175,7 @@ impl SettingsPanel {
                                         cx,
                                     )),
                             )
-                            .child(small_button(
-                                palette,
+                            .child(settings_button(
                                 "translation-clear-baidu",
                                 remove_label.clone(),
                                 cx.listener(|this, _, _, cx| {
@@ -218,8 +217,7 @@ impl SettingsPanel {
                                         cx,
                                     )),
                             )
-                            .child(small_button(
-                                palette,
+                            .child(settings_button(
                                 "translation-clear-ali",
                                 remove_label.clone(),
                                 cx.listener(|this, _, _, cx| {
@@ -261,8 +259,7 @@ impl SettingsPanel {
                                         cx,
                                     )),
                             )
-                            .child(small_button(
-                                palette,
+                            .child(settings_button(
                                 "translation-clear-youdao",
                                 remove_label,
                                 cx.listener(|this, _, _, cx| {

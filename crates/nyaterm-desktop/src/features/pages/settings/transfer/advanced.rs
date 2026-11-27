@@ -34,21 +34,19 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.downloadConcurrentTasks"),
-                    Some(SharedString::from(t!(
-                        "settings.downloadConcurrentTasksDesc"
-                    ))),
+                    None,
                     self.existing_number_input_box("settings.number.transfer-download-threads"),
                 ))
                 .child(settings_form_row(
                     palette,
                     t!("settings.uploadConcurrentTasks"),
-                    Some(SharedString::from(t!("settings.uploadConcurrentTasksDesc"))),
+                    None,
                     self.existing_number_input_box("settings.number.transfer-upload-threads"),
                 ))
                 .child(settings_form_row(
                     palette,
                     t!("settings.maxTransferRetries"),
-                    Some(SharedString::from(t!("settings.maxTransferRetriesDesc"))),
+                    None,
                     self.existing_number_input_box("settings.number.transfer-max-retries"),
                 ))
                 .child(settings_form_row(

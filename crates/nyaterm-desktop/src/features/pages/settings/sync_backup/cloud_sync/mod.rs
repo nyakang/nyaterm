@@ -7,6 +7,7 @@ use gpui::{
 use nyaterm_core::{CloudConflictKind, CloudSyncSettings};
 use nyaterm_ui::NyaSelectOption;
 
+use crate::features::pages::settings::settings_button;
 use crate::features::sync::CloudSyncLiveState;
 use crate::features::{
     formatting::compact_id, formatting::configured_cloud_sync_provider,
@@ -15,7 +16,6 @@ use crate::features::{
 };
 use crate::models::{CloudSyncConflictState, CloudSyncInputField, SettingsTab};
 use crate::theme::ThemePalette;
-use crate::widgets::small_button;
 
 use super::super::{
     settings_form_row, settings_form_section, settings_input_control, settings_switch_with_enabled,
@@ -190,8 +190,7 @@ impl SettingsPanel {
                     .gap_2()
                     .child(
                         if remote_inconsistent && has_recovery_candidate && !can_pull {
-                            small_button(
-                                palette,
+                            settings_button(
                                 "cloud-conflict-recover-current",
                                 t!("settings.useCurrentRemoteSnapshot"),
                                 cx.listener(move |this, _, window, cx| {
@@ -209,8 +208,7 @@ impl SettingsPanel {
                             // overwrite below is the only action offered.
                             div().into_any_element()
                         } else if can_pull {
-                            small_button(
-                                palette,
+                            settings_button(
                                 "cloud-conflict-force-pull",
                                 t!("settings.downloadRemoteVersion"),
                                 cx.listener(move |this, _, window, cx| {
@@ -435,7 +433,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.enableCloudSync"),
-                        Some(SharedString::from(t!("settings.enableCloudSyncDesc"))),
+                        None,
                         div()
                             .debug_selector(|| "cloud-sync-enabled-control".into())
                             .child(settings_switch_with_enabled(
@@ -467,8 +465,7 @@ impl SettingsPanel {
                                         .text_color(rgb(palette.text_muted))
                                         .child(t!("settings.syncMasterPasswordMissingDesc")),
                                 )
-                                .child(small_button(
-                                    palette,
+                                .child(settings_button(
                                     "cloud-open-security",
                                     t!("settings.openSecuritySettings"),
                                     cx.listener(|this, _, _, cx| {
@@ -502,7 +499,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.deviceName"),
-                        Some(SharedString::from(t!("settings.deviceNameDesc"))),
+                        None,
                         self.cloud_sync_input(
                             "cloud-sync-device-name",
                             t!("settings.deviceName"),
@@ -888,33 +885,13 @@ fn cloud_sync_drive_validation_key(
 }
 
 fn cloud_sync_action_button(
-    palette: ThemePalette,
+    _palette: ThemePalette,
     id: &'static str,
     label: impl Into<SharedString>,
     enabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    let hover = palette.hover;
-    div()
-        .id(id)
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.surface_elevated))
-        .text_color(rgb(palette.text))
-        .text_xs()
-        .opacity(if enabled { 1.0 } else { 0.45 })
-        .when(enabled, |this| {
-            this.cursor_pointer()
-                .hover(move |this| this.bg(rgb(hover)))
-                .on_click(on_click)
-        })
-        .child(label)
+    settings_button(id, label, on_click).disabled(!enabled)
 }
 
 fn cloud_sync_status_item(

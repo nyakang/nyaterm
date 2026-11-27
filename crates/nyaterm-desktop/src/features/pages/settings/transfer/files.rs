@@ -84,7 +84,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.duplicateStrategy"),
-                        Some(SharedString::from(t!("settings.duplicateStrategyDesc"))),
+                        None,
                         self.settings_select_control(
                             "settings.transfer.duplicate-strategy",
                             vec![

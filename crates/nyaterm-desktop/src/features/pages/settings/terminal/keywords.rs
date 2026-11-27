@@ -14,8 +14,9 @@ use nyaterm_core::keyword_highlight_presets::{
     builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized, builtin_keyword_rule_label,
     keyword_highlight_color_palette,
 };
-use nyaterm_ui::NyaTooltip;
-use nyaterm_ui::{ColorSelect, NyaColorPickerEvent, NyaColorPickerState, NyaSwitch};
+use nyaterm_ui::{
+    ColorSelect, NYA_FORM_CONTROL_HEIGHT_PX, NyaColorPickerEvent, NyaColorPickerState, NyaSwitch,
+};
 
 use super::super::{
     settings_form_row, settings_form_section, settings_switch, settings_switch_with_enabled,
@@ -924,7 +925,7 @@ fn keyword_highlight_static_input(
         .when_else(
             multi_line,
             |this| this.h(px(88.)).py_2().items_start(),
-            |this| this.h(px(30.)).items_center(),
+            |this| this.h(px(NYA_FORM_CONTROL_HEIGHT_PX)).items_center(),
         )
         .px_2()
         .rounded_sm()
@@ -942,42 +943,18 @@ fn keyword_highlight_static_input(
 }
 
 fn keyword_highlight_action_button(
-    palette: ThemePalette,
+    _palette: ThemePalette,
     id: impl Into<String>,
     icon_path: &'static str,
     label: impl Into<SharedString>,
     enabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    let hover_bg = palette.hover;
-    let hover_text = palette.text;
-
-    div()
-        .id(SharedString::from(id.into()))
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.surface_elevated))
-        .text_color(rgb(palette.text))
-        .text_xs()
-        .child(
-            svg()
-                .size(px(14.))
-                .flex_none()
-                .path(icon_path)
-                .text_color(rgb(palette.text)),
-        )
-        .child(div().ml_1().child(label))
-        .when(enabled, |this| {
-            this.cursor_pointer()
-                .hover(move |this| this.bg(rgb(hover_bg)).text_color(rgb(hover_text)))
-                .on_click(on_click)
-        })
+    nyaterm_ui::NyaButton::new(id.into(), label)
+        .form_control()
+        .icon(icon_path)
+        .disabled(!enabled)
+        .on_click(on_click)
 }
 
 fn keyword_highlight_icon_button(
@@ -988,29 +965,12 @@ fn keyword_highlight_icon_button(
     enabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let tooltip: SharedString = tooltip.into();
-    let hover_bg = rgba((palette.danger << 8) | 0x18);
-
-    div()
-        .id(SharedString::from(id.into()))
-        .size(px(28.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .text_color(rgb(palette.danger))
-        .child(
-            svg()
-                .size(px(15.))
-                .path(icon_path)
-                .text_color(rgb(palette.danger)),
-        )
-        .tooltip(move |window, cx| NyaTooltip::new(tooltip.clone()).build(window, cx))
-        .when(enabled, |this| {
-            this.cursor_pointer()
-                .hover(move |this| this.bg(hover_bg))
-                .on_click(on_click)
-        })
+    nyaterm_ui::NyaIconButton::new(id.into(), icon_path)
+        .form_control()
+        .color(rgb(palette.danger))
+        .tooltip(tooltip)
+        .disabled(!enabled)
+        .on_click(on_click)
 }
 
 fn keyword_highlight_rule_switch(
