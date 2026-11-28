@@ -1,3 +1,6 @@
+pub use nyaterm_native_protocol::clipboard::{
+    ClipboardAccess, ClipboardCommand, ClipboardContent, ClipboardEvent,
+};
 use sha2::{Digest, Sha256};
 
 pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 4 * 1024 * 1024;

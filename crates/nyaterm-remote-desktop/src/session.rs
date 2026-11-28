@@ -73,6 +73,10 @@ fn control_byte_cost(event: &RdpRuntimeEvent) -> usize {
                     RemoteCursorEvent::Position(_) | RemoteCursorEvent::Visibility(_) => 32,
                 }
         }
+        RdpRuntimeEvent::ManagedClipboard { session_id, event } => {
+            session_id.len()
+                + serde_json::to_vec(event).map_or(crate::CONTROL_PAYLOAD_LIMIT, |v| v.len())
+        }
         RdpRuntimeEvent::Clipboard {
             session_id, text, ..
         } => session_id.len() + text.len() + 64,
@@ -719,6 +723,7 @@ impl RdpSessionManager {
         let start_result = send_control(
             &record.writer,
             &RdpControlMessage::ClientHello {
+                managed_clipboard: true,
                 version: PROTOCOL_VERSION,
                 frame_update_complete: self.presentation_config.is_some(),
                 server_redirection: true,
@@ -905,6 +910,26 @@ impl RdpSessionManager {
             RdpControlMessage::Resize {
                 session_id: session_id.to_string(),
                 metrics,
+            },
+        )
+    }
+
+    pub fn send_managed_clipboard(
+        &self,
+        session_id: &str,
+        command: crate::clipboard::ClipboardCommand,
+    ) -> Result<(), RdpError> {
+        if !self.confirmed_capabilities(session_id)?.managed_clipboard {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "Update the RDP component for managed clipboard support",
+            ));
+        }
+        self.send(
+            session_id,
+            RdpControlMessage::ManagedClipboard {
+                session_id: session_id.into(),
+                command,
             },
         )
     }
@@ -1181,6 +1206,19 @@ struct ReaderStartup {
     config: RdpSessionConfig,
 }
 
+fn disable_legacy_clipboard(
+    config: &mut RdpSessionConfig,
+    capabilities: Option<RdpServerCapabilities>,
+) -> bool {
+    if config.redirection.clipboard && !capabilities.is_some_and(|c| c.managed_clipboard) {
+        config.redirection.clipboard = false;
+        config.normalize_backend_settings();
+        true
+    } else {
+        false
+    }
+}
+
 fn spawn_reader(
     session_id: String,
     mut stdout: std::process::ChildStdout,
@@ -1261,17 +1299,28 @@ fn spawn_reader(
             };
             if result.is_ok() && hello_received {
                 queue.heartbeat.hello();
-                if let Some(config) = pending_config.take()
-                    && let Err(error) = send_control(
+                if let Some(mut config) = pending_config.take() {
+                    if disable_legacy_clipboard(
+                        &mut config,
+                        capabilities.lock().ok().and_then(|c| *c),
+                    ) {
+                        queue.push_control(RdpRuntimeEvent::Error {
+                            session_id: session_id.clone(),
+                            error: RdpError::new(RdpErrorKind::Clipboard,
+                                "Clipboard disabled for this connection; update the RDP native component in Plugins"),
+                            fatal: false,
+                        });
+                    }
+                    if let Err(error) = send_control(
                         &writer,
                         &RdpControlMessage::Connect {
                             session_id: session_id.clone(),
                             config,
                         },
-                    )
-                {
-                    push_reader_error(&session_id, &queue, &state, error.kind, error.message);
-                    return;
+                    ) {
+                        push_reader_error(&session_id, &queue, &state, error.kind, error.message);
+                        return;
+                    }
                 }
             }
             if let Err(error) = result {
@@ -1388,6 +1437,7 @@ fn handle_control(
         | RdpControlMessage::Input { .. }
         | RdpControlMessage::SecureAttention { .. }
         | RdpControlMessage::Resize { .. }
+        | RdpControlMessage::ManagedClipboard { .. }
         | RdpControlMessage::ClipboardTransferCancel { .. }
         | RdpControlMessage::RedirectResponse { .. }
         | RdpControlMessage::CertificateResponse { .. }
@@ -1434,6 +1484,25 @@ fn handle_control(
                 session_id: session_id.to_string(),
                 state: new_state,
                 message,
+            });
+        }
+        RdpControlMessage::ManagedClipboardEvent {
+            session_id: event_session,
+            event,
+        } if event_session == session_id => {
+            if !capabilities
+                .lock()
+                .ok()
+                .is_some_and(|c| c.is_some_and(|c| c.managed_clipboard))
+            {
+                return Err(RdpError::new(
+                    RdpErrorKind::Protocol,
+                    "Unnegotiated clipboard event",
+                ));
+            }
+            queue.push_control(RdpRuntimeEvent::ManagedClipboard {
+                session_id: session_id.into(),
+                event,
             });
         }
         RdpControlMessage::Clipboard {
@@ -1645,6 +1714,45 @@ mod tests {
         RdpClipboardTransferStatus, RdpControlMessage, RdpFrameEvent, RdpInputEvent,
         RdpRuntimeEvent, RdpServerCapabilities, RdpSessionState, RemoteCursorEvent,
     };
+
+    #[test]
+    fn legacy_helper_disables_only_ephemeral_clipboard_settings() {
+        let saved = crate::RdpSessionConfig {
+            relay: None,
+            backend: crate::RdpBackend::Builtin,
+            windows_authentication: None,
+            name: "fixture".into(),
+            host: "localhost".into(),
+            port: 3389,
+            username: String::new(),
+            domain: String::new(),
+            password: None,
+            use_nla: true,
+            certificate_policy: Default::default(),
+            administrative_session: false,
+            display: Default::default(),
+            clipboard: Default::default(),
+            redirection: Default::default(),
+            reconnect: Default::default(),
+        };
+        let mut launch = saved.clone();
+        assert!(super::disable_legacy_clipboard(
+            &mut launch,
+            Some(RdpServerCapabilities::default())
+        ));
+        assert!(!launch.redirection.clipboard);
+        assert!(saved.redirection.clipboard);
+        assert_eq!(launch.clipboard.mode, crate::RdpClipboardMode::Disabled);
+        let mut supported = saved;
+        assert!(!super::disable_legacy_clipboard(
+            &mut supported,
+            Some(RdpServerCapabilities {
+                managed_clipboard: true,
+                ..Default::default()
+            })
+        ));
+        assert!(supported.redirection.clipboard);
+    }
 
     #[test]
     fn pixel_budget_survives_drain_and_releases_on_reset_and_close() {
@@ -1903,6 +2011,7 @@ mod tests {
         let capabilities = Arc::new(Mutex::new(None));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let advertised = RdpServerCapabilities {
+            managed_clipboard: true,
             committed_unicode_text: true,
             secure_attention: true,
             frame_update_complete: false,
@@ -1980,6 +2089,7 @@ mod tests {
         let error = handle_control(
             "s",
             RdpControlMessage::ClientHello {
+                managed_clipboard: true,
                 version: PROTOCOL_VERSION,
                 frame_update_complete: false,
                 server_redirection: false,
@@ -2016,6 +2126,7 @@ mod tests {
         let queue = Arc::new(EventQueue::default());
         let state = Arc::new(Mutex::new(RdpSessionState::Connected));
         let capabilities = Arc::new(Mutex::new(Some(RdpServerCapabilities {
+            managed_clipboard: true,
             committed_unicode_text: true,
             secure_attention: true,
             frame_update_complete: false,
@@ -2041,6 +2152,7 @@ mod tests {
         assert_eq!(
             *capabilities.lock().unwrap(),
             Some(RdpServerCapabilities {
+                managed_clipboard: true,
                 committed_unicode_text: true,
                 secure_attention: true,
                 frame_update_complete: false,

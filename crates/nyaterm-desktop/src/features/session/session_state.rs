@@ -353,6 +353,9 @@ impl NyaTermApp {
         let previous_session_id = self.session.active_id_owned();
         let switching_sessions = previous_session_id.as_deref() != Some(session_id);
         if switching_sessions {
+            if let Some(previous) = previous_session_id.as_deref() {
+                self.revoke_rdp_clipboard(Some(previous), cx);
+            }
             self.close_action_link_menu(cx);
             self.clear_terminal_composition(cx);
             if let Some(previous_id) = previous_session_id.as_deref() {

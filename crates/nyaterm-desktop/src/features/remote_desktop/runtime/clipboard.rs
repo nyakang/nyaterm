@@ -1,3 +1,4 @@
+mod worker;
 use crate::features::NyaTermApp;
 use crate::models::TransferJobKind;
 use crate::models::TransferJobStatus;
@@ -6,10 +7,125 @@ use nyaterm_remote_desktop::ClipboardOrigin;
 use nyaterm_remote_desktop::RemoteDesktopViewState;
 use std::time::Duration;
 use std::time::Instant;
+pub(in crate::features::remote_desktop) use worker::ClipboardWorker;
 
 pub(super) const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 impl NyaTermApp {
+    pub(in crate::features) fn revoke_rdp_clipboard(
+        &mut self,
+        session_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let owner = self
+            .remote_desktop
+            .clipboard_worker
+            .as_ref()
+            .and_then(|worker| worker.owner());
+        if let Some(owner) = owner
+            && session_id.is_none_or(|id| id == owner)
+        {
+            self.remote_desktop.revoke_clipboard(Some(&owner));
+            self.stop_rdp_clipboard_jobs(&owner, cx);
+        }
+    }
+
+    pub(super) fn drive_managed_rdp_clipboard(
+        &mut self,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_desktop.clipboard_worker.is_none() {
+            if !self.remote_desktop.sessions.values().any(|session| {
+                session
+                    .server_capabilities
+                    .is_some_and(|c| c.managed_clipboard)
+            }) {
+                return;
+            }
+            match ClipboardWorker::new(self.remote_desktop.manager.clone()) {
+                Ok(worker) => self.remote_desktop.clipboard_worker = Some(worker),
+                Err(_) => {
+                    self.shell.set_status("Cannot start RDP clipboard worker");
+                    return;
+                }
+            }
+        }
+        let worker = self
+            .remote_desktop
+            .clipboard_worker
+            .as_ref()
+            .expect("clipboard worker");
+        let owner = worker.owner();
+        let eligible = |id: &str| {
+            self.remote_desktop.sessions.get(id).is_some_and(|session| {
+                matches!(session.state, RemoteDesktopViewState::Connected)
+                    && session
+                        .server_capabilities
+                        .is_some_and(|c| c.managed_clipboard)
+                    && self.session.metadata(id).is_some_and(|m| {
+                        matches!(&m.launch_config,
+                    crate::models::SessionLaunchConfig::Rdp(c) if c.redirection.clipboard)
+                    })
+            })
+        };
+        if self.security.screen_locked() || owner.as_deref().is_some_and(|id| !eligible(id)) {
+            worker.set_policy(None, false);
+        } else {
+            let active = window.is_window_active()
+                && cx
+                    .active_window()
+                    .is_none_or(|w| w == window.window_handle());
+            let owns_window = owner
+                .as_deref()
+                .is_some_and(|id| self.remote_desktop_session_in_window(id, window));
+            if active || owns_window {
+                let target = self
+                    .remote_desktop_input_session(window)
+                    .filter(|id| eligible(id));
+                let target = target.and_then(|id| {
+                    self.remote_desktop
+                        .sessions
+                        .get(id)
+                        .map(|session| (id.to_owned(), session.start_token.clone()))
+                });
+                worker.set_policy(target, active);
+            }
+        }
+        let next_owner = worker.owner();
+        let results = worker.results();
+        if !results.is_empty() {
+            cx.notify();
+        }
+        if next_owner != owner
+            && let Some(previous) = owner
+        {
+            self.stop_rdp_clipboard_jobs(&previous, cx);
+        }
+        for result in results {
+            if let Some(error) = &result.error {
+                self.shell.set_status(error.clone());
+            }
+            if let Some(transfer_id) = result.transfer_id {
+                self.transfer.visit_transfer_jobs_mut(|job| {
+                    if job.session_id.as_deref() == Some(&result.session_id)
+                        && matches!(&job.kind, TransferJobKind::RdpClipboard { .. })
+                        && job.id == transfer_id
+                        && matches!(job.status, TransferJobStatus::Running)
+                    {
+                        job.status = if result.error.is_some() {
+                            TransferJobStatus::Cancelled
+                        } else {
+                            TransferJobStatus::Completed
+                        };
+                        job.detail = result.error.clone().unwrap_or_default();
+                    }
+                });
+                self.defer_transfer_panel_snapshot_flush(cx);
+            }
+        }
+    }
+
     pub(super) fn stop_rdp_clipboard_jobs(&mut self, session_id: &str, cx: &mut Context<Self>) {
         let mut changed = false;
         self.transfer.visit_transfer_jobs_mut(|job| {
@@ -21,7 +137,7 @@ impl NyaTermApp {
                 )
             {
                 job.status = TransferJobStatus::Cancelled;
-                job.detail = "RDP session disconnected".to_string();
+                job.detail = "RDP clipboard ownership ended".to_string();
                 changed = true;
             }
         });
@@ -59,9 +175,7 @@ impl NyaTermApp {
             self.session
                 .metadata(&session_id)
                 .and_then(|metadata| match &metadata.launch_config {
-                    crate::models::SessionLaunchConfig::Rdp(_) => {
-                        Some(RemoteDesktopClipboardTarget::Rdp)
-                    }
+                    crate::models::SessionLaunchConfig::Rdp(_) => None,
                     crate::models::SessionLaunchConfig::Vnc(config) if config.clipboard.enabled => {
                         Some(RemoteDesktopClipboardTarget::Vnc)
                     }
@@ -101,15 +215,6 @@ impl NyaTermApp {
             return false;
         };
         match clipboard_target {
-            RemoteDesktopClipboardTarget::Rdp => {
-                if let Err(error) = self
-                    .remote_desktop
-                    .manager
-                    .set_clipboard_text(&session_id, text)
-                {
-                    session.error = Some(error.into());
-                }
-            }
             RemoteDesktopClipboardTarget::Spice => {
                 if let Err(error) = self.remote_desktop.spice_manager.send(
                     &session_id,
@@ -136,7 +241,6 @@ impl NyaTermApp {
 
 #[derive(Clone, Copy)]
 enum RemoteDesktopClipboardTarget {
-    Rdp,
     Vnc,
     Spice,
 }

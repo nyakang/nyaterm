@@ -1072,6 +1072,7 @@ fn cancelling_a_pending_retry_keeps_the_error_being_shown() {
 #[test]
 fn committed_text_requires_the_confirmed_protocol_capability() {
     let rdp_supported = RdpServerCapabilities {
+        managed_clipboard: true,
         committed_unicode_text: true,
         secure_attention: false,
         frame_update_complete: false,
@@ -1197,6 +1198,7 @@ fn vnc_view_only_is_rejected_before_manager_dispatch() {
 #[test]
 fn secure_attention_requires_rdp_connected_state_and_confirmed_capability() {
     let supported = Some(RdpServerCapabilities {
+        managed_clipboard: true,
         committed_unicode_text: true,
         secure_attention: true,
         frame_update_complete: false,

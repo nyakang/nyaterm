@@ -1,6 +1,6 @@
 pub mod activex;
 mod certificate;
-mod clipboard;
+pub mod clipboard;
 mod frame;
 mod heartbeat;
 mod helper_process;

@@ -44,6 +44,7 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     /// `None` while the session renders in the normal workspace pane.
     pub(super) fullscreen_window: Option<nyaterm_ui::NyaWindowHandle>,
     pub(super) drain_cursor: usize,
+    pub(super) clipboard_worker: Option<super::runtime::clipboard::ClipboardWorker>,
     pub(super) last_clipboard_poll: Option<Instant>,
     pub(super) metrics_enabled: bool,
     pub(super) metrics_last_report: Instant,
@@ -385,6 +386,7 @@ impl RemoteDesktopFeatureState {
             fullscreen_window: None,
             drain_cursor: 0,
             last_clipboard_poll: None,
+            clipboard_worker: None,
             metrics_enabled: std::env::var("NYATERM_RDP_METRICS").as_deref() == Ok("1"),
             metrics_last_report: Instant::now(),
             metrics_control_events: 0,
@@ -442,11 +444,22 @@ impl RemoteDesktopFeatureState {
         self.sessions.get(session_id).map(|session| session.state)
     }
 
+    pub(in crate::features) fn revoke_clipboard(&self, session_id: Option<&str>) {
+        if let Some(worker) = &self.clipboard_worker
+            && (session_id.is_none() || worker.owner().as_deref() == session_id)
+        {
+            worker.set_policy(None, false);
+        }
+    }
+
     pub(in crate::features) fn cancel_clipboard_transfer(
         &self,
         session_id: &str,
         transfer_id: &str,
     ) -> Result<(), RdpError> {
+        if let Some(worker) = &self.clipboard_worker {
+            worker.cancel_pending(session_id);
+        }
         self.manager
             .cancel_clipboard_transfer(session_id, transfer_id)
     }

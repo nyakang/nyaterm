@@ -281,8 +281,8 @@ impl NyaTermApp {
         if matches!(job.kind, TransferJobKind::RdpClipboard { .. }) {
             let id = job.id.clone();
             let session_id = job.session_id.clone();
-            job.status = TransferJobStatus::Cancelling;
-            job.detail = "Cancelling".to_string();
+            job.status = TransferJobStatus::Cancelled;
+            job.detail = "RDP clipboard transfer cancelled".to_string();
             if let Some(session_id) = session_id
                 && let Err(error) = self
                     .remote_desktop

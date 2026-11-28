@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+arboard = { version = "3.7", features = ["wayland-data-control"] }
 semver.workspace = true
 nyaterm-x11.workspace = true
 nyaterm-remote-monitor-gpui.workspace = true

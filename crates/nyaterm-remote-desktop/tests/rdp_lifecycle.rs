@@ -36,6 +36,7 @@ fn recv(stdout: &mut impl std::io::Read) -> RdpControlMessage {
 
 fn client_hello() -> RdpControlMessage {
     RdpControlMessage::ClientHello {
+        managed_clipboard: true,
         version: PROTOCOL_VERSION,
         frame_update_complete: false,
         server_redirection: false,
@@ -48,10 +49,11 @@ fn assert_server_hello(message: RdpControlMessage) {
         RdpControlMessage::ServerHello {
             version: PROTOCOL_VERSION,
             capabilities: RdpServerCapabilities {
+                managed_clipboard: true,
                 committed_unicode_text: true,
                 secure_attention: true,
                 frame_update_complete: true,
-                server_redirection: false,
+                server_redirection: true,
             },
         }
     ));
@@ -144,6 +146,14 @@ fn certificate_request() -> RdpCertificateRequest {
 
 fn non_client_hello_messages() -> Vec<RdpControlMessage> {
     vec![
+        RdpControlMessage::ManagedClipboard {
+            session_id: "foreign".into(),
+            command: nyaterm_remote_desktop::clipboard::ClipboardCommand::Authorize {
+                epoch: 1,
+                access: nyaterm_remote_desktop::clipboard::ClipboardAccess::Disabled,
+                cache_root: Default::default(),
+            },
+        },
         RdpControlMessage::ServerHello {
             version: PROTOCOL_VERSION,
             capabilities: RdpServerCapabilities::default(),
@@ -218,6 +228,14 @@ fn non_client_hello_messages() -> Vec<RdpControlMessage> {
 
 fn helper_only_messages() -> Vec<RdpControlMessage> {
     vec![
+        RdpControlMessage::ManagedClipboardEvent {
+            session_id: "foreign".into(),
+            event: nyaterm_remote_desktop::clipboard::ClipboardEvent::Started {
+                epoch: 1,
+                request: 1,
+                revision: 1,
+            },
+        },
         RdpControlMessage::ServerHello {
             version: PROTOCOL_VERSION,
             capabilities: RdpServerCapabilities::default(),
@@ -266,6 +284,14 @@ fn helper_only_messages() -> Vec<RdpControlMessage> {
 
 fn foreign_session_messages() -> Vec<RdpControlMessage> {
     vec![
+        RdpControlMessage::ManagedClipboard {
+            session_id: "foreign".into(),
+            command: nyaterm_remote_desktop::clipboard::ClipboardCommand::Authorize {
+                epoch: 1,
+                access: nyaterm_remote_desktop::clipboard::ClipboardAccess::Disabled,
+                cache_root: Default::default(),
+            },
+        },
         RdpControlMessage::Input {
             session_id: "foreign-session".to_string(),
             events: vec![RdpInputEvent::ReleaseAllInputs],
@@ -377,6 +403,7 @@ fn every_non_client_hello_message_and_frame_fail_before_hello() {
 #[ignore = "requires independently built native helper"]
 fn repeated_hello_wrong_version_and_helper_only_messages_fail_closed() {
     assert_helper_rejects(vec![RdpControlMessage::ClientHello {
+        managed_clipboard: true,
         version: PROTOCOL_VERSION - 1,
         frame_update_complete: false,
         server_redirection: false,
@@ -453,6 +480,7 @@ fn older_and_newer_helpers_are_explicitly_incompatible_with_version_thirteen() {
     assert_eq!(PROTOCOL_VERSION, 13);
     for version in [9, 10, PROTOCOL_VERSION + 1] {
         assert_helper_rejects(vec![RdpControlMessage::ClientHello {
+            managed_clipboard: true,
             version,
             frame_update_complete: false,
             server_redirection: false,
@@ -511,6 +539,7 @@ fn mismatched_client_receives_actual_helper_version_before_exit() {
         send(
             &mut stdin,
             &RdpControlMessage::ClientHello {
+                managed_clipboard: true,
                 version,
                 frame_update_complete: false,
                 server_redirection: false,

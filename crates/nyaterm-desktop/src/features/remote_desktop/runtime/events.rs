@@ -8,9 +8,9 @@ use futures::StreamExt as _;
 use gpui::{ClipboardItem, Context, Window};
 use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 use nyaterm_remote_desktop::{
-    ClipboardOrigin, RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpClipboardTransferStatus, RdpError,
-    RdpErrorKind, RdpFrameEvent, RdpRuntimeEvent, RdpSessionState, RemoteDesktopError,
-    RemoteDesktopViewState, VncRuntimeEvent, VncServerCapabilities, VncSessionState,
+    RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpClipboardTransferStatus, RdpError, RdpErrorKind,
+    RdpFrameEvent, RdpRuntimeEvent, RdpSessionState, RemoteDesktopError, RemoteDesktopViewState,
+    VncRuntimeEvent, VncServerCapabilities, VncSessionState,
 };
 use nyaterm_store::StoreDomain;
 #[cfg(windows)]
@@ -385,6 +385,7 @@ impl NyaTermApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.drive_managed_rdp_clipboard(window, cx);
         if cx
             .active_window()
             .is_some_and(|active| active != window.window_handle())
@@ -599,6 +600,10 @@ impl NyaTermApp {
     ) {
         match event {
             RdpRuntimeEvent::State { state, message, .. } => {
+                if !matches!(state, RdpSessionState::Connected) {
+                    self.revoke_rdp_clipboard(Some(session_id), cx);
+                }
+
                 let server_capabilities = matches!(state, RdpSessionState::Connected)
                     .then(|| self.remote_desktop.manager.server_capabilities(session_id))
                     .flatten();
@@ -666,31 +671,32 @@ impl NyaTermApp {
             RdpRuntimeEvent::Cursor { event, .. } => {
                 self.apply_remote_cursor_batch(session_id, vec![event], window);
             }
-            RdpRuntimeEvent::Clipboard { text, .. } => {
-                if self.remote_desktop_input_session(window) != Some(session_id)
-                    || cx
-                        .active_window()
-                        .is_some_and(|active| active != window.window_handle())
+            RdpRuntimeEvent::ManagedClipboard { event, .. } => {
+                self.drive_managed_rdp_clipboard(window, cx);
+                if let Some(worker) = &self.remote_desktop.clipboard_worker
+                    && !worker.receive(session_id, event)
                 {
-                    return;
-                }
-                let accepted = self
-                    .remote_desktop
-                    .sessions
-                    .get_mut(session_id)
-                    .and_then(|session| {
-                        session
-                            .clipboard
-                            .accept(ClipboardOrigin::Remote, &text)
-                            .ok()
-                            .flatten()
-                    })
-                    .is_some();
-                if accepted {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.revoke_rdp_clipboard(Some(session_id), cx);
+                    self.shell
+                        .set_status("RDP clipboard queue is full; copy again to retry");
                 }
             }
-            RdpRuntimeEvent::ClipboardTransfer { progress, .. } => {
+            RdpRuntimeEvent::Clipboard { .. } => {
+                // Managed sessions publish only through the background worker.
+            }
+            RdpRuntimeEvent::ClipboardTransfer { mut progress, .. } => {
+                if self
+                    .remote_desktop
+                    .clipboard_worker
+                    .as_ref()
+                    .and_then(|worker| worker.owner())
+                    .as_deref()
+                    != Some(session_id)
+                    && matches!(progress.status, RdpClipboardTransferStatus::Running)
+                {
+                    progress.status = RdpClipboardTransferStatus::Cancelled;
+                    progress.error = Some("RDP clipboard ownership ended".into());
+                }
                 let status = match progress.status {
                     RdpClipboardTransferStatus::Running => TransferJobStatus::Running,
                     RdpClipboardTransferStatus::Completed => TransferJobStatus::Completed,
@@ -707,8 +713,10 @@ impl NyaTermApp {
                     item_count_total: Some(progress.total_files),
                 };
                 if let Some(job) = self.transfer.transfer_job_mut(&progress.id) {
-                    job.status = status;
-                    job.detail = progress.error.unwrap_or_default();
+                    if job.status != TransferJobStatus::Cancelled {
+                        job.status = status;
+                        job.detail = progress.error.unwrap_or_default();
+                    }
                     job.update_progress(sample);
                 } else {
                     self.transfer.enqueue_transfer_job(TransferJobState {

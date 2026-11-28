@@ -1,7 +1,7 @@
 //! Remote desktop adapters grouped by lifecycle, events, input, framebuffer, trust, resize and clipboard.
 //! Protocol managers and feature state retain their existing single owners.
 
-mod clipboard;
+pub(super) mod clipboard;
 mod errors;
 mod events;
 mod framebuffer;

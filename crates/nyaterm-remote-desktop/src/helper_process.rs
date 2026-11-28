@@ -549,6 +549,7 @@ mod tests {
 
     fn packet(version: u32) -> crate::Packet {
         encode_control(&RdpControlMessage::ClientHello {
+            managed_clipboard: true,
             version,
             frame_update_complete: false,
             server_redirection: false,
