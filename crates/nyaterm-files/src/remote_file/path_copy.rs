@@ -2,6 +2,7 @@ use crate::file_browser::{FileBrowserService, valid_file_browser_child_name};
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{FileCopyRequest, FileCopySummary, FileTransferEndpoint};
 use crate::sftp::{RemoteFilePath, SftpFileType};
+use crate::sftp_transfer_types::download_targets::{DownloadSource, FileStamp};
 use crate::sftp_transfer_types::{
     SftpDuplicateCacheKey, SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest,
     SftpTransferDirection, SftpTransferProgress,
@@ -444,25 +445,21 @@ fn node(
             (&promised_local, &request.source)
     {
         let raw = crate::adb::raw_path(path)?;
-        let stamps = crate::download_path::ResumeStampStore::system();
-        // Same dual gate as the SFTP promised path: the in-task runtime stamp
-        // AND the persisted fingerprint must both still identify this local
-        // file as a complete copy of the current ADB source revision. A stale
-        // or missing stamp is a recoverable downgrade, not an error: fall
-        // through to a full download of the task-owned target instead.
-        if stamps.matches(local, &raw, properties.size, properties.modified_at)
-            && request.options.download_runtime()?.reusable(
+        anyhow::ensure!(
+            request.options.download_runtime()?.reusable(
                 local,
-                &raw,
-                properties.size,
-                properties.modified_at,
-            )?
-        {
-            let bytes = properties.size.unwrap_or(0);
-            progress.finish_item();
-            return Ok((bytes, true, local.to_string_lossy().into_owned()));
-        }
-        replace = true;
+                &DownloadSource {
+                    sftp_service_id: None,
+                    path: raw,
+                    size: properties.size,
+                    modified: properties.modified_at,
+                }
+            )?,
+            crate::file_browser::FileTransferEntryError::SourceChanged
+        );
+        let bytes = properties.size.unwrap_or(0);
+        progress.finish_item();
+        return Ok((bytes, true, local.to_string_lossy().into_owned()));
     }
     let current = self::properties(&request.source, &request.control)?;
     anyhow::ensure!(
@@ -601,35 +598,18 @@ fn node(
         }
     };
     if let Some(local) = &promised_local {
-        let identity = crate::download_path::FileIdentity::from_path(local)?;
-        let raw = source_path
-            .raw_path()?
-            .unwrap_or_else(|| source_path.display_path.as_bytes().to_vec());
         request.options.download_runtime()?.completed(
             local,
-            identity.clone(),
-            raw.clone(),
-            properties.size,
-            properties.modified_at,
+            FileStamp::read(local)?,
+            DownloadSource {
+                sftp_service_id: None,
+                path: source_path
+                    .raw_path()?
+                    .unwrap_or_else(|| source_path.display_path.as_bytes().to_vec()),
+                size: properties.size,
+                modified: properties.modified_at,
+            },
         )?;
-        // Persist the same fingerprint the ADB promised-reuse gate checks.
-        // ADB downloads do not pass through the SFTP download function, so
-        // without this the reuse gate would always miss its stamp and every
-        // promised retry would fall back to a full transfer.
-        let stamps = crate::download_path::ResumeStampStore::system();
-        if let Err(error) = stamps.write(
-            local,
-            &identity,
-            &raw,
-            properties.size,
-            properties.modified_at,
-        ) {
-            tracing::debug!(
-                ?error,
-                path = %local.display(),
-                "failed to persist ADB download resume stamp"
-            );
-        }
     }
     progress.finish_item();
     Ok((bytes, true, path.display_path))

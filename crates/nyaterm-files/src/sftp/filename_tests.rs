@@ -46,6 +46,7 @@ pub(super) struct Files {
     pub(super) max_open_handles: usize,
     pub(super) omit_size: bool,
     pub(super) fail_read_at: Option<u64>,
+    pub(super) fail_read_once_at: Option<u64>,
     pub(super) fail_read_paths: HashSet<Vec<u8>>,
     pub(super) transient_read_failure: bool,
     pub(super) fail_write_once_at: Option<u64>,
@@ -271,6 +272,10 @@ fn reply(
             files.reads.push((offset as u64, length));
             files.read_paths.insert(path.clone());
             if std::mem::take(&mut files.transient_read_failure) {
+                return status(id, 4);
+            }
+            if files.fail_read_once_at == Some(offset as u64) {
+                files.fail_read_once_at = None;
                 return status(id, 4);
             }
             if files.fail_read_at == Some(offset as u64) || files.fail_read_paths.contains(&path) {
@@ -1286,7 +1291,7 @@ fn failure_and_cancellation_publish_only_resumable_contiguous_prefixes() -> anyh
                         "/file",
                         &target,
                         control,
-                        options.clone(),
+                        options.with_transfer_options(options.transfer_options().clone()),
                         move |progress| {
                             if cancelled && progress.bytes_transferred >= 63 * 1024 {
                                 callback_control.cancel();
@@ -1303,7 +1308,16 @@ fn failure_and_cancellation_publish_only_resumable_contiguous_prefixes() -> anyh
                 assert_eq!(prefix, content[..prefix.len()]);
             }
             assert_eq!(std::fs::read_dir(root.path())?.count(), usize::from(resume));
-            files.lock().unwrap().fail_read_at = None;
+            let expected_offset = if resume {
+                std::fs::metadata(&target)?.len()
+            } else {
+                0
+            };
+            {
+                let mut peer = files.lock().unwrap();
+                peer.fail_read_at = None;
+                peer.reads.clear();
+            }
             // Reuse the same owner: direct publication must have refreshed identity.
             service.download_path_with_progress_and_path_options(
                 "/file",
@@ -1313,6 +1327,10 @@ fn failure_and_cancellation_publish_only_resumable_contiguous_prefixes() -> anyh
                 |_| {},
             )?;
             assert_eq!(std::fs::read(&target)?, content);
+            assert_eq!(
+                files.lock().unwrap().reads.first().unwrap().0,
+                expected_offset
+            );
             assert_eq!(files.lock().unwrap().open_handles, 0);
         }
     }

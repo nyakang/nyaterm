@@ -73,15 +73,12 @@ impl TransferDownload {
                 ),
                 "new download target cannot supply a resume prefix"
             );
-            let source = open_without_following(target, false, false)?;
-            if let DownloadTargetAccess::ReplaceKnownTarget(identity, _) = &staged.access {
-                anyhow::ensure!(
-                    FileIdentity::from_file(&source)? == *identity,
-                    "local resume source changed"
-                );
-            }
-            let copied = std::io::copy(&mut source.take(resume_offset), &mut file)?;
+            let mut source = open_without_following(target, false, false)?;
+            validate_file_access(&source, &staged.access)?;
+            let copied = std::io::copy(&mut (&mut source).take(resume_offset), &mut file)?;
             anyhow::ensure!(copied == resume_offset, "local resume source changed");
+            validate_file_access(&source, &staged.access)?;
+            validate_access(root, target, &staged.access)?;
             file.flush()?;
         }
         Ok::<_, anyhow::Error>((staged, file))
@@ -135,24 +132,29 @@ fn validate_access(
                 "download target appeared before commit"
             );
         }
-        DownloadTargetAccess::ReplaceKnownTarget(identity, stamp) => {
+        DownloadTargetAccess::ReplaceKnownTarget(_, _) => {
             let file = open_without_following(target, false, false)?;
-            anyhow::ensure!(
-                file.metadata()?.is_file(),
-                "download target is not a regular file"
-            );
-            anyhow::ensure!(
-                FileIdentity::from_file(&file)? == *identity,
-                "download target was replaced during transfer"
-            );
-            if let Some((length, modified)) = stamp {
-                let metadata = file.metadata()?;
-                anyhow::ensure!(
-                    metadata.len() == *length && metadata.modified()? == *modified,
-                    "task-owned download file was modified before commit"
-                );
-            }
+            validate_file_access(&file, access)?;
         }
+    }
+    Ok(())
+}
+
+fn validate_file_access(file: &std::fs::File, access: &DownloadTargetAccess) -> anyhow::Result<()> {
+    let DownloadTargetAccess::ReplaceKnownTarget(identity, stamp) = access else {
+        anyhow::bail!("new download target cannot supply a resume prefix");
+    };
+    let metadata = file.metadata()?;
+    anyhow::ensure!(metadata.is_file(), "download target is not a regular file");
+    anyhow::ensure!(
+        FileIdentity::from_file(file)? == *identity,
+        "download target was replaced during transfer"
+    );
+    if let Some((length, modified)) = stamp {
+        anyhow::ensure!(
+            metadata.len() == *length && metadata.modified()? == *modified,
+            "task-owned download file was modified before commit"
+        );
     }
     Ok(())
 }
@@ -245,6 +247,44 @@ mod tests {
         assert_eq!(temporary.commit(root.path(), &target)?, identity);
         assert_eq!(std::fs::read(&target)?, b"prefix suffix");
         assert_eq!(std::fs::metadata(&target)?.modified()?, timestamp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resume_rechecks_precise_target_stamp_before_preparation_and_commit()
+    -> anyhow::Result<()> {
+        use std::time::{Duration, UNIX_EPOCH};
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("file");
+        std::fs::write(&target, b"prefix")?;
+        let first = UNIX_EPOCH + Duration::new(1_700_000_000, 100_000_000);
+        let second = UNIX_EPOCH + Duration::new(1_700_000_000, 900_000_000);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)?
+            .set_modified(first)?;
+        let access = DownloadTargetAccess::ReplaceKnownTarget(
+            FileIdentity::from_path(&target)?,
+            Some((6, std::fs::metadata(&target)?.modified()?)),
+        );
+        let (staged, mut file) =
+            TransferDownload::prepare_with_access(root.path(), &target, 6, access.clone()).await?;
+        file.write_all(b" tail").await?;
+        file.flush().await?;
+        drop(file.into_std().await);
+        std::fs::write(&target, b"edited")?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)?
+            .set_modified(second)?;
+        assert!(staged.commit_async(root.path(), &target).await.is_err());
+        assert!(
+            TransferDownload::prepare_with_access(root.path(), &target, 6, access)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&target)?, b"edited");
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
         Ok(())
     }
 
