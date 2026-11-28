@@ -240,7 +240,7 @@ struct DownloadTargetOwner {
     source: SftpDuplicateCacheKey,
 }
 
-mod download_targets;
+pub(crate) mod download_targets;
 
 type StagingPermissions = Arc<dyn Fn(&Path) -> anyhow::Result<()> + Send + Sync>;
 

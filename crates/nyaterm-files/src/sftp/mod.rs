@@ -7,11 +7,13 @@
 mod chunks;
 mod lightweight;
 
+use crate::file_browser::FileTransferEntryError;
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{
     RemoteTextDocument, RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult,
     metadata_is_stable,
 };
+use crate::sftp_transfer_types::download_targets::{DownloadSource, FileStamp};
 use crate::sftp_transfer_types::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
     SftpPathTransferOptions, SftpTransferDirection, SftpTransferOptions, SftpTransferProgress,
@@ -1981,6 +1983,9 @@ impl SftpService {
         F: FnMut(SftpTransferProgress) + Send + 'static,
     {
         let options = self.effective_transfer_options(options);
+        let source_service_id = self.session_id;
+        let path_options =
+            SftpPathTransferOptions::default().with_transfer_options(options.clone());
         let remote_path = remote_path.clone();
         let local_path = local_path.into();
         let config = self.config.clone();
@@ -2000,6 +2005,7 @@ impl SftpService {
                     .await?;
                     let bytes = download_remote_file_bytes(
                         &session.sftp,
+                        source_service_id,
                         remote_file_path_bytes(&codec, &remote_path)?,
                         &remote_path.display_path,
                         &local_path,
@@ -2007,7 +2013,7 @@ impl SftpService {
                         &options,
                         &mut progress,
                         download_root,
-                        None,
+                        &path_options,
                         parameters,
                     )
                     .await;
@@ -2146,6 +2152,7 @@ impl SftpService {
         F: FnMut(SftpTransferProgress) + Send + 'static,
     {
         let path_options = self.effective_path_options(path_options);
+        let source_service_id = self.session_id;
         let remote_path = remote_path.clone();
         let local_path = local_path.into();
         let config = self.config.clone();
@@ -2210,6 +2217,7 @@ impl SftpService {
                                 let contents_options = path_options.for_directory_contents();
                                 download_remote_directory_bytes(
                                     &session,
+                                    source_service_id,
                                     &codec,
                                     raw_path,
                                     &remote_path.display_path,
@@ -2224,6 +2232,7 @@ impl SftpService {
                             } else {
                                 download_remote_file_bytes(
                                     sftp,
+                                    source_service_id,
                                     raw_path,
                                     &remote_path.display_path,
                                     &local_target,
@@ -2231,7 +2240,7 @@ impl SftpService {
                                     path_options.transfer_options(),
                                     &mut progress,
                                     download_root,
-                                    Some(&path_options),
+                                    &path_options,
                                     TransferParameters::new(
                                         path_options.transfer_options(),
                                         &config.sftp,
@@ -3036,6 +3045,8 @@ mod compatibility_tests;
 #[cfg(test)]
 mod copy_tests;
 #[cfg(test)]
+mod download_retry_tests;
+#[cfg(test)]
 mod editor_save_tests;
 #[cfg(test)]
 mod filename_tests;
@@ -3053,31 +3064,6 @@ fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {
 fn sftp_timestamp_secs(time: SystemTime) -> Option<u32> {
     let seconds = time.duration_since(UNIX_EPOCH).ok()?.as_secs();
     Some(seconds.min(u64::from(u32::MAX)) as u32)
-}
-
-fn transfer_resume_offset(
-    local_path: &Path,
-    total_bytes: Option<u64>,
-    options: &SftpTransferOptions,
-) -> u64 {
-    if !options.resume_broken_transfer {
-        return 0;
-    }
-    let Some(total_bytes) = total_bytes.filter(|total| *total > 0) else {
-        return 0;
-    };
-    let Ok(metadata) = std::fs::metadata(local_path) else {
-        return 0;
-    };
-    if !metadata.is_file() {
-        return 0;
-    }
-    let local_size = metadata.len();
-    if local_size > 0 && local_size < total_bytes {
-        local_size
-    } else {
-        0
-    }
 }
 
 fn ensure_remote_download_source(file_type: russh_sftp::protocol::FileType) -> anyhow::Result<()> {
@@ -3126,6 +3112,7 @@ async fn read_transfer_range(
 #[expect(clippy::too_many_arguments)]
 async fn download_remote_file_bytes<F>(
     sftp: &SftpSession,
+    source_service_id: u64,
     raw_path: Vec<u8>,
     remote_path: &str,
     local_path: &Path,
@@ -3133,7 +3120,7 @@ async fn download_remote_file_bytes<F>(
     options: &SftpTransferOptions,
     progress: &mut F,
     download_root: &Path,
-    path_options: Option<&SftpPathTransferOptions>,
+    path_options: &SftpPathTransferOptions,
     parameters: TransferParameters,
 ) -> anyhow::Result<u64>
 where
@@ -3141,14 +3128,10 @@ where
 {
     let total_started = Instant::now();
     control.wait_if_paused().await?;
-    let promised = path_options.is_some_and(SftpPathTransferOptions::is_promised_download);
-    let access = if let Some(path_options) = path_options {
-        path_options
-            .download_runtime()?
-            .access(local_path, promised)?
-    } else {
-        crate::download_path::DownloadTargetAccess::capture(download_root, local_path)?
-    };
+    let promised = path_options.is_promised_download();
+    let access = path_options
+        .download_runtime()?
+        .access(local_path, promised)?;
     let source_metadata =
         await_sftp_request(control, sftp.symlink_metadata_bytes(raw_path.clone())).await?;
     ensure_remote_download_source(source_metadata.file_type())?;
@@ -3156,14 +3139,16 @@ where
         source_metadata.file_type() == russh_sftp::protocol::FileType::File,
         "download source is not a regular file"
     );
+    let source = DownloadSource {
+        sftp_service_id: Some(source_service_id),
+        path: raw_path.clone(),
+        size: source_metadata.size,
+        modified: source_metadata.mtime,
+    };
     if promised
-        && let Some(path_options) = path_options
-        && path_options.download_runtime()?.reusable(
-            local_path,
-            &raw_path,
-            source_metadata.size,
-            source_metadata.mtime,
-        )?
+        && path_options
+            .download_runtime()?
+            .reusable(local_path, &source)?
     {
         let bytes = source_metadata.size.unwrap_or(0);
         progress(SftpTransferProgress {
@@ -3192,10 +3177,18 @@ where
             "opened download source is not a regular file"
         );
         let total_bytes = remote_metadata.size;
-        let resume_offset = if promised {
+        let source = DownloadSource {
+            sftp_service_id: Some(source_service_id),
+            path: raw_path.clone(),
+            size: total_bytes,
+            modified: remote_metadata.mtime,
+        };
+        let resume_offset = if promised || !options.resume_broken_transfer {
             0
         } else {
-            transfer_resume_offset(local_path, total_bytes, options)
+            path_options
+                .download_runtime()?
+                .resume_offset(local_path, &source)?
         };
         let (temporary, mut local) = crate::download_path::TransferDownload::prepare_with_access(
             download_root,
@@ -3205,8 +3198,9 @@ where
         )
         .await?;
         let transfer_started = Instant::now();
+        let mut bytes = resume_offset;
+        let mut local_writes_ok = true;
         let result = async {
-            let mut bytes = resume_offset;
             progress(SftpTransferProgress {
                 phase: None,
                 remote_path: remote_path.to_string(),
@@ -3235,7 +3229,7 @@ where
                                 )
                                 .await?;
                                 if read.is_empty() {
-                                    anyhow::bail!("remote file ended before its advertised size");
+                                    anyhow::bail!(FileTransferEntryError::SourceChanged);
                                 }
                                 data.extend_from_slice(&read);
                             }
@@ -3246,7 +3240,10 @@ where
                 // that the existing resume contract can safely use on the next attempt.
                 while let Some(data) = chunks.try_next().await? {
                     control.wait_if_paused().await?;
-                    local.write_all(&data).await?;
+                    local
+                        .write_all(&data)
+                        .await
+                        .inspect_err(|_| local_writes_ok = false)?;
                     bytes += data.len() as u64;
                     progress(SftpTransferProgress {
                         phase: None,
@@ -3266,7 +3263,10 @@ where
                     if read == 0 {
                         break;
                     }
-                    local.write_all(&buffer[..read]).await?;
+                    local
+                        .write_all(&buffer[..read])
+                        .await
+                        .inspect_err(|_| local_writes_ok = false)?;
                     bytes += read as u64;
                     progress(SftpTransferProgress {
                         phase: None,
@@ -3279,13 +3279,32 @@ where
                     });
                 }
             }
-            local.flush().await?;
+            local
+                .flush()
+                .await
+                .inspect_err(|_| local_writes_ok = false)?;
+            let final_metadata = await_sftp_request(control, remote.metadata()).await?;
+            anyhow::ensure!(
+                final_metadata.file_type() == russh_sftp::protocol::FileType::File
+                    && remote_metadata
+                        .size
+                        .is_none_or(|size| final_metadata.size == Some(size))
+                    && remote_metadata
+                        .mtime
+                        .is_none_or(|mtime| final_metadata.mtime == Some(mtime))
+                    && final_metadata.size.is_none_or(|size| bytes == size),
+                FileTransferEntryError::SourceChanged
+            );
             await_sftp_request(control, remote.shutdown()).await?;
             Ok::<_, anyhow::Error>(bytes)
         }
         .await;
         // Finish local writes even on error before committing a valid resume prefix or cleaning up.
-        let flushed = local.flush().await;
+        let mut flushed = local.flush().await;
+        if result.is_err() && local_writes_ok && flushed.is_ok() {
+            // write_all may fail after a partial write; retain only confirmed chunks.
+            flushed = local.set_len(bytes).await;
+        }
         let local = local.into_std().await;
         if result.is_ok()
             && options.preserve_timestamps
@@ -3293,33 +3312,40 @@ where
         {
             let _ = local.set_modified(UNIX_EPOCH + Duration::from_secs(u64::from(mtime)));
         }
+        // Capture metadata from the written handle, before publishing it. A racing
+        // edit after rename must not become the checkpoint's trusted contents.
+        let local_stamp = FileStamp::from_file(&local)?;
         drop(local);
         let transfer_us = transfer_started.elapsed().as_micros() as u64;
         let commit_started = Instant::now();
-        let (bytes, identity) = match result {
+        let bytes = match result {
             Ok(bytes) => {
                 flushed?;
                 control.check_cancelled()?;
-                if promised && let Some(path_options) = path_options {
+                if promised {
                     path_options
                         .download_runtime()?
                         .validate_ancestors(local_path)?;
                 }
-                let identity = temporary.commit_async(download_root, local_path).await?;
-                (bytes, identity)
+                temporary.commit_async(download_root, local_path).await?;
+                bytes
             }
             Err(error) => {
-                if !promised && options.resume_broken_transfer && flushed.is_ok() {
-                    let identity = temporary.commit_async(download_root, local_path).await?;
-                    if let Some(path_options) = path_options {
-                        path_options.download_runtime()?.completed(
-                            local_path,
-                            identity,
-                            raw_path.clone(),
-                            None,
-                            None,
-                        )?;
-                    }
+                let source_changed = matches!(
+                    error.downcast_ref::<FileTransferEntryError>(),
+                    Some(FileTransferEntryError::SourceChanged)
+                );
+                if source_changed {
+                    path_options.download_runtime()?.invalidate(local_path);
+                } else if !promised
+                    && options.resume_broken_transfer
+                    && local_writes_ok
+                    && flushed.is_ok()
+                {
+                    temporary.commit_async(download_root, local_path).await?;
+                    path_options
+                        .download_runtime()?
+                        .partial(local_path, local_stamp, source)?;
                 }
                 return Err(error);
             }
@@ -3333,15 +3359,9 @@ where
             total_us = total_started.elapsed().as_micros() as u64,
             "SFTP file download timings"
         );
-        if let Some(path_options) = path_options {
-            path_options.download_runtime()?.completed(
-                local_path,
-                identity,
-                raw_path,
-                remote_metadata.size,
-                remote_metadata.mtime,
-            )?;
-        }
+        path_options
+            .download_runtime()?
+            .completed(local_path, local_stamp, source)?;
         Ok(bytes)
     }
     .await;
@@ -3352,6 +3372,7 @@ where
 #[expect(clippy::too_many_arguments)]
 async fn download_remote_directory_bytes<F>(
     session: &OpenSftpSession,
+    source_service_id: u64,
     codec: &SftpPathCodec,
     raw_path: Vec<u8>,
     remote_path: &str,
@@ -3519,6 +3540,7 @@ where
                     };
                     download_remote_file_bytes(
                         &session.sftp,
+                        source_service_id,
                         raw_path,
                         &remote_path,
                         &local_path,
@@ -3526,7 +3548,7 @@ where
                         options,
                         &mut report,
                         download_root,
-                        Some(path_options),
+                        path_options,
                         parameters,
                     )
                     .await?;
@@ -4230,7 +4252,6 @@ mod tests {
         resolve_duplicate_decision, resolve_local_download_target, resolve_remote_upload_target,
         sftp_client_config_for_options, sftp_directory_concurrency, sftp_pipeline_config,
         sftp_session_pool_index, sftp_timestamp_secs, sftp_upload_buffer_size,
-        transfer_resume_offset,
     };
     use crate::sftp::{
         RemoteFilePath, SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
@@ -4661,23 +4682,6 @@ mod tests {
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Dir).is_ok());
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Symlink).is_err());
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Other).is_err());
-    }
-
-    #[test]
-    fn transfer_resume_offset_requires_partial_local_file() {
-        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-resume-test");
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let file = dir.join("partial.bin");
-        let enabled = SftpTransferOptions::default().with_resume_broken_transfer(true);
-        let disabled = SftpTransferOptions::default();
-
-        assert_eq!(transfer_resume_offset(&file, Some(10), &enabled), 0);
-        std::fs::write(&file, [1_u8, 2, 3, 4]).expect("partial");
-        assert_eq!(transfer_resume_offset(&file, Some(10), &disabled), 0);
-        assert_eq!(transfer_resume_offset(&file, None, &enabled), 0);
-        assert_eq!(transfer_resume_offset(&file, Some(10), &enabled), 4);
-        assert_eq!(transfer_resume_offset(&file, Some(4), &enabled), 0);
-        assert_eq!(transfer_resume_offset(&file, Some(3), &enabled), 0);
     }
 
     #[test]

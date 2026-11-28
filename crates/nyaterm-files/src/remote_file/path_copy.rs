@@ -2,6 +2,7 @@ use crate::file_browser::{FileBrowserService, valid_file_browser_child_name};
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{FileCopyRequest, FileCopySummary, FileTransferEndpoint};
 use crate::sftp::{RemoteFilePath, SftpFileType};
+use crate::sftp_transfer_types::download_targets::{DownloadSource, FileStamp};
 use crate::sftp_transfer_types::{
     SftpDuplicateCacheKey, SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest,
     SftpTransferDirection, SftpTransferProgress,
@@ -447,9 +448,12 @@ fn node(
         anyhow::ensure!(
             request.options.download_runtime()?.reusable(
                 local,
-                &raw,
-                properties.size,
-                properties.modified_at
+                &DownloadSource {
+                    sftp_service_id: None,
+                    path: raw,
+                    size: properties.size,
+                    modified: properties.modified_at,
+                }
             )?,
             crate::file_browser::FileTransferEntryError::SourceChanged
         );
@@ -596,12 +600,15 @@ fn node(
     if let Some(local) = &promised_local {
         request.options.download_runtime()?.completed(
             local,
-            crate::download_path::FileIdentity::from_path(local)?,
-            source_path
-                .raw_path()?
-                .unwrap_or_else(|| source_path.display_path.as_bytes().to_vec()),
-            properties.size,
-            properties.modified_at,
+            FileStamp::read(local)?,
+            DownloadSource {
+                sftp_service_id: None,
+                path: source_path
+                    .raw_path()?
+                    .unwrap_or_else(|| source_path.display_path.as_bytes().to_vec()),
+                size: properties.size,
+                modified: properties.modified_at,
+            },
         )?;
     }
     progress.finish_item();

@@ -12,30 +12,49 @@ use std::{
 };
 
 #[derive(Clone, PartialEq, Eq)]
-struct FileStamp {
+pub(crate) struct FileStamp {
     identity: FileIdentity,
     length: u64,
     modified: SystemTime,
 }
 
 impl FileStamp {
-    fn read(path: &Path) -> anyhow::Result<Self> {
+    pub(crate) fn read(path: &Path) -> anyhow::Result<Self> {
         let file = crate::download_path::open_without_following(path, false, false)?;
+        Self::from_file(&file)
+    }
+
+    pub(crate) fn from_file(file: &fs::File) -> anyhow::Result<Self> {
         let metadata = file.metadata()?;
         anyhow::ensure!(metadata.is_file(), "download target is not a regular file");
         Ok(Self {
-            identity: FileIdentity::from_file(&file)?,
+            identity: FileIdentity::from_file(file)?,
             length: metadata.len(),
             modified: metadata.modified()?,
         })
     }
 }
 
-struct CompletedFile {
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct DownloadSource {
+    // Non-SFTP callers retain their existing task-scoped source contract.
+    pub(crate) sftp_service_id: Option<u64>,
+    pub(crate) path: Vec<u8>,
+    pub(crate) size: Option<u64>,
+    pub(crate) modified: Option<u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DownloadState {
+    Partial,
+    Complete,
+    Invalidated,
+}
+
+struct DownloadFile {
     local: FileStamp,
-    remote_path: Vec<u8>,
-    size: Option<u64>,
-    modified: Option<u32>,
+    source: DownloadSource,
+    state: DownloadState,
 }
 
 #[derive(Default)]
@@ -43,7 +62,7 @@ pub(crate) struct DownloadRuntime {
     selected: HashMap<SftpDuplicateCacheKey, PathBuf>,
     access: HashMap<PathBuf, DownloadTargetAccess>,
     directories: HashMap<PathBuf, FileIdentity>,
-    files: HashMap<PathBuf, CompletedFile>,
+    files: HashMap<PathBuf, DownloadFile>,
 }
 
 impl DownloadRuntime {
@@ -91,18 +110,18 @@ impl DownloadRuntime {
         path: &Path,
         promised: bool,
     ) -> anyhow::Result<DownloadTargetAccess> {
+        self.validate_ancestors(path)?;
+        if let Some(file) = self.files.get(path) {
+            anyhow::ensure!(
+                FileStamp::read(path)? == file.local,
+                "task-owned download file was modified or replaced"
+            );
+            return Ok(DownloadTargetAccess::ReplaceKnownTarget(
+                file.local.identity.clone(),
+                Some((file.local.length, file.local.modified)),
+            ));
+        }
         if promised {
-            self.validate_ancestors(path)?;
-            if let Some(completed) = self.files.get(path) {
-                anyhow::ensure!(
-                    FileStamp::read(path)? == completed.local,
-                    "task-owned download file was modified or replaced"
-                );
-                return Ok(DownloadTargetAccess::ReplaceKnownTarget(
-                    completed.local.identity.clone(),
-                    Some((completed.local.length, completed.local.modified)),
-                ));
-            }
             return Ok(DownloadTargetAccess::CreateNew);
         }
         self.access.get(path).cloned().map_or_else(
@@ -166,13 +185,7 @@ impl DownloadRuntime {
         Ok(false)
     }
 
-    pub(crate) fn reusable(
-        &self,
-        path: &Path,
-        remote_path: &[u8],
-        size: Option<u64>,
-        modified: Option<u32>,
-    ) -> anyhow::Result<bool> {
+    pub(crate) fn reusable(&self, path: &Path, source: &DownloadSource) -> anyhow::Result<bool> {
         let Some(file) = self.files.get(path) else {
             return Ok(false);
         };
@@ -181,37 +194,84 @@ impl DownloadRuntime {
             "task-owned download file was modified or replaced"
         );
         // Missing source timestamps are not sufficient to identify a remote revision.
-        Ok(modified.is_some()
-            && size.is_some()
-            && file.remote_path == remote_path
-            && file.size == size
-            && file.modified == modified)
+        Ok(file.state == DownloadState::Complete
+            && source.modified.is_some()
+            && source.size == Some(file.local.length)
+            && file.source == *source)
+    }
+
+    pub(crate) fn resume_offset(
+        &mut self,
+        path: &Path,
+        source: &DownloadSource,
+    ) -> anyhow::Result<u64> {
+        let Some(file) = self.files.get_mut(path) else {
+            return Ok(0);
+        };
+        anyhow::ensure!(
+            FileStamp::read(path)? == file.local,
+            "task-owned download file was modified or replaced"
+        );
+        if file.state != DownloadState::Partial {
+            return Ok(0);
+        }
+        // This is an ownership and metadata check, not a content revision proof.
+        if source.sftp_service_id.is_none()
+            || source.modified.is_none()
+            || source
+                .size
+                .is_none_or(|size| file.local.length == 0 || file.local.length >= size)
+            || file.source != *source
+        {
+            file.state = DownloadState::Invalidated;
+            return Ok(0);
+        }
+        Ok(file.local.length)
+    }
+
+    pub(crate) fn invalidate(&mut self, path: &Path) {
+        if let Some(file) = self.files.get_mut(path) {
+            file.state = DownloadState::Invalidated;
+        }
+    }
+
+    pub(crate) fn partial(
+        &mut self,
+        path: &Path,
+        local: FileStamp,
+        source: DownloadSource,
+    ) -> anyhow::Result<()> {
+        self.record(path, local, source, DownloadState::Partial)
     }
 
     pub(crate) fn completed(
         &mut self,
         path: &Path,
-        identity: FileIdentity,
-        remote_path: Vec<u8>,
-        size: Option<u64>,
-        modified: Option<u32>,
+        local: FileStamp,
+        source: DownloadSource,
     ) -> anyhow::Result<()> {
-        let local = FileStamp::read(path)?;
+        self.record(path, local, source, DownloadState::Complete)
+    }
+
+    fn record(
+        &mut self,
+        path: &Path,
+        local: FileStamp,
+        source: DownloadSource,
+        state: DownloadState,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            local.identity == identity,
-            "download target was replaced after commit"
+            FileStamp::read(path)? == local,
+            "download target was modified or replaced after commit"
         );
-        self.access.insert(
-            path.to_path_buf(),
-            DownloadTargetAccess::ReplaceKnownTarget(identity, None),
-        );
+        // The file record now owns authorization; do not mirror its identity in access.
+        self.access.remove(path);
         self.files.insert(
             path.to_path_buf(),
-            CompletedFile {
+            DownloadFile {
                 local,
-                remote_path,
-                size,
-                modified,
+                source,
+                state,
             },
         );
         Ok(())
@@ -220,8 +280,7 @@ impl DownloadRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::DownloadRuntime;
-    use crate::download_path::FileIdentity;
+    use super::{DownloadRuntime, DownloadSource, FileStamp};
 
     #[test]
     fn promised_directories_reuse_only_task_owned_identity_and_reject_external_entries()
@@ -253,23 +312,137 @@ mod tests {
         let target = root.path().join("file");
         std::fs::write(&target, b"completed")?;
         let mut runtime = DownloadRuntime::default();
-        runtime.completed(
+        let source = DownloadSource {
+            sftp_service_id: Some(1),
+            path: b"/file".to_vec(),
+            size: Some(9),
+            modified: Some(42),
+        };
+        runtime.completed(&target, FileStamp::read(&target)?, source.clone())?;
+        assert!(runtime.reusable(&target, &source)?);
+        assert!(!runtime.reusable(
             &target,
-            FileIdentity::from_path(&target)?,
-            b"/file".to_vec(),
-            Some(9),
-            Some(42),
-        )?;
-        assert!(runtime.reusable(&target, b"/file", Some(9), Some(42))?);
-        assert!(!runtime.reusable(&target, b"/file", Some(9), Some(43))?);
-        assert!(!runtime.reusable(&target, b"/file", Some(9), None)?);
+            &DownloadSource {
+                modified: Some(43),
+                ..source.clone()
+            }
+        )?);
+        assert!(!runtime.reusable(
+            &target,
+            &DownloadSource {
+                modified: None,
+                ..source.clone()
+            }
+        )?);
         std::fs::write(&target, b"external modification")?;
         assert!(runtime.access(&target, true).is_err());
-        assert!(
-            runtime
-                .reusable(&target, b"/file", Some(9), Some(42))
-                .is_err()
-        );
+        assert!(runtime.reusable(&target, &source).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn partials_never_authorize_complete_reuse_even_at_the_full_length() -> anyhow::Result<()> {
+        for length in [0, 4, 8] {
+            let root = tempfile::tempdir()?;
+            let target = root.path().join("file");
+            std::fs::write(&target, vec![7; length])?;
+            let source = DownloadSource {
+                sftp_service_id: Some(1),
+                path: b"/file".to_vec(),
+                size: Some(8),
+                modified: Some(42),
+            };
+            let mut runtime = DownloadRuntime::default();
+            runtime.partial(&target, FileStamp::read(&target)?, source.clone())?;
+            assert!(!runtime.reusable(&target, &source)?);
+            assert_eq!(
+                runtime.resume_offset(&target, &source)?,
+                if length == 4 { 4 } else { 0 }
+            );
+            assert!(runtime.owns(&target, false)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_post_commit_edit_cannot_be_adopted_as_a_new_checkpoint() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("file");
+        std::fs::write(&target, b"part")?;
+        let file = std::fs::File::open(&target)?;
+        let stamp = FileStamp::from_file(&file)?;
+        std::fs::write(&target, b"external edit")?;
+        let source = DownloadSource {
+            sftp_service_id: Some(1),
+            path: b"/file".to_vec(),
+            size: Some(20),
+            modified: Some(42),
+        };
+        let mut runtime = DownloadRuntime::default();
+        assert!(runtime.partial(&target, stamp, source.clone()).is_err());
+        assert!(!runtime.owns(&target, false)?);
+        assert_eq!(runtime.resume_offset(&target, &source)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_metadata_and_invalidated_checkpoints_cannot_regain_resume_by_matching_again()
+    -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("file");
+        std::fs::write(&target, b"part")?;
+        let source = DownloadSource {
+            sftp_service_id: Some(1),
+            path: b"/file".to_vec(),
+            size: Some(8),
+            modified: Some(42),
+        };
+        for changed in [
+            DownloadSource {
+                sftp_service_id: Some(2),
+                ..source.clone()
+            },
+            DownloadSource {
+                path: b"/other".to_vec(),
+                ..source.clone()
+            },
+            DownloadSource {
+                size: Some(9),
+                ..source.clone()
+            },
+            DownloadSource {
+                modified: Some(43),
+                ..source.clone()
+            },
+            DownloadSource {
+                size: None,
+                ..source.clone()
+            },
+            DownloadSource {
+                modified: None,
+                ..source.clone()
+            },
+        ] {
+            let mut runtime = DownloadRuntime::default();
+            runtime.partial(&target, FileStamp::read(&target)?, source.clone())?;
+            assert_eq!(runtime.resume_offset(&target, &changed)?, 0);
+            assert_eq!(runtime.resume_offset(&target, &source)?, 0);
+            assert!(runtime.owns(&target, false)?);
+        }
+        for unknown in [
+            DownloadSource {
+                size: None,
+                ..source.clone()
+            },
+            DownloadSource {
+                modified: None,
+                ..source.clone()
+            },
+        ] {
+            let mut runtime = DownloadRuntime::default();
+            runtime.partial(&target, FileStamp::read(&target)?, unknown.clone())?;
+            assert_eq!(runtime.resume_offset(&target, &unknown)?, 0);
+        }
         Ok(())
     }
 }
