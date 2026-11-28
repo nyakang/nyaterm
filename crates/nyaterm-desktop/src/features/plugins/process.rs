@@ -8,6 +8,14 @@ use std::sync::Arc;
 /// Only DesktopController constructs a live process service. Window entities
 /// observe this immutable presentation, rather than creating their own runtimes.
 pub(crate) struct PluginProcess {
+    #[cfg(test)]
+    pub(super) batch_fixture: Option<Vec<super::management::ManagementAction>>,
+    pub(super) native: Vec<nyaterm_core::plugins::native::NativeSnapshot>,
+    pub(super) store: Option<nyaterm_core::plugins::catalog::Catalog>,
+    pub(super) progress:
+        std::collections::BTreeMap<String, nyaterm_core::plugins::management::InstallProgress>,
+    pub(super) jobs: std::collections::BTreeMap<String, super::management::ManagementJob>,
+    pub(super) batch_summary: Option<(usize, usize)>,
     pub(in crate::features) service: Option<Arc<PluginService>>,
     pub(in crate::features) snapshot: CatalogSnapshot,
 }
@@ -20,9 +28,7 @@ impl PluginProcess {
                     while events.next().await.is_some() {
                         if this
                             .update(cx, |this, cx| {
-                                if let Some(service) = &this.service {
-                                    this.snapshot = service.snapshot();
-                                }
+                                this.refresh();
                                 cx.notify();
                             })
                             .is_err()
@@ -33,11 +39,25 @@ impl PluginProcess {
                 })
                 .detach();
                 Self {
+                    native: service.native.snapshot(),
+                    store: None,
+                    progress: Default::default(),
+                    jobs: Default::default(),
+                    batch_summary: None,
+                    #[cfg(test)]
+                    batch_fixture: None,
                     service: Some(service),
                     snapshot: CatalogSnapshot::default(),
                 }
             }
             Err(error) => Self {
+                native: Vec::new(),
+                store: None,
+                progress: Default::default(),
+                jobs: Default::default(),
+                batch_summary: None,
+                #[cfg(test)]
+                batch_fixture: None,
                 service: None,
                 snapshot: CatalogSnapshot {
                     startup_error: Some(error),
@@ -50,8 +70,24 @@ impl PluginProcess {
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
+            native: Vec::new(),
+            store: None,
+            progress: Default::default(),
+            jobs: Default::default(),
+            batch_summary: None,
+            #[cfg(test)]
+            batch_fixture: None,
             service: None,
             snapshot: CatalogSnapshot::default(),
+        }
+    }
+
+    pub(super) fn refresh(&mut self) {
+        if let Some(service) = &self.service {
+            self.snapshot = service.snapshot();
+            self.native = service.native.snapshot();
+            self.store = service.store_catalog.read().unwrap().clone();
+            self.progress = service.install_progress();
         }
     }
 

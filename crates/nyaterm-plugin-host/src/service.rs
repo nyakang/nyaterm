@@ -1,6 +1,7 @@
 use crate::manager::{CatalogSnapshot, Invocation, PluginManager, PreparedChange};
 use futures::channel::{mpsc as async_channel, oneshot};
 use nyaterm_core::plugins::invocation::ActionInput;
+use nyaterm_core::plugins::management::{InstallProgress, OperationPhase};
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult};
 use nyaterm_core::runtime::AppRuntime;
 use std::collections::{BTreeMap, VecDeque};
@@ -12,6 +13,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
+#[derive(Clone)]
 pub enum PluginOperation {
     Authorize {
         id: String,
@@ -100,6 +102,8 @@ const PREPARATION_WORKERS: usize = 2;
 /// Requests for the same plugin retain submission order, while other plugins
 /// can still invoke or prepare. No worker wakes periodically while idle.
 pub struct PluginService {
+    store_progress: RwLock<BTreeMap<String, InstallProgress>>,
+    store_cancel: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
     observed_sessions: Mutex<std::collections::HashSet<String>>,
     pub desktop: Arc<crate::desktop_bridge::DesktopBridge>,
     pub store_catalog: RwLock<Option<nyaterm_core::plugins::catalog::Catalog>>,
@@ -419,6 +423,8 @@ impl PluginService {
             })?;
         Ok((
             Arc::new(Self {
+                store_progress: RwLock::new(BTreeMap::new()),
+                store_cancel: Mutex::new(BTreeMap::new()),
                 observed_sessions: Mutex::new(std::collections::HashSet::new()),
                 desktop,
                 store_catalog: RwLock::new(None),
@@ -480,6 +486,46 @@ impl PluginService {
         Ok(task)
     }
 
+    pub fn install_progress(&self) -> BTreeMap<String, InstallProgress> {
+        self.store_progress.read().unwrap().clone()
+    }
+
+    pub fn cancel_install(&self, id: &str) {
+        let progress = self.store_progress.read().unwrap();
+        if progress.get(id).is_some_and(|p| p.phase.cancellable())
+            && let Some(cancel) = self.store_cancel.lock().unwrap().get(id)
+        {
+            cancel.store(true, Ordering::Release);
+        }
+    }
+
+    fn publish_progress(&self, id: &str, progress: InstallProgress) {
+        self.store_progress
+            .write()
+            .unwrap()
+            .insert(id.to_owned(), progress);
+        let _ = self.requests.send(Message::StoreChanged);
+    }
+
+    fn begin_store_commit(&self, id: &str, cancellation: &AtomicBool) -> PluginResult<()> {
+        // Cancellation and the irreversible commit boundary use the same lock.
+        // A cancellation accepted before this boundary must never publish a package.
+        let mut progress = self.store_progress.write().unwrap();
+        if cancellation.load(Ordering::Acquire) {
+            return Err(PluginError::new(
+                ErrorCode::Cancelled,
+                "Extension installation cancelled",
+            ));
+        }
+        progress.insert(
+            id.to_owned(),
+            InstallProgress::new(OperationPhase::Committing),
+        );
+        drop(progress);
+        let _ = self.requests.send(Message::StoreChanged);
+        Ok(())
+    }
+
     fn store_operation(
         self: &Arc<Self>,
         operation: PluginOperation,
@@ -494,6 +540,19 @@ impl PluginService {
             let _ = previous.join();
         }
         let service = self.clone();
+        let operation_id = match &operation {
+            PluginOperation::InstallFromStore { id } => Some(id.clone()),
+            _ => None,
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        if let Some(id) = &operation_id {
+            self.store_cancel
+                .lock()
+                .unwrap()
+                .insert(id.clone(), cancellation.clone());
+            self.publish_progress(id, InstallProgress::new(OperationPhase::Checking));
+        }
+        let cleanup_id = operation_id.clone();
         let (reply, task) = oneshot::channel();
         let worker = thread::Builder::new().name("extension-store".into()).spawn(move || {
             let result = (|| {
@@ -512,8 +571,10 @@ impl PluginService {
                         let release = listing.compatible_release(env!("CARGO_PKG_VERSION"))
                             .ok_or_else(|| PluginError::new(ErrorCode::Incompatible, "No compatible extension release"))?;
                         std::fs::create_dir_all(&service.store_root).map_err(|_| crate::package::io_error())?;
-                        let stage = crate::catalog::acquire(&listing, release, &service.store_root, env!("CARGO_PKG_VERSION"), || reply.is_canceled() || service.stop.load(Ordering::Acquire))?;
+                        let stage = crate::catalog::acquire(&listing, release, &service.store_root, env!("CARGO_PKG_VERSION"), || reply.is_canceled() || cancellation.load(Ordering::Acquire) || service.stop.load(Ordering::Acquire), |progress| service.publish_progress(&id, progress))?;
+                        if cancellation.load(Ordering::Acquire) { return Err(PluginError::new(ErrorCode::Cancelled, "Extension installation cancelled")); }
                         if reply.is_canceled() || service.stop.load(Ordering::Acquire) { return Err(shutdown_error()); }
+                        service.begin_store_commit(&id, &cancellation)?;
                         crate::catalog::remember_release(&service.store_root.parent().unwrap().join("host/trusted"), &stage, release, env!("CARGO_PKG_VERSION"))?;
                         let source = stage.path.join("payload");
                         let current = service.snapshot();
@@ -528,12 +589,21 @@ impl PluginService {
                     _ => unreachable!(),
                 }
             })();
+            if let Some(id) = &operation_id {
+                service.store_progress.write().unwrap().remove(id);
+                service.store_cancel.lock().unwrap().remove(id);
+            }
             service.store_busy.store(false, Ordering::Release);
+            let _ = service.requests.send(Message::StoreChanged);
             let _ = reply.send(result);
         });
         match worker {
             Ok(worker) => *self.store_worker.lock().unwrap() = Some(worker),
             Err(_) => {
+                if let Some(id) = cleanup_id {
+                    self.store_progress.write().unwrap().remove(&id);
+                    self.store_cancel.lock().unwrap().remove(&id);
+                }
                 self.store_busy.store(false, Ordering::Release);
                 return Err(PluginError::new(
                     ErrorCode::Initialization,

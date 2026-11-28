@@ -596,6 +596,9 @@ impl NyaTermApp {
                     "icons/file-manager.svg",
                     self.file_manager_tab_title(&id, cx),
                 )),
+                WorkspaceTabId::Plugin(key) => {
+                    Some(("icons/extensions.svg", self.plugin_title(&key, cx)))
+                }
                 WorkspaceTabId::Settings => {
                     Some(("icons/settings.svg", t!("settings.title").to_string()))
                 }

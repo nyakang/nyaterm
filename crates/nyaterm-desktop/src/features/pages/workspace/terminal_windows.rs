@@ -165,6 +165,7 @@ impl NyaTermApp {
                 crate::models::WorkspaceTabId::FileManager(id) => {
                     self.workspace_file_manager_content(&id, cx)
                 }
+                crate::models::WorkspaceTabId::Plugin(key) => self.plugin_details_content(&key),
                 crate::models::WorkspaceTabId::Settings => {
                     self.settings_view(cx).into_any_element()
                 }

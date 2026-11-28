@@ -287,6 +287,24 @@ impl NyaTermApp {
                         );
                         continue;
                     }
+                    crate::models::WorkspaceTabId::Plugin(id) => {
+                        let title = self.plugin_title(&id, cx);
+                        list = list.child(
+                            div()
+                                .id(gpui::SharedString::from(format!("open-plugin-{}", id.id())))
+                                .px_3()
+                                .py_2()
+                                .text_xs()
+                                .cursor_pointer()
+                                .child(title)
+                                .on_click(cx.listener(move |app, _, window, cx| {
+                                    app.activate_workspace_tab(&key, cx);
+                                    app.shell.close_root_menus();
+                                    app.focus_active_workspace_surface(window, cx);
+                                })),
+                        );
+                        continue;
+                    }
                     crate::models::WorkspaceTabId::Settings => {
                         let selected = active_id.as_deref() == Some(&key);
                         list = list.child(

@@ -110,7 +110,9 @@ impl NyaTermApp {
                 return;
             }
             // The settings surface owns its own focus targets.
-            crate::models::WorkspaceTabId::Settings => return,
+            crate::models::WorkspaceTabId::Settings | crate::models::WorkspaceTabId::Plugin(_) => {
+                return;
+            }
             crate::models::WorkspaceTabId::Session(_) => {}
         }
         if self.session_is_sftp_only(session) {

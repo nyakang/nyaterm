@@ -1,6 +1,7 @@
 use crate::package::{StagingDirectory, load, snapshot};
 use minisign_verify::{PublicKey, Signature};
 use nyaterm_core::plugins::catalog::{Catalog, Listing, Release};
+use nyaterm_core::plugins::management::{InstallProgress, OperationPhase};
 use nyaterm_core::plugins::manifest::PluginManifest;
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult};
 use sha2::{Digest, Sha256};
@@ -21,7 +22,12 @@ fn invalid() -> PluginError {
     )
 }
 
-fn download(url: &str, limit: u64, cancelled: &impl Fn() -> bool) -> PluginResult<Vec<u8>> {
+fn download(
+    url: &str,
+    limit: u64,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(InstallProgress),
+) -> PluginResult<Vec<u8>> {
     let check = || {
         if cancelled() {
             Err(PluginError::new(
@@ -63,13 +69,23 @@ fn download(url: &str, limit: u64, cancelled: &impl Fn() -> bool) -> PluginResul
             return Err(invalid());
         }
         bytes.extend_from_slice(&chunk[..count]);
+        progress(InstallProgress {
+            phase: OperationPhase::Downloading,
+            downloaded: bytes.len() as u64,
+            total: response.content_length(),
+        });
     }
     check()?;
     Ok(bytes)
 }
 
 pub fn fetch(cancelled: impl Fn() -> bool) -> PluginResult<Catalog> {
-    Catalog::parse(&download(OFFICIAL_CATALOG, 4 * 1024 * 1024, &cancelled)?)
+    Catalog::parse(&download(
+        OFFICIAL_CATALOG,
+        4 * 1024 * 1024,
+        &cancelled,
+        &|_| {},
+    )?)
 }
 
 pub fn verify_archive(bytes: &[u8], release: &Release, key: &str) -> PluginResult<()> {
@@ -95,6 +111,7 @@ pub fn acquire(
     staging: &Path,
     host_version: &str,
     cancelled: impl Fn() -> bool,
+    progress: impl Fn(InstallProgress),
 ) -> PluginResult<StagingDirectory> {
     if OFFICIAL_KEY.is_empty() {
         return Err(PluginError::new(
@@ -102,13 +119,20 @@ pub fn acquire(
             "The extension store signing key is not configured",
         ));
     }
-    let bytes = download(&release.artifact.url, release.artifact.size, &cancelled)?;
+    let bytes = download(
+        &release.artifact.url,
+        release.artifact.size,
+        &cancelled,
+        &progress,
+    )?;
+    progress(InstallProgress::new(OperationPhase::Verifying));
     verify_archive(&bytes, release, OFFICIAL_KEY)?;
     let stage = StagingDirectory::new(staging)?;
     let archive = stage.path.join("extension.zip");
     std::fs::write(&archive, bytes).map_err(|_| invalid())?;
     let payload = stage.path.join("payload");
     std::fs::create_dir(&payload).map_err(|_| invalid())?;
+    progress(InstallProgress::new(OperationPhase::Installing));
     snapshot(&archive, &payload)?;
     let package = load(&payload, host_version)?;
     let capabilities = package

@@ -15,11 +15,13 @@ pub(crate) enum WorkspaceTabId {
     /// `open settings`, closed when the draft ends, and never persisted in a
     /// restored workspace layout.
     Settings,
+    Plugin(nyaterm_core::plugins::management::PluginKey),
 }
 
 impl WorkspaceTabId {
     const EDITOR_PREFIX: &str = "\0editor:";
     const FILE_MANAGER_PREFIX: &str = "\0filemgr:";
+    const PLUGIN_PREFIX: &str = "\0plugin:";
     const SETTINGS_KEY: &str = "\0settings:";
 
     pub(crate) fn from_layout_key(key: &str) -> Self {
@@ -28,6 +30,9 @@ impl WorkspaceTabId {
         }
         if let Some(id) = key.strip_prefix(Self::FILE_MANAGER_PREFIX) {
             return Self::FileManager(id.to_string());
+        }
+        if let Some(id) = key.strip_prefix(Self::PLUGIN_PREFIX) {
+            return Self::Plugin(nyaterm_core::plugins::management::PluginKey::from_id(id));
         }
         if key == Self::SETTINGS_KEY {
             return Self::Settings;
@@ -45,6 +50,7 @@ impl WorkspaceTabId {
             Self::Editor(id) => format!("{}{id}", Self::EDITOR_PREFIX),
             Self::FileManager(id) => format!("{}{id}", Self::FILE_MANAGER_PREFIX),
             Self::Settings => Self::SETTINGS_KEY.to_string(),
+            Self::Plugin(key) => format!("{}{}", Self::PLUGIN_PREFIX, key.id()),
         }
     }
 

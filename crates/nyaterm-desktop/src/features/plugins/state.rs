@@ -5,6 +5,11 @@ use futures::StreamExt;
 use gpui::{AppContext, Context, Entity, WeakEntity};
 
 pub(in crate::features) struct PluginFeatureState {
+    _process_subscription: gpui::Subscription,
+    pub(in crate::features) details: std::collections::BTreeMap<
+        nyaterm_core::plugins::management::PluginKey,
+        Entity<PluginPanel>,
+    >,
     host_task: Option<gpui::Task<()>>,
     // Keep the editing state alive when the side panel is hidden or moved.
     pub panel: Entity<PluginPanel>,
@@ -32,9 +37,12 @@ impl PluginFeatureState {
                 }
             })
         });
+        let subscription = cx.observe(&process, |_, _, cx| cx.notify());
         let panel = cx.new(|cx| PluginPanel::new(app, process, cx));
         Self {
             host_task,
+            details: Default::default(),
+            _process_subscription: subscription,
             panel,
             #[cfg(test)]
             native_launch_fixture: None,
@@ -43,6 +51,10 @@ impl PluginFeatureState {
 
     pub fn shutdown(&mut self, cx: &mut Context<NyaTermApp>) {
         self.host_task.take();
+        for detail in self.details.values() {
+            detail.update(cx, |detail, cx| detail.cancel(cx));
+        }
+        self.details.clear();
         self.panel.update(cx, |panel, cx| panel.cancel(cx));
     }
 }

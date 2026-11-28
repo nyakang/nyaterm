@@ -76,7 +76,15 @@ impl NyaTermApp {
                 title,
                 elements,
             } => {
-                let result = self.plugins.panel.update(cx, |panel, cx| {
+                let key = nyaterm_core::plugins::management::PluginKey::Wasm(context.plugin_id());
+                // Updating an existing tool must not steal focus from another tab or input.
+                let detail = self
+                    .plugins
+                    .details
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| self.open_plugin_details(key, 3, cx));
+                let result = detail.update(cx, |panel, cx| {
                     panel.show_tool_panel(
                         context.plugin_id(),
                         session.clone(),

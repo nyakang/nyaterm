@@ -548,3 +548,38 @@ fn real_guest_fault_updates_catalog_without_another_request_or_polling() {
     assert!(outcome.unwrap());
     assert!(service.snapshot().stopped);
 }
+
+#[test]
+fn cancellation_accepted_before_commit_prevents_publication_and_commit_cannot_cancel() {
+    use nyaterm_core::plugins::management::{InstallProgress, OperationPhase};
+    let root = TestTempDir::new("nyaterm-plugin-cancel-boundary");
+    let (service, _events) = PluginService::start(runtime(&root)).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    service
+        .store_cancel
+        .lock()
+        .unwrap()
+        .insert("fixture".into(), cancel.clone());
+    service.publish_progress("fixture", InstallProgress::new(OperationPhase::Downloading));
+    service.cancel_install("fixture");
+    assert_eq!(
+        service
+            .begin_store_commit("fixture", &cancel)
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled
+    );
+    assert_eq!(
+        service.install_progress()["fixture"].phase,
+        OperationPhase::Downloading
+    );
+    cancel.store(false, Ordering::Release);
+    service.begin_store_commit("fixture", &cancel).unwrap();
+    service.cancel_install("fixture");
+    assert!(!cancel.load(Ordering::Acquire));
+    assert_eq!(
+        service.install_progress()["fixture"].phase,
+        OperationPhase::Committing
+    );
+    service.shutdown();
+}

@@ -2,6 +2,7 @@
 pub mod catalog;
 pub mod extension;
 pub mod invocation;
+pub mod management;
 pub mod manifest;
 pub mod native;
 pub mod preferences;

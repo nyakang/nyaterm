@@ -279,6 +279,13 @@ impl Registry {
             "Install a compatible official native component in Plugins",
         ))
     }
+    pub fn in_use(&self, id: NativeComponentId) -> bool {
+        let component_root = self.root.join(id.slug());
+        self.leases
+            .iter()
+            .any(|(path, lease)| path.starts_with(&component_root) && lease.strong_count() > 0)
+    }
+
     pub fn reap(&mut self) {
         for id in NativeComponentId::ALL {
             let _ = self.collect(id);

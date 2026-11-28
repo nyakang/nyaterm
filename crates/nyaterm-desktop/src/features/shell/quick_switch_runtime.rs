@@ -109,6 +109,13 @@ impl NyaTermApp {
                         return;
                     }
                 }
+                crate::models::WorkspaceTabId::Plugin(key) => {
+                    if let Some(detail) = self.plugins.details.get(&key) {
+                        let focus = detail.read(cx).focus.clone();
+                        window.focus(&focus, cx);
+                    }
+                    return;
+                }
                 crate::models::WorkspaceTabId::Settings => {
                     let focus = self.settings_panel.read(cx).focus_handle(cx);
                     if !focus.contains_focused(window, cx) {
@@ -203,6 +210,15 @@ impl NyaTermApp {
                         id: key,
                         title: t!("fileManager.tabTitle").to_string(),
                         subtitle: id,
+                        endpoint: None,
+                    });
+                }
+                crate::models::WorkspaceTabId::Plugin(id) => {
+                    session_items.push(QuickSwitchItem::Session {
+                        active: active_tab.as_deref() == Some(&key),
+                        id: key,
+                        title: id.id(),
+                        subtitle: t!("plugins.title").to_string(),
                         endpoint: None,
                     });
                 }

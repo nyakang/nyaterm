@@ -1029,6 +1029,9 @@ impl NyaTermApp {
                 SessionStripTabId::Workspace(crate::models::WorkspaceTabId::FileManager(id)) => {
                     self.file_manager_strip_tab(id, index, index + 1, group_active.as_deref(), cx)
                 }
+                SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Plugin(key)) => {
+                    self.plugin_strip_tab(key, index, group_active.as_deref(), cx)
+                }
                 SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Settings) => {
                     self.settings_strip_tab(index, index + 1, group_active.as_deref(), cx)
                 }

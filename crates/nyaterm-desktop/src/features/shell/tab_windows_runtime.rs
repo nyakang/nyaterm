@@ -34,6 +34,13 @@ impl NyaTermApp {
         if self.shell.has_settings_draft() {
             live_ids.push(crate::models::WorkspaceTabId::settings_key());
         }
+        live_ids.extend(
+            self.plugins
+                .details
+                .keys()
+                .cloned()
+                .map(|key| crate::models::WorkspaceTabId::Plugin(key).layout_key()),
+        );
         let preferred = self.current_terminal_group();
         let active = self.active_workspace_tab();
         self.shell
@@ -66,6 +73,13 @@ impl NyaTermApp {
         if self.shell.has_settings_draft() {
             tab_ids.push(crate::models::WorkspaceTabId::settings_key());
         }
+        tab_ids.extend(
+            self.plugins
+                .details
+                .keys()
+                .cloned()
+                .map(|key| crate::models::WorkspaceTabId::Plugin(key).layout_key()),
+        );
         let active = self.active_workspace_tab();
         self.shell.ensure_terminal_windows_root(tab_ids, active);
     }

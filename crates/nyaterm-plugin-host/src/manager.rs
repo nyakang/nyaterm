@@ -28,6 +28,7 @@ pub enum PluginSource {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PluginSnapshot {
+    pub install_path: PathBuf,
     pub session_events_authorized: bool,
     pub id: String,
     pub manifest: Option<PluginManifest>,
@@ -314,6 +315,10 @@ impl PluginManager {
                 PluginStatus::Installed
             };
             snapshot.plugins.push(PluginSnapshot {
+                install_path: match &entry.source {
+                    PluginSource::Managed => self.root.join("installed").join(id),
+                    PluginSource::Development(path) => path.clone(),
+                },
                 session_events_authorized: entry
                     .instance
                     .as_ref()

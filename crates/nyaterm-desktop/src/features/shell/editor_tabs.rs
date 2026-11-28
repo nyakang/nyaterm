@@ -96,7 +96,9 @@ impl NyaTermApp {
         match WorkspaceTabId::from_layout_key(key) {
             WorkspaceTabId::Session(id) => Some(id),
             WorkspaceTabId::Editor(id) => self.transfer.editor_tab_snapshot(&id)?.session_id,
-            WorkspaceTabId::FileManager(_) | WorkspaceTabId::Settings => None,
+            WorkspaceTabId::FileManager(_)
+            | WorkspaceTabId::Settings
+            | WorkspaceTabId::Plugin(_) => None,
         }
     }
 
@@ -152,6 +154,7 @@ impl NyaTermApp {
             }
             WorkspaceTabId::FileManager(id) => self.activate_file_manager_tab(&id, cx),
             WorkspaceTabId::Settings => self.activate_settings_workspace_tab(cx),
+            WorkspaceTabId::Plugin(id) => self.activate_plugin_tab(&id, cx),
         }
     }
 
@@ -357,6 +360,7 @@ impl NyaTermApp {
                     WorkspaceTabId::Session(id) => self.close_session(id, cx),
                     // Filtered out in `request_workspace_tabs_close`.
                     WorkspaceTabId::Settings => {}
+                    WorkspaceTabId::Plugin(id) => self.close_plugin_details(&id, cx),
                 }
             }
             self.release_unreferenced_editor_sessions(cx);

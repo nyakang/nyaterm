@@ -1128,6 +1128,12 @@ impl NyaTermApp {
             );
         }
         match panel {
+            NavItem::Plugins => Some(
+                self.plugins
+                    .panel
+                    .update(cx, |panel, cx| panel.header_actions(cx))
+                    .into_any_element(),
+            ),
             NavItem::Transfers => {
                 let can_browse = self.session.active_id().is_some_and(|session_id| {
                     self.session

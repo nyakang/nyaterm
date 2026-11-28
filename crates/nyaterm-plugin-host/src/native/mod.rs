@@ -2,6 +2,7 @@
 mod catalog;
 mod package;
 mod registry;
+use nyaterm_core::plugins::management::OperationPhase;
 use nyaterm_core::plugins::native::catalog::InstalledComponent;
 use registry::Registry;
 use sha2::{Digest, Sha256};
@@ -51,6 +52,7 @@ enum Request {
 }
 
 pub struct NativeService {
+    changed: std::sync::Weak<dyn Fn() + Send + Sync>,
     sender: mpsc::SyncSender<Request>,
     snapshots: Arc<RwLock<Vec<NativeSnapshot>>>,
     cancel: Arc<Mutex<BTreeMap<NativeComponentId, Arc<AtomicBool>>>>,
@@ -81,6 +83,10 @@ impl NativeService {
                 .into_iter()
                 .map(|id| NativeSnapshot {
                     id,
+                    enabled: true,
+                    in_use: false,
+                    install_path: None,
+                    phase: None,
                     installed_version: None,
                     available_version: None,
                     rollback_available: false,
@@ -92,6 +98,7 @@ impl NativeService {
                 .collect::<Vec<_>>(),
         ));
         let service = Arc::new(Self {
+            changed: Arc::downgrade(&changed),
             sender: sender.clone(),
             snapshots: snapshots.clone(),
             cancel: Arc::new(Mutex::new(BTreeMap::new())),
@@ -125,9 +132,11 @@ impl NativeService {
                                 .as_mut()
                                 .map_err(|e| e.clone())
                                 .and_then(|r| r.acquire(id, sender.clone()));
+                            refresh(&registry, &snapshots, &changed);
                             let _ = reply.send(result);
                         }
                         Request::Change(id, action, reply) => {
+                            update(&snapshots, id, &changed, |s| s.error = None);
                             let installation =
                                 matches!(&action, NativeAction::Install | NativeAction::Import(_));
                             let cancellation =
@@ -158,10 +167,15 @@ impl NativeService {
                             if let Ok(registry) = &mut registry {
                                 registry.reap();
                             }
+                            update(&snapshots, id, &changed, |s| {
+                                s.phase = None;
+                                s.error = result
+                                    .as_ref()
+                                    .err()
+                                    .filter(|error| error.code != ErrorCode::Cancelled)
+                                    .cloned();
+                            });
                             refresh(&registry, &snapshots, &changed);
-                            if let Err(error) = &result {
-                                update(&snapshots, id, &changed, |s| s.error = Some(error.clone()));
-                            }
                             let _ = reply.send(result.clone());
                             if installation
                                 && let Some(waiters) = installing.lock().unwrap().remove(&id)
@@ -178,6 +192,22 @@ impl NativeService {
         *service.worker.lock().unwrap() = Some(worker);
         Ok(service)
     }
+    fn publish(&self, id: NativeComponentId, change: impl FnOnce(&mut NativeSnapshot)) {
+        let mut snapshots = self.snapshots.write().unwrap();
+        change(
+            snapshots
+                .iter_mut()
+                .find(|snapshot| snapshot.id == id)
+                .unwrap(),
+        );
+        drop(snapshots);
+        // The worker owns the event sender; a retained service must not keep the
+        // event stream open after shutdown.
+        if let Some(changed) = self.changed.upgrade() {
+            changed();
+        }
+    }
+
     pub fn snapshot(&self) -> Vec<NativeSnapshot> {
         self.snapshots.read().unwrap().clone()
     }
@@ -210,6 +240,13 @@ impl NativeService {
                 .unwrap()
                 .insert(id, Arc::new(AtomicBool::new(false)));
         }
+        if installation {
+            self.publish(id, |s| {
+                s.phase = Some(OperationPhase::Queued);
+                s.error = None;
+                s.downloaded = 0;
+            });
+        }
         if self
             .sender
             .try_send(Request::Change(id, action, reply))
@@ -218,6 +255,7 @@ impl NativeService {
             if installation {
                 installing.remove(&id);
                 self.cancel.lock().unwrap().remove(&id);
+                self.publish(id, |s| s.phase = None);
             }
             return Err(PluginError::new(
                 ErrorCode::QueueFull,
@@ -239,6 +277,13 @@ impl NativeService {
         Ok(task)
     }
     pub fn cancel(&self, id: NativeComponentId) {
+        let snapshots = self.snapshots.read().unwrap();
+        if !snapshots
+            .iter()
+            .any(|s| s.id == id && s.phase.is_some_and(OperationPhase::cancellable))
+        {
+            return;
+        }
         self.cancel
             .lock()
             .unwrap()
@@ -272,6 +317,25 @@ fn update(
     }
     changed();
 }
+fn begin_commit(
+    snapshots: &RwLock<Vec<NativeSnapshot>>,
+    id: NativeComponentId,
+    changed: &Arc<dyn Fn() + Send + Sync>,
+    cancel: &impl Fn() -> PluginResult<()>,
+) -> PluginResult<()> {
+    // Serialize cancellation admission with the irreversible filesystem boundary.
+    let mut snapshots = snapshots.write().unwrap();
+    cancel()?;
+    snapshots
+        .iter_mut()
+        .find(|snapshot| snapshot.id == id)
+        .unwrap()
+        .phase = Some(OperationPhase::Committing);
+    drop(snapshots);
+    changed();
+    Ok(())
+}
+
 fn refresh(
     registry: &PluginResult<Registry>,
     snapshots: &RwLock<Vec<NativeSnapshot>>,
@@ -284,10 +348,22 @@ fn refresh(
         };
         update(snapshots, id, changed, |s| {
             s.status = status;
-            s.error = error;
+            if error.is_some() {
+                s.error = error;
+            }
             if let Ok(registry) = registry
                 && let Ok(selection) = registry.selection(id)
             {
+                s.enabled = !registry
+                    .preferences
+                    .components
+                    .get(&id)
+                    .is_some_and(|p| p.disabled || p.uninstall_pending);
+                s.in_use = registry.in_use(id);
+                s.install_path = selection
+                    .active
+                    .as_ref()
+                    .map(|v| registry.version_directory(id, v));
                 s.installed_version = selection.active.map(|v| v.version);
                 s.rollback_available = selection.previous.is_some();
                 if status == NativeStatus::Ready
@@ -361,6 +437,9 @@ fn change(
             Ok(())
         }
         NativeAction::Install | NativeAction::Import(_) => {
+            update(snapshots, id, changed, |s| {
+                s.phase = Some(OperationPhase::Checking)
+            });
             let _lock = registry.install_lock(id)?;
             let release = if matches!(action, NativeAction::Install) {
                 Some(catalog::select(id, cancel)?)
@@ -372,6 +451,11 @@ fn change(
             fs::create_dir(&payload).map_err(|_| io_error())?;
             update(snapshots, id, changed, |s| {
                 s.status = NativeStatus::Installing;
+                s.phase = Some(if release.is_some() {
+                    OperationPhase::Downloading
+                } else {
+                    OperationPhase::Verifying
+                });
                 s.downloaded = 0;
                 s.error = None;
             });
@@ -416,6 +500,9 @@ fn change(
                     source
                 }
             };
+            update(snapshots, id, changed, |s| {
+                s.phase = Some(OperationPhase::Verifying)
+            });
             if let Some(release) = &release {
                 let mut file = File::open(&source).map_err(|_| io_error())?;
                 if file.metadata().map_err(|_| io_error())?.len() != release.size {
@@ -438,6 +525,9 @@ fn change(
                     ));
                 }
             }
+            update(snapshots, id, changed, |s| {
+                s.phase = Some(OperationPhase::Installing)
+            });
             package::extract(&source, &payload, id, cancel)?;
             let manifest = package::verify(&payload, id, cancel)?;
             if release.as_ref().is_some_and(|r| {
@@ -479,6 +569,7 @@ fn change(
             let valid_existing = target.exists()
                 && package::verify(&target, id, cancel).is_ok()
                 && package::manifest_digest(&target)? == installed.digest;
+            begin_commit(snapshots, id, changed, cancel)?;
             if !valid_existing {
                 let _version_lock = registry.lock_version(id, &installed, false)?;
                 let old = stage.path.join("old");
@@ -508,7 +599,7 @@ fn change(
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_core::plugins::native::NativeComponentId;
+    use nyaterm_core::plugins::native::{NativeComponentId, NativeSnapshot, NativeStatus};
 
     #[test]
     fn component_http_body_reads_without_a_caller_tokio_runtime() {
@@ -559,7 +650,26 @@ mod tests {
         (
             super::NativeService {
                 sender,
-                snapshots: Arc::new(RwLock::new(Vec::new())),
+                changed: Arc::downgrade(&(Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>)),
+                snapshots: Arc::new(RwLock::new(
+                    NativeComponentId::ALL
+                        .into_iter()
+                        .map(|id| NativeSnapshot {
+                            id,
+                            enabled: true,
+                            in_use: false,
+                            install_path: None,
+                            phase: None,
+                            installed_version: None,
+                            available_version: None,
+                            rollback_available: false,
+                            status: NativeStatus::Missing,
+                            downloaded: 0,
+                            download_size: None,
+                            error: None,
+                        })
+                        .collect(),
+                )),
                 cancel: Arc::new(Mutex::new(BTreeMap::new())),
                 installing: Arc::new(Mutex::new(BTreeMap::new())),
                 stop: Arc::new(AtomicBool::new(false)),
@@ -614,5 +724,53 @@ mod tests {
         assert!(!service.cancel.lock().unwrap()[&id].load(Ordering::Acquire));
         service.cancel(id);
         assert!(service.cancel.lock().unwrap()[&id].load(Ordering::Acquire));
+    }
+    #[test]
+    fn accepted_cancellation_prevents_commit_and_commit_rejects_late_cancellation() {
+        use nyaterm_core::plugins::management::OperationPhase;
+        use nyaterm_core::plugins::{ErrorCode, PluginError};
+        use std::sync::atomic::Ordering;
+        let (service, _receiver) = queued_service();
+        let id = NativeComponentId::Vnc;
+        let _task = service.submit(id, super::NativeAction::Install).unwrap();
+        let cancelled = service.cancel.lock().unwrap()[&id].clone();
+        let check = || {
+            if cancelled.load(Ordering::Acquire) {
+                Err(PluginError::new(ErrorCode::Cancelled, "Cancelled"))
+            } else {
+                Ok(())
+            }
+        };
+        service.cancel(id);
+        assert_eq!(
+            super::begin_commit(
+                &service.snapshots,
+                id,
+                &(std::sync::Arc::new(|| {}) as std::sync::Arc<dyn Fn() + Send + Sync>),
+                &check
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::Cancelled
+        );
+        cancelled.store(false, Ordering::Release);
+        super::begin_commit(
+            &service.snapshots,
+            id,
+            &(std::sync::Arc::new(|| {}) as std::sync::Arc<dyn Fn() + Send + Sync>),
+            &check,
+        )
+        .unwrap();
+        service.cancel(id);
+        assert!(!cancelled.load(Ordering::Acquire));
+        assert_eq!(
+            service
+                .snapshot()
+                .into_iter()
+                .find(|snapshot| snapshot.id == id)
+                .unwrap()
+                .phase,
+            Some(OperationPhase::Committing)
+        );
     }
 }

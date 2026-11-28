@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+semver.workspace = true
 nyaterm-x11.workspace = true
 nyaterm-remote-monitor-gpui.workspace = true
 nyaterm-connections-gpui.workspace = true

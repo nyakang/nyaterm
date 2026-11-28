@@ -18,7 +18,7 @@ pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub const TARGET: &str = env!("NYATERM_COMPONENT_TARGET");
 pub const PUBLIC_KEY: &str = "RWSZPSpWBhqvgoiKJDtMwSvT1VUNZFVd4bU6qiNFGMYMAcM91M5b1bSb";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeComponentId {
     Spice,
@@ -210,6 +210,10 @@ pub enum NativeStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeSnapshot {
+    pub enabled: bool,
+    pub in_use: bool,
+    pub install_path: Option<PathBuf>,
+    pub phase: Option<crate::plugins::management::OperationPhase>,
     pub installed_version: Option<String>,
     pub available_version: Option<String>,
     pub rollback_available: bool,

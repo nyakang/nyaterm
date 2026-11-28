@@ -1,3 +1,4 @@
+mod details;
 mod list;
 
 use crate::features::NyaTermApp;
@@ -11,16 +12,15 @@ use gpui::{
 use nyaterm_core::command_draft::DraftOrigin;
 use nyaterm_core::plugins::invocation::{ActionInput, ActionResult, parse_parameter};
 use nyaterm_core::plugins::manifest::{ParameterKind, ResultKind};
-use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError, PluginStatus};
+use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError};
 use nyaterm_plugin_host::manager::{
-    CatalogSnapshot, Contribution, InvocationLease, PluginSnapshot, PluginSource,
+    CatalogSnapshot, Contribution, InvocationLease, PluginSnapshot,
 };
 use nyaterm_plugin_host::service::{OperationReply, PluginOperation};
 use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use nyaterm_ui::presentation::progress_bar;
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInput, NyaInputEvent, NyaInputState,
-    NyaMenuItem, NyaScrollable, NyaSwitch,
+    NyaButton, NyaButtonVariant, NyaInput, NyaInputEvent, NyaInputState, NyaScrollable,
 };
 use rust_i18n::t;
 
@@ -40,27 +40,21 @@ struct Preview {
     lease: InvocationLease,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum PendingKind {
-    Management,
-    Invocation,
-}
-
 struct PendingOperation {
-    kind: PendingKind,
     task: Task<()>,
 }
 
 pub(in crate::features) struct PluginPanel {
     app: WeakEntity<NyaTermApp>,
+    pub(super) detail_key: Option<nyaterm_core::plugins::management::PluginKey>,
+    pub(super) detail_tab: usize,
+    pub(in crate::features) focus: gpui::FocusHandle,
     pub(super) process: Entity<PluginProcess>,
     search: Entity<NyaInputState>,
     pub(super) discover: bool,
-    pub(super) native_collapsed: bool,
     pub(super) tool_panels:
         std::collections::BTreeMap<(String, String), super::tool_panel::ToolPanel>,
     developer_tools: bool,
-    expanded_plugin: Option<String>,
     permission_scope: Entity<NyaInputState>,
     selected_permission: Option<(String, String, u64)>,
     text: Entity<NyaInputState>,
@@ -91,7 +85,25 @@ impl PluginPanel {
         text: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        self.discover = false;
+        if self.detail_key.is_none() {
+            let app = self.app.clone();
+            cx.defer(move |cx| {
+                let _ = app.update(cx, |app, cx| {
+                    let detail = app.open_plugin_details(
+                        nyaterm_core::plugins::management::PluginKey::Wasm(
+                            contribution.plugin_id.clone(),
+                        ),
+                        3,
+                        cx,
+                    );
+                    detail.update(cx, |detail, cx| {
+                        detail.run_contribution(contribution, text, cx)
+                    });
+                });
+            });
+            return;
+        }
+        self.detail_tab = 3;
         if contribution
             .action
             .parameters
@@ -130,12 +142,26 @@ impl PluginPanel {
                 })
             });
             let snapshot = snapshot.clone();
+            if this
+                .selected_permission
+                .as_ref()
+                .is_some_and(|(id, _, revision)| {
+                    !snapshot
+                        .plugins
+                        .iter()
+                        .any(|plugin| &plugin.id == id && &plugin.revision == revision)
+                })
+            {
+                this.selected_permission = None;
+                this.permission_scope
+                    .update(cx, |state, cx| state.clear(cx));
+            }
             if this.clear_stale_selection(&snapshot, cx) {
                 if this.can_cancel() {
                     this.pending.take();
                     this.generation += 1;
                 }
-                if !this.busy() {
+                if !this.busy(cx) {
                     this.notify_error(t!("plugins.actionChanged"), cx);
                 }
             }
@@ -149,12 +175,13 @@ impl PluginPanel {
         });
         Self {
             app,
+            detail_key: None,
+            detail_tab: 0,
+            focus: cx.focus_handle(),
             process,
             discover: true,
-            native_collapsed: false,
             tool_panels: std::collections::BTreeMap::new(),
             developer_tools: false,
-            expanded_plugin: None,
             selected_permission: None,
             permission_scope: cx
                 .new(|cx| NyaInputState::new(cx, "").placeholder(t!("plugins.permissionScope"))),
@@ -225,21 +252,11 @@ impl PluginPanel {
         stale
     }
 
-    pub(super) fn close_workbench_if_idle(&mut self, cx: &mut Context<Self>) {
-        if self.busy() || (self.selected.is_none() && self.preview.is_none()) {
-            return;
-        }
-        self.selected = None;
-        self.preview = None;
-        self.parameters.clear();
-        self.output.update(cx, |state, cx| state.clear(cx));
-    }
-
     fn close_workbench(&mut self, cx: &mut Context<Self>) {
         if self.can_cancel() {
             self.pending.take();
             self.generation += 1;
-        } else if self.busy() {
+        } else if self.busy(cx) {
             return;
         }
         self.selected = None;
@@ -250,7 +267,7 @@ impl PluginPanel {
     }
 
     fn select(&mut self, contribution: Contribution, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.busy(cx) {
             return;
         }
         self.generation += 1;
@@ -276,14 +293,15 @@ impl PluginPanel {
     }
 
     fn operation(&mut self, operation: PluginOperation, cx: &mut Context<Self>) {
-        if self.busy() {
+        if !matches!(operation, PluginOperation::Invoke { .. }) {
+            self.process.update(cx, |process, cx| {
+                process.manage(super::management::ManagementAction::Wasm(operation), cx)
+            });
             return;
         }
-        let kind = if matches!(&operation, PluginOperation::Invoke { .. }) {
-            PendingKind::Invocation
-        } else {
-            PendingKind::Management
-        };
+        if self.busy(cx) {
+            return;
+        }
         let Some(service) = self.process.read(cx).service.clone() else {
             self.notify_error(t!("plugins.unavailable"), cx);
             cx.notify();
@@ -329,12 +347,6 @@ impl PluginPanel {
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
-                }
-                if kind == PendingKind::Management {
-                    // Reconcile before releasing the waiter: catalog events can
-                    // arrive after the reply, and must not report our own change
-                    // as a newly invalidated action.
-                    this.clear_stale_selection(&service.snapshot(), cx);
                 }
                 if let Some(pending) = this.pending.take() {
                     pending.task.detach();
@@ -385,12 +397,12 @@ impl PluginPanel {
                 cx.notify();
             });
         });
-        self.pending = Some(PendingOperation { kind, task });
+        self.pending = Some(PendingOperation { task });
         cx.notify();
     }
 
     fn invoke(&mut self, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.busy(cx) {
             return;
         }
         let Some(selected) = self.selected.clone() else {
@@ -436,14 +448,18 @@ impl PluginPanel {
         cx.notify();
     }
 
-    fn busy(&self) -> bool {
+    fn busy(&self, cx: &gpui::App) -> bool {
+        let process = self.process.read(cx);
         self.pending.is_some()
+            || process.job_busy("\0global")
+            || self
+                .detail_key
+                .as_ref()
+                .is_some_and(|key| process.job_busy(&key.id()))
     }
 
     fn can_cancel(&self) -> bool {
-        self.pending
-            .as_ref()
-            .is_some_and(|pending| pending.kind == PendingKind::Invocation)
+        self.pending.is_some()
     }
 
     fn fill(&mut self, replace: bool, cx: &mut Context<Self>) {
@@ -492,36 +508,9 @@ impl PluginPanel {
         action: nyaterm_plugin_host::native::NativeAction,
         cx: &mut Context<Self>,
     ) {
-        let Some(service) = self.process.read(cx).service() else {
-            return;
-        };
-        let task = match service.native.submit(id, action) {
-            Ok(task) => task,
-            Err(error) => {
-                self.notify_error(
-                    crate::features::plugins::native::native_error_message(&error),
-                    cx,
-                );
-                cx.notify();
-                return;
-            }
-        };
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => this.notify_error(
-                        crate::features::plugins::native::native_error_message(&error),
-                        cx,
-                    ),
-                    Err(_) => this.notify_error(t!("plugins.unavailable"), cx),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+        self.process.update(cx, |process, cx| {
+            process.manage(super::management::ManagementAction::Native(id, action), cx)
+        });
     }
 
     fn browse_native(
@@ -603,28 +592,6 @@ fn capability_label(capability: &str) -> String {
     t!(&key).to_string()
 }
 
-fn status_label(status: PluginStatus) -> String {
-    t!(match status {
-        PluginStatus::Installed => "plugins.installed",
-        PluginStatus::Enabled => "plugins.enabled",
-        PluginStatus::Running => "plugins.running",
-        PluginStatus::Incompatible => "plugins.incompatible",
-        PluginStatus::LoadFailed => "plugins.loadFailed",
-        PluginStatus::Faulted => "plugins.faulted",
-    })
-    .to_string()
-}
-
-fn status_tone(status: PluginStatus) -> list::RowTone {
-    match status {
-        PluginStatus::Enabled | PluginStatus::Running => list::RowTone::Active,
-        PluginStatus::Installed => list::RowTone::Neutral,
-        PluginStatus::Incompatible | PluginStatus::LoadFailed | PluginStatus::Faulted => {
-            list::RowTone::Danger
-        }
-    }
-}
-
 fn parameter_kind_label(kind: ParameterKind) -> &'static str {
     match kind {
         ParameterKind::String => "text",
@@ -661,97 +628,6 @@ fn empty_hint(icon_path: &'static str, text: String, palette: ThemePalette) -> D
 }
 
 impl PluginPanel {
-    fn render_store_section(
-        &self,
-        snapshot: &CatalogSnapshot,
-        query: &str,
-        palette: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> (usize, Option<Div>) {
-        let Some(service) = self.process.read(cx).service() else {
-            return (0, None);
-        };
-        let catalog = service.store_catalog.read().unwrap().clone();
-        let Some(catalog) = catalog else {
-            return (0, None);
-        };
-
-        let listings: Vec<_> = catalog
-            .extensions
-            .iter()
-            .filter(|listing| {
-                list::matches_query(
-                    query,
-                    &[&listing.name, &listing.description, &listing.publisher],
-                )
-            })
-            .collect();
-        let count = listings.len();
-        if count == 0 && !query.is_empty() {
-            return (0, None);
-        }
-
-        let mut section = div()
-            .w_full()
-            .min_w_0()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .child(list::section(
-                t!("plugins.discover").to_string(),
-                count,
-                palette,
-            ));
-        for listing in listings {
-            let id = listing.id.clone();
-            let installed = snapshot.plugins.iter().any(|plugin| plugin.id == id);
-            let compatible = listing
-                .compatible_release(env!("CARGO_PKG_VERSION"))
-                .is_some();
-            let tone = if installed {
-                Some(list::RowTone::Active)
-            } else if !compatible {
-                Some(list::RowTone::Danger)
-            } else {
-                None
-            };
-            let metadata = if !compatible {
-                format!("{} · {}", listing.publisher, t!("plugins.incompatible"))
-            } else {
-                listing.publisher.clone()
-            };
-            section = section.child(list::extension_row(
-                list::ExtensionRowSpec {
-                    id: format!("store-row-{id}"),
-                    icon: "icons/extensions.svg",
-                    name: listing.name.clone(),
-                    description: listing.description.clone(),
-                    metadata,
-                    tone,
-                    progress: None,
-                    selected: false,
-                },
-                palette,
-                NyaButton::new(
-                    format!("store-install-{id}"),
-                    t!(if installed {
-                        "plugins.installed"
-                    } else {
-                        "plugins.install"
-                    }),
-                )
-                .small()
-                .compact()
-                .disabled(self.busy() || !compatible || installed)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.operation(PluginOperation::InstallFromStore { id: id.clone() }, cx)
-                })),
-            ));
-        }
-        (count, Some(section))
-    }
-
     fn render_plugin_card(
         &self,
         plugin: &PluginSnapshot,
@@ -760,159 +636,20 @@ impl PluginPanel {
         cx: &mut Context<Self>,
     ) -> Div {
         let card_selector = format!("plugin-card-{}", plugin.id);
-        let toggle_id = plugin.id.clone();
-        let reload_id = plugin.id.clone();
-        let update_id = plugin.id.clone();
-        let uninstall_id = plugin.id.clone();
-        let enabled = plugin.enabled;
-
-        let source_label = match &plugin.source {
-            PluginSource::Managed => t!("plugins.managed").to_string(),
-            PluginSource::Development(path) => {
-                format!("{}: {}", t!("plugins.development"), path.display())
-            }
-        };
-
-        let menu = NyaDropdownMenu::new(format!("plugins-manage-menu-{}", plugin.id))
-            .icon("icons/session/more.svg")
-            .tooltip(t!("plugins.manage"))
-            .disabled(self.busy())
-            .items([
-                NyaMenuItem::action(if enabled {
-                    t!("plugins.disable")
-                } else {
-                    t!("plugins.enable")
-                })
-                .disabled(self.busy())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.operation(
-                        PluginOperation::Enable {
-                            id: toggle_id.clone(),
-                            enabled: !enabled,
-                        },
-                        cx,
-                    )
-                })),
-                NyaMenuItem::action(t!("plugins.reload"))
-                    .disabled(self.busy())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.operation(
-                            PluginOperation::Reload {
-                                id: reload_id.clone(),
-                            },
-                            cx,
-                        )
-                    })),
-                NyaMenuItem::action(t!("plugins.update"))
-                    .disabled(self.busy())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let from_store =
-                            this.process.read(cx).service().is_some_and(|service| {
-                                service.store_catalog.read().unwrap().as_ref().is_some_and(
-                                    |catalog| {
-                                        catalog.extensions.iter().any(|entry| entry.id == update_id)
-                                    },
-                                )
-                            });
-                        if from_store {
-                            this.operation(
-                                PluginOperation::InstallFromStore {
-                                    id: update_id.clone(),
-                                },
-                                cx,
-                            );
-                        } else {
-                            this.browse_update(update_id.clone(), cx);
-                        }
-                    })),
-                NyaMenuItem::separator(),
-                NyaMenuItem::action(t!("plugins.uninstall"))
-                    .danger()
-                    .disabled(self.busy())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.operation(
-                            PluginOperation::Uninstall {
-                                id: uninstall_id.clone(),
-                            },
-                            cx,
-                        )
-                    })),
-            ]);
-
         let mut card = div()
             .debug_selector(move || card_selector.clone())
             .w_full()
             .min_w_0()
-            .flex_none()
-            .mb_1()
-            .p(px(10.))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.surface_elevated))
             .flex()
             .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child(format!("{} · {source_label}", plugin.id)),
-                    )
-                    .child(menu),
-            );
-
-        if let Some(manifest) = &plugin.manifest {
-            if !manifest.description.is_empty() {
-                card = card.child(
-                    div()
-                        .text_xs()
-                        .line_height(px(18.))
-                        .text_color(rgb(palette.text))
-                        .child(manifest.description.clone()),
-                );
-            }
-            card = card.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.text_dimmed))
-                    .child(format!(
-                        "API {} · schema {} · NyaTerm {}",
-                        manifest.api_version, manifest.schema_version, manifest.host_version
-                    )),
-            );
-        }
-
-        if let Some(error) = &plugin.error {
-            card = card.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(palette.danger))
-                    .text_xs()
-                    .text_color(rgb(palette.danger))
-                    .child(error.message.clone()),
-            );
-        }
-
+            .gap_3();
         let plugin_contributions: Vec<_> = snapshot
             .contributions
             .iter()
             .filter(|c| c.plugin_id == plugin.id)
             .cloned()
             .collect();
-        if !plugin_contributions.is_empty() {
+        if self.detail_tab == 3 && !plugin_contributions.is_empty() {
             let mut actions_group = div()
                 .flex()
                 .flex_col()
@@ -939,7 +676,7 @@ impl PluginPanel {
                     .full_width()
                     .label_left()
                     .tooltip(contribution.action.description.clone())
-                    .disabled(self.busy())
+                    .disabled(self.busy(cx))
                     .on_click(cx.listener(move |this, _, _, cx| this.select(selected.clone(), cx))),
                 );
             }
@@ -960,7 +697,10 @@ impl PluginPanel {
             })
             .unwrap_or_default();
 
-        if pending_requests.is_some_and(|r| !r.is_empty()) || !grantable_capabilities.is_empty() {
+        if self.detail_tab == 2
+            && (pending_requests.is_some_and(|r| !r.is_empty())
+                || !grantable_capabilities.is_empty())
+        {
             let mut perm_group = div()
                 .flex()
                 .flex_col()
@@ -987,7 +727,7 @@ impl PluginPanel {
                                 .small()
                                 .compact()
                                 .variant(NyaButtonVariant::Ghost)
-                                .disabled(self.busy())
+                                .disabled(self.busy(cx))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.operation(
                                         PluginOperation::RevokeAuthorizations {
@@ -1034,7 +774,7 @@ impl PluginPanel {
                             .full_width()
                             .label_left()
                             .variant(NyaButtonVariant::Primary)
-                            .disabled(self.busy())
+                            .disabled(self.busy(cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.operation(
                                     PluginOperation::Authorize {
@@ -1120,7 +860,7 @@ impl PluginPanel {
                                             .small()
                                             .full_width()
                                             .variant(NyaButtonVariant::Primary)
-                                            .disabled(self.busy())
+                                            .disabled(self.busy(cx))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 let scope = this
                                                     .permission_scope
@@ -1158,144 +898,6 @@ impl PluginPanel {
         }
 
         card
-    }
-
-    fn render_installed_section(
-        &self,
-        snapshot: &CatalogSnapshot,
-        query: &str,
-        palette: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> (usize, Div) {
-        let matching: Vec<_> = snapshot
-            .plugins
-            .iter()
-            .filter(|plugin| list::matches_plugin(plugin, query))
-            .collect();
-        let count = matching.len();
-        let mut section = div()
-            .w_full()
-            .min_w_0()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(2.));
-        if count == 0 && !query.is_empty() {
-            return (0, section);
-        }
-
-        section = section.child(list::section(
-            t!("plugins.installed").to_string(),
-            count,
-            palette,
-        ));
-        if snapshot.plugins.is_empty() {
-            section = section.child(empty_hint(
-                "icons/extensions.svg",
-                t!("plugins.empty").to_string(),
-                palette,
-            ));
-            return (0, section);
-        }
-
-        for plugin in matching {
-            let name = plugin.manifest.as_ref().map_or(plugin.id.clone(), |m| {
-                format!("{} · v{}", m.name, m.version)
-            });
-            let has_selected_perm = self
-                .selected_permission
-                .as_ref()
-                .is_some_and(|(sel_id, _, _)| sel_id == &plugin.id);
-            let expanded =
-                self.expanded_plugin.as_deref() == Some(plugin.id.as_str()) || has_selected_perm;
-            let detail_id = plugin.id.clone();
-            let toggle_id = plugin.id.clone();
-            let enabled = plugin.enabled;
-            let metadata = plugin.manifest.as_ref().map_or_else(
-                || status_label(plugin.status),
-                |m| {
-                    if m.authors.is_empty() {
-                        status_label(plugin.status)
-                    } else {
-                        format!("{} · {}", m.authors.join(", "), status_label(plugin.status))
-                    }
-                },
-            );
-
-            let actions = div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    NyaSwitch::new(format!("plugins-switch-{}", plugin.id))
-                        .checked(enabled)
-                        .disabled(self.busy())
-                        .tooltip(if enabled {
-                            t!("plugins.disable")
-                        } else {
-                            t!("plugins.enable")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.operation(
-                                PluginOperation::Enable {
-                                    id: toggle_id.clone(),
-                                    enabled: !enabled,
-                                },
-                                cx,
-                            )
-                        })),
-                )
-                .child(
-                    NyaButton::new(format!("plugin-details-{}", plugin.id), "")
-                        .icon(if expanded {
-                            "icons/chevron-up.svg"
-                        } else {
-                            "icons/chevron-down.svg"
-                        })
-                        .variant(NyaButtonVariant::Ghost)
-                        .small()
-                        .compact()
-                        .selected(expanded)
-                        .tooltip(t!("plugins.manage"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if expanded {
-                                this.expanded_plugin = None;
-                                if this
-                                    .selected_permission
-                                    .as_ref()
-                                    .is_some_and(|(id, _, _)| id == &detail_id)
-                                {
-                                    this.selected_permission = None;
-                                }
-                            } else {
-                                this.expanded_plugin = Some(detail_id.clone());
-                            }
-                            cx.notify();
-                        })),
-                );
-
-            section = section.child(list::extension_row(
-                list::ExtensionRowSpec {
-                    id: format!("plugin-row-{}", plugin.id),
-                    icon: "icons/extensions.svg",
-                    name,
-                    description: plugin
-                        .manifest
-                        .as_ref()
-                        .map_or_else(String::new, |m| m.description.clone()),
-                    metadata,
-                    tone: Some(status_tone(plugin.status)),
-                    progress: None,
-                    selected: expanded,
-                },
-                palette,
-                actions,
-            ));
-            if expanded {
-                section = section.child(self.render_plugin_card(plugin, snapshot, palette, cx));
-            }
-        }
-        (count, section)
     }
 
     fn render_tool_panels(
@@ -1480,7 +1082,7 @@ impl PluginPanel {
                                 label.clone(),
                             )
                             .small()
-                            .disabled(self.busy() || contribution.is_none())
+                            .disabled(self.busy(cx) || contribution.is_none())
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     if let Some(contribution) = &contribution {
@@ -1549,7 +1151,7 @@ impl PluginPanel {
                             .small()
                             .compact()
                             .variant(NyaButtonVariant::Ghost)
-                            .disabled(self.busy() && !self.can_cancel())
+                            .disabled(self.busy(cx) && !self.can_cancel())
                             .on_click(cx.listener(|this, _, _, cx| this.close_workbench(cx))),
                     ),
             );
@@ -1661,7 +1263,7 @@ impl PluginPanel {
                         .tooltip(t!("plugins.invoke"))
                         .variant(NyaButtonVariant::Primary)
                         .loading(self.can_cancel())
-                        .disabled(self.busy())
+                        .disabled(self.busy(cx))
                         .on_click(cx.listener(|this, _, _, cx| this.invoke(cx))),
                 ),
             );
@@ -1793,83 +1395,18 @@ impl Render for PluginPanel {
             .upgrade()
             .map(|app| app.read(cx).theme_palette())
             .unwrap_or_else(|| crate::theme::theme_palette("dark"));
-        let snapshot = self.process.read(cx).snapshot.clone();
+        if self.detail_key.is_some() {
+            return self.render_details(palette, cx).into_any_element();
+        }
+        let entries = super::projection::entries(self.process.read(cx));
         let query = self.search.read(cx).value(cx).trim().to_lowercase();
-        let toolbar = self.toolbar(snapshot.plugins.len(), palette, cx);
-
-        let mut content = div()
-            .id("plugins-scroll")
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .px_2()
-            .py_2()
-            .flex()
-            .flex_col()
-            .gap_1();
-
-        if let Some(error) = &snapshot.startup_error {
-            content = content.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(palette.danger))
-                    .text_xs()
-                    .text_color(rgb(palette.danger))
-                    .child(error.message.clone()),
-            );
-        }
-
-        if self.selected.is_some() || self.preview.is_some() {
-            content = content.child(self.render_workbench(palette, cx));
-        } else {
-            if self.developer_tools {
-                content = content.child(
-                    NyaButton::new("extensions-development-load", t!("plugins.development"))
-                        .icon("icons/session/folder-open.svg")
-                        .small()
-                        .full_width()
-                        .disabled(self.busy())
-                        .on_click(cx.listener(|this, _, _, cx| this.browse(true, cx))),
-                );
-            }
-
-            if self.discover {
-                let (store_matches, store_view) =
-                    self.render_store_section(&snapshot, &query, palette, cx);
-                let (native_matches, native_view) = self.native_list(&query, palette, cx);
-                if let Some(store_view) = store_view {
-                    content = content.child(store_view);
-                }
-                content = content.child(native_view);
-                if !query.is_empty() && store_matches == 0 && native_matches == 0 {
-                    content = content.child(empty_hint(
-                        "icons/ai/search.svg",
-                        t!("plugins.noMatches").to_string(),
-                        palette,
-                    ));
-                }
-            } else {
-                let (installed_matches, installed_view) =
-                    self.render_installed_section(&snapshot, &query, palette, cx);
-                let (native_matches, native_view) = self.native_list(&query, palette, cx);
-                content = content.child(installed_view);
-                if !self.tool_panels.is_empty() && query.is_empty() {
-                    content = content.child(self.render_tool_panels(&snapshot, palette, cx));
-                }
-                content = content.child(native_view);
-                if !query.is_empty() && installed_matches == 0 && native_matches == 0 {
-                    content = content.child(empty_hint(
-                        "icons/ai/search.svg",
-                        t!("plugins.noMatches").to_string(),
-                        palette,
-                    ));
-                }
-            }
-        }
-
+        let count = entries.iter().filter(|entry| entry.installed).count();
+        let updates = entries
+            .iter()
+            .filter(|entry| entry.installed && entry.update_available)
+            .count();
+        let toolbar = self.toolbar(count, updates, palette, cx);
+        let content = self.render_list(&entries, &query, palette, cx);
         div()
             .size_full()
             .min_w_0()
@@ -1881,7 +1418,8 @@ impl Render for PluginPanel {
             .text_sm()
             .whitespace_normal()
             .child(toolbar)
-            .child(content.overflow_y_scrollbar())
+            .child(content)
+            .into_any_element()
     }
 }
 
@@ -1896,7 +1434,7 @@ mod tests {
     use nyaterm_core::plugins::native::NativeComponentId;
     use nyaterm_core::runtime::{AppRuntime, RuntimeMode};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_plugin_host::service::{PluginOperation, PluginService};
+    use nyaterm_plugin_host::service::PluginOperation;
     use std::path::Path;
     use std::time::{Duration, Instant};
 
@@ -1924,211 +1462,54 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(
                 cx.read(|cx| app.read(cx).shell.status().to_string()),
-                "Native component request cancelled"
+                "before install"
             );
         }
     }
 
     #[test]
-    fn catalog_changes_preserve_management_waiter_and_only_notify_failures() {
-        for (succeed, catalog_first) in [(true, true), (false, true), (true, false), (false, false)]
-        {
-            let root = TestTempDir::new("nyaterm-plugin-panel-management");
-            let mut cx = TestAppContext::single();
-            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-            let app = app_with_visible_local_session(&mut cx, root.path(), "management-session");
-            let runtime = AppRuntime::from_parts_for_test(
-                RuntimeMode::Portable,
-                root.path().into(),
-                root.join("config"),
-                root.join("logs"),
-                root.join("cache"),
-                None,
-            );
-            let (service, _events) = PluginService::start(runtime).unwrap();
-            // Deliver the real service snapshot explicitly to cover both event /
-            // reply orderings without depending on GPUI executor scheduling.
-            let process = cx.new(|_| PluginProcess::empty());
-            cx.update_entity(&process, |process, _| {
-                process.service = Some(service.clone())
-            });
-            let source = root.join("source");
-            std::fs::create_dir_all(&source).unwrap();
-            let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            std::fs::copy(
-                crate_root.join("../../examples/plugins/diagnostic-command/plugin.toml"),
-                source.join("plugin.toml"),
-            )
-            .unwrap();
-            std::fs::copy(
-                crate_root.join("../nyaterm-plugin-host/tests/fixtures/diagnostic-command.wasm"),
-                source.join("plugin.wasm"),
-            )
-            .unwrap();
-            block_on(
-                service
-                    .submit(PluginOperation::Install {
-                        source,
-                        development: false,
-                    })
-                    .unwrap(),
-            )
-            .unwrap()
-            .unwrap();
-            cx.update_entity(&process, |process, cx| {
-                process.snapshot = service.snapshot();
-                cx.notify();
-            });
-            let panel = cx.new(|cx| PluginPanel::new(app.downgrade(), process.clone(), cx));
-            cx.update_entity(&app, |app, _| app.plugins.panel = panel.clone());
-            cx.run_until_parked();
-            let contribution = service.snapshot().contributions[0].clone();
-            let (release, gate) = futures::channel::oneshot::channel();
-            cx.update_entity(&panel, |panel, cx| {
-                panel.select(contribution, cx);
-                panel.completion_gate = Some(gate);
-                panel.operation(
-                    if succeed {
-                        PluginOperation::Enable {
-                            id: "diagnostic-command".into(),
-                            enabled: false,
-                        }
-                    } else {
-                        PluginOperation::Update {
-                            id: "diagnostic-command".into(),
-                            source: root.join("missing"),
-                        }
+    fn management_survives_closed_details_and_reports_errors_in_shared_process() {
+        let root = TestTempDir::new("nyaterm-plugin-management-owner");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "management");
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.path().into(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let process = cx.new(|cx| PluginProcess::new(runtime, cx));
+        let service = cx.read(|cx| process.read(cx).service().unwrap());
+        let panel = cx.new(|cx| PluginPanel::new(app.downgrade(), process.clone(), cx));
+        cx.update_entity(&app, |app, _| app.plugins.panel = panel.clone());
+        let key = nyaterm_core::plugins::management::PluginKey::Wasm("missing".into());
+        cx.update_entity(&app, |app, cx| {
+            let detail = app.open_plugin_details(key.clone(), 0, cx);
+            detail.update(cx, |detail, cx| {
+                detail.operation(
+                    PluginOperation::Update {
+                        id: "missing".into(),
+                        source: root.join("missing"),
                     },
                     cx,
-                );
-                assert!(panel.busy());
-                assert!(!panel.can_cancel());
-                let generation = panel.generation;
-                let selected = panel.selected.as_ref().unwrap().id.clone();
-                panel.output.update(cx, |input, cx| {
-                    input.set_content("keep pending preview", cx)
-                });
-                panel.invoke(cx); // Programmatic invocation cannot bypass disabled controls.
-                panel.cancel(cx);
-                assert_eq!(panel.generation, generation);
-                assert_eq!(panel.selected.as_ref().unwrap().id, selected);
-                assert_eq!(panel.output.read(cx).value(cx), "keep pending preview");
-                assert!(panel.error_notifications.is_empty());
-            });
-            cx.update_entity(&app, |app, cx| app.plugins.shutdown(cx));
-            assert!(cx.read(|cx| panel.read(cx).busy()));
-            // This ordered real service operation makes the selection stale, while
-            // the barrier keeps the first operation's UI completion pending.
-            block_on(
-                service
-                    .submit(PluginOperation::Enable {
-                        id: "diagnostic-command".into(),
-                        enabled: false,
-                    })
-                    .unwrap(),
-            )
-            .unwrap()
-            .unwrap();
-            if catalog_first {
-                cx.update_entity(&process, |process, cx| {
-                    process.snapshot = service.snapshot();
-                    cx.notify();
-                });
-            }
-            cx.run_until_parked();
-            cx.update_entity(&panel, |panel, cx| {
-                assert!(panel.busy());
-                assert!(!panel.can_cancel());
-                if catalog_first {
-                    assert!(panel.selected.is_none());
-                    assert!(panel.parameters.is_empty());
-                    assert_eq!(panel.output.read(cx).value(cx), "");
-                }
-                assert!(panel.error_notifications.is_empty());
-            });
-            release.send(()).unwrap();
-            cx.run_until_parked();
-            assert!(cx.read(|cx| panel.read(cx).selected.is_none()));
-            if !catalog_first {
-                cx.update_entity(&process, |process, cx| {
-                    process.snapshot = service.snapshot();
-                    cx.notify();
-                });
-                cx.run_until_parked();
-            }
-            cx.update_entity(&panel, |panel, _| {
-                assert!(!panel.busy());
-                assert!(panel.selected.is_none());
-                if succeed {
-                    assert!(panel.error_notifications.is_empty());
-                } else {
-                    assert_eq!(
-                        panel.error_notifications,
-                        ["Cannot access plugin files; check the source and directory permissions"]
-                    );
-                }
-            });
-            if succeed {
-                block_on(
-                    service
-                        .submit(PluginOperation::Enable {
-                            id: "diagnostic-command".into(),
-                            enabled: true,
-                        })
-                        .unwrap(),
                 )
-                .unwrap()
-                .unwrap();
-                cx.update_entity(&process, |process, cx| {
-                    process.snapshot = service.snapshot();
-                    cx.notify();
-                });
-                cx.run_until_parked();
-                let contribution = service.snapshot().contributions[0].clone();
-                let (release, gate) = futures::channel::oneshot::channel();
-                cx.update_entity(&panel, |panel, cx| {
-                    panel.select(contribution.clone(), cx);
-                    panel.completion_gate = Some(gate);
-                    panel.invoke(cx);
-                    assert!(panel.can_cancel());
-                });
-                // An ordered invocation lets the real first guest call finish;
-                // the completion barrier still prevents publishing its preview.
-                block_on(
-                    service
-                        .submit(PluginOperation::Invoke {
-                            contribution_id: contribution.id,
-                            expected_revision: contribution.revision,
-                            input: nyaterm_core::plugins::invocation::ActionInput::default(),
-                        })
-                        .unwrap(),
-                )
-                .unwrap()
-                .unwrap();
-                cx.run_until_parked();
-                cx.update_entity(&app, |app, cx| app.plugins.shutdown(cx));
-                cx.run_until_parked();
-                // Cancellation may be scheduled after the real guest worker
-                // releases the future's waker. Keep driving the UI session:
-                // block_with_timeout excludes that same session's tasks.
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while !release.is_canceled() {
-                    cx.run_until_parked();
-                    assert!(
-                        Instant::now() < deadline,
-                        "plugin invocation was not cancelled"
-                    );
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                assert!(release.send(()).is_err());
-                cx.update_entity(&panel, |panel, _| {
-                    assert!(!panel.busy());
-                    assert!(panel.preview.is_none());
-                    assert!(panel.error_notifications.is_empty());
-                });
-            }
-            service.shutdown();
+            });
+            app.close_plugin_details(&key, cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cx.read(|cx| process.read(cx).job_busy("missing")) {
+            cx.run_until_parked();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
         }
+        cx.read(|cx| {
+            assert!(app.read(cx).plugins.details.is_empty());
+            assert!(process.read(cx).jobs["missing"].error.is_some());
+        });
+        service.shutdown();
     }
 
     #[test]
@@ -2203,22 +1584,24 @@ mod tests {
                 assert_eq!(search_bounds.size.height, gpui::px(32.));
                 assert!(search_bounds.left() >= gpui::px(0.));
                 assert!(search_bounds.right() <= gpui::px(width));
-                for selector in ["native-row-spice", "native-row-spice-actions"] {
-                    let bounds = vcx.debug_bounds(selector).unwrap();
+                if discover {
+                    let bounds = vcx.debug_bounds("plugin-row-nyaterm-native-spice").unwrap();
                     assert!(bounds.left() >= gpui::px(0.));
                     assert!(bounds.right() <= gpui::px(width));
-                    assert!(bounds.size.height <= gpui::px(110.));
-                }
-                if discover {
-                    assert!(vcx.debug_bounds("extensions-store-empty").is_none());
+                    assert!(bounds.size.height <= gpui::px(88.));
                 } else {
-                    let plugin_bounds = vcx.debug_bounds("plugin-row-diagnostic-command").unwrap();
-                    let native_bounds = vcx.debug_bounds("native-row-spice").unwrap();
-                    assert!(plugin_bounds.top() < native_bounds.top());
+                    let bounds = vcx.debug_bounds("plugin-row-diagnostic-command").unwrap();
+                    assert!(bounds.right() <= gpui::px(width));
+                    assert!(bounds.size.height <= gpui::px(64.));
+                    assert!(
+                        vcx.debug_bounds("plugin-row-nyaterm-native-spice")
+                            .is_none()
+                    );
                 }
             }
         }
         vcx.update_entity(&panel, |panel, cx| {
+            panel.discover = true;
             panel
                 .search
                 .update(cx, |search, cx| search.set_content("VnC", cx));
@@ -2227,13 +1610,19 @@ mod tests {
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        assert!(vcx.debug_bounds("native-row-vnc").is_some());
-        assert!(vcx.debug_bounds("native-row-spice").is_none());
+        assert!(vcx.debug_bounds("plugin-row-nyaterm-native-vnc").is_some());
+        assert!(
+            vcx.debug_bounds("plugin-row-nyaterm-native-spice")
+                .is_none()
+        );
         assert!(vcx.debug_bounds("plugin-row-diagnostic-command").is_none());
         vcx.simulate_resize(gpui::size(gpui::px(240.), gpui::px(700.)));
         vcx.update_entity(&panel, |panel, cx| {
             panel.search.update(cx, |search, cx| search.clear(cx));
-            panel.expanded_plugin = Some("diagnostic-command".into());
+            panel.detail_key = Some(nyaterm_core::plugins::management::PluginKey::Wasm(
+                "diagnostic-command".into(),
+            ));
+            panel.detail_tab = 3;
             cx.notify();
         });
         vcx.run_until_parked();
@@ -2251,7 +1640,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             vcx.run_until_parked();
-            if vcx.read(|cx| !panel.read(cx).busy()) {
+            if vcx.read(|cx| !panel.read(cx).busy(cx)) {
                 break;
             }
             assert!(
