@@ -16,6 +16,7 @@ mod claude_code;
 mod codex;
 mod diagnostics;
 pub mod harness;
+pub mod mcp_client;
 pub mod mcp_execution;
 pub mod mcp_http;
 pub mod ollama;
@@ -137,6 +138,10 @@ pub enum McpTerminalDisplayMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalMcpSettings {
     #[serde(default)]
+    pub stdio_client: mcp_client::McpClient,
+    #[serde(default)]
+    pub http_client: mcp_client::McpClient,
+    #[serde(default)]
     pub transport: mcp_http::McpTransport,
     #[serde(default = "mcp_http::default_http_port")]
     pub http_port: u16,
@@ -159,6 +164,8 @@ pub struct ExternalMcpSettings {
 impl Default for ExternalMcpSettings {
     fn default() -> Self {
         Self {
+            stdio_client: Default::default(),
+            http_client: Default::default(),
             transport: Default::default(),
             http_port: mcp_http::default_http_port(),
             http_allowed_origins: Vec::new(),

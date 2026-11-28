@@ -488,6 +488,56 @@
       "warning": "Alto risco: uma ou mais integrações IA/MCP usam atualmente Acesso Total. As operações destrutivas permanecem visíveis no histórico de auditoria, mas podem ser executadas sem aviso prévio."
     },
     "mcp": {
+      "setup": {
+        "title": "Conectar um cliente",
+        "unsupportedClient": "Cliente incompatível com este transporte. Escolha outro cliente.",
+        "stdioHint": "Mantenha o NyaTerm aberto com o MCP externo ativado. O auxiliar stdio se conecta ao aplicativo em execução.",
+        "maskedHint": "A prévia oculta o token. A cópia inclui o token atual; mantenha a configuração privada.",
+        "hints": {
+          "codex": "Mescle em ~/.codex/config.toml (ou config.toml em CODEX_HOME), substituindo a entrada nyaterm.",
+          "claude": "Mescle nyaterm em mcpServers no arquivo privado .mcp.json do projeto, preservando os outros servidores.",
+          "cursor": "Mescle em ~/.cursor/mcp.json, preservando os outros servidores.",
+          "vscode": "Abra a configuração MCP de usuário no VS Code e mescle a entrada servers.",
+          "windsurf": "Abra a configuração MCP pelo Cascade e mescle em mcp_config.json.",
+          "opencode": "Mescle a entrada mcp na configuração de usuário opencode.json.",
+          "cherry": "Importe este JSON em Cherry Studio, Configurações → Servidores MCP, e ative nyaterm.",
+          "generic": "Informe a URL e o cabeçalho Authorization no cliente MCP HTTP."
+        }
+      },
+      "permissionHints": {
+        "observer": "Somente leitura; leituras sensíveis ainda exigem aprovação.",
+        "confirm": "Leituras comuns são imediatas; leituras sensíveis e gravações exigem aprovação.",
+        "auto": "Leituras e gravações elegíveis de menor risco são automáticas; outras gravações exigem aprovação.",
+        "full_access": "Operações dentro do escopo permitido podem ser executadas sem aprovação individual."
+      },
+      "fullAccessPersistent": "O acesso total permite operações de alto risco e destrutivas sem aprovação individual. Esta configuração continuará valendo na próxima ativação do MCP.",
+      "activity": {
+        "title": "Atividade recente",
+        "description": "Registros de auditoria MCP mantidos neste dispositivo. Atualizados a cada 5 segundos enquanto abertos. Iniciar ou interromper uma tarefa não comprova sua conclusão.",
+        "allClients": "Todos os clientes",
+        "allTargets": "Todas as conexões / sessões",
+        "allResults": "Todos os resultados",
+        "unavailableTarget": "Destino indisponível",
+        "refresh": "Atualizar",
+        "loading": "Carregando atividade…",
+        "loadFailed": "Não foi possível carregar a atividade. Os registros existentes foram mantidos; atualize para tentar novamente.",
+        "empty": "Nenhuma atividade MCP armazenada.",
+        "noMatches": "Nenhuma atividade correspondente.",
+        "deletedConnection": "Conexão excluída",
+        "closedSession": "Sessão encerrada",
+        "noTarget": "Sem conexão / sessão",
+        "success": "Sucesso",
+        "failed": "Falha",
+        "denied": "Negado",
+        "event": "Evento / desconhecido",
+        "capability": "Chamada de ferramenta",
+        "jobRegistered": "Tarefa registrada",
+        "interruptSent": "Interrupção enviada",
+        "exitConfirmed": "Saída remota confirmada",
+        "otherEvent": "Outro evento",
+        "previous": "Anterior",
+        "next": "Próximo"
+      },
       "httpPortInUse": "A porta HTTP está em uso. Escolha outra porta e tente novamente.",
       "unsupportedTransport": "Transporte não suportado; serviço desativado",
       "httpOtherWindow": "Outra janela",

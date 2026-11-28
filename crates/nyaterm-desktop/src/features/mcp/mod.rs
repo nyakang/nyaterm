@@ -1,3 +1,4 @@
+pub(in crate::features) mod activity;
 mod approval_dialog;
 mod discovery;
 mod http;
@@ -35,6 +36,7 @@ pub(in crate::features) struct McpHostFeatureState {
         std::sync::Arc<std::sync::Mutex<HashMap<String, TerminalExecutionPolicy>>>,
     pub(in crate::features) capabilities: CapabilityRuntimeState,
     approval_dialog: approval_dialog::McpApprovalPresentation,
+    pub(in crate::features) activity: activity::McpActivityState,
     pub(in crate::features) background_tasks: tasks::BackgroundTaskPresentation,
 }
 
@@ -137,6 +139,7 @@ impl McpHostFeatureState {
                     ephemeral_generations: Default::default(),
                     capabilities: CapabilityRuntimeState::default(),
                     approval_dialog: Default::default(),
+                    activity: Default::default(),
                     background_tasks: Default::default(),
                 }
             }
@@ -164,6 +167,7 @@ impl McpHostFeatureState {
             ephemeral_generations: Default::default(),
             capabilities: CapabilityRuntimeState::default(),
             approval_dialog: Default::default(),
+            activity: Default::default(),
             background_tasks: Default::default(),
         }
     }

@@ -681,3 +681,24 @@ fn external_agent_executables_environment_and_permissions_stay_device_local() {
         project_entities(&local, &scope).unwrap().values
     );
 }
+
+#[test]
+fn mcp_client_preferences_stay_local_in_sync_projection() {
+    let scope = SyncScope {
+        ai: true,
+        ..Default::default()
+    };
+    let baseline = BTreeMap::from([("settings".into(), json!({"ai":{}}).to_string())]);
+    let local = BTreeMap::from([(
+        "settings".into(),
+        json!({"ai":{"external_mcp": {
+            "enabled": true, "stdio_client": "vscode", "http_client": "opencode",
+            "future_client_preference": {"keep":true}
+        }}})
+        .to_string(),
+    )]);
+    assert_eq!(
+        project_entities(&baseline, &scope).unwrap().values,
+        project_entities(&local, &scope).unwrap().values
+    );
+}

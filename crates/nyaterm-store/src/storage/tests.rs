@@ -10404,3 +10404,38 @@ fn mosh_connections_preserve_extensions_credentials_and_native_backup_compatibil
     ConnectionStore::import_config_database(&restored_dir, None, &backup_path).unwrap();
     assert_mosh(&ConnectionStore::open(&restored_dir).unwrap());
 }
+
+#[test]
+fn mcp_client_preferences_round_trip_and_preserve_future_settings() {
+    use nyaterm_core::ai::mcp_client::McpClient;
+    let dir = unique_temp_dir("mcp-client-preferences");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = store.load_ai_settings().unwrap();
+    assert_eq!(settings.external_mcp.stdio_client, McpClient::Codex);
+    assert_eq!(settings.external_mcp.http_client, McpClient::Codex);
+    settings.external_mcp.stdio_client = McpClient::VsCode;
+    settings.external_mcp.http_client = McpClient::Unknown("future-client".into());
+    settings
+        .external_mcp
+        .extra
+        .insert("future".into(), serde_json::json!({"keep":true}));
+    let saved = store.save_ai_settings(settings).unwrap();
+    assert_eq!(
+        store.load_ai_settings().unwrap().external_mcp,
+        saved.external_mcp
+    );
+    let mut masked = nyaterm_core::mask_ai_settings(saved.clone());
+    masked.external_mcp.stdio_client = McpClient::OpenCode;
+    store.save_ai_settings(masked).unwrap();
+    drop(store);
+    let store = ConnectionStore::open(&dir).unwrap();
+    let loaded = store.load_ai_settings().unwrap();
+    assert_eq!(loaded.external_mcp.stdio_client, McpClient::OpenCode);
+    assert_eq!(
+        loaded.external_mcp.http_client,
+        saved.external_mcp.http_client
+    );
+    assert_eq!(loaded.external_mcp.extra, saved.external_mcp.extra);
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}

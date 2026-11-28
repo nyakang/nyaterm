@@ -83,7 +83,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let current = self.http_mcp_settings();
-        if &current == previous {
+        if current.runtime_eq(previous) {
             return;
         }
         match current.transport {
@@ -163,5 +163,35 @@ impl NyaTermApp {
             Err(error) => self.ai.set_agent_management_error(error.to_owned()),
         }
         self.request_settings_panel_refresh(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::TestAppContext;
+    use nyaterm_core::ai::mcp_client::McpClient;
+
+    #[test]
+    fn client_preference_sync_preserves_the_stdio_host_generation() {
+        let root = TestConfigDir::new("nyaterm-mcp-client-preference-sync");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| {
+            app.ai.settings_config_mut().external_mcp.enabled = true;
+            let generation = app.mcp.enable_public_for_test();
+            let previous = app.http_mcp_settings();
+            app.ai.set_settings_mcp_client(McpClient::VsCode);
+            app.reconcile_mcp_after_shared_settings(&previous, cx);
+            assert!(app.mcp.generation_matches(&generation));
+            assert_eq!(
+                app.http_mcp_settings().selected_client(),
+                &McpClient::VsCode
+            );
+        });
+        let cleanup = app.update(&mut cx, |app, cx| app.shutdown_blocking_jobs(cx));
+        cx.foreground_executor().block_test(cleanup);
     }
 }

@@ -101,7 +101,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn copy_external_mcp_config(
         &mut self,
-        client: &'static str,
+        client: &str,
         cx: &mut Context<Self>,
     ) {
         let result = if self.http_mcp_settings().transport
@@ -126,16 +126,13 @@ impl NyaTermApp {
                     "NyaTerm MCP helper is unavailable; refresh agent status".to_string()
                 })
                 .and_then(|path| {
-                    let server =
-                        serde_json::json!({ "command": path.to_string_lossy(), "args": [] });
-                    let config = match client {
-                        "codex" => serde_json::json!({ "mcp_servers": { "nyaterm": server } }),
-                        "claude" | "cursor" => {
-                            serde_json::json!({ "mcpServers": { "nyaterm": server } })
-                        }
-                        _ => return Err("Unsupported MCP client".to_string()),
-                    };
-                    serde_json::to_string_pretty(&config).map_err(|error| error.to_string())
+                    nyaterm_core::ai::mcp_client::client_config(
+                        &nyaterm_core::ai::mcp_client::McpClient::from(client.to_owned()),
+                        nyaterm_core::ai::mcp_client::ConfigTransport::Stdio {
+                            command: &path.to_string_lossy(),
+                        },
+                    )
+                    .map_err(str::to_owned)
                 })
         };
         match result {
@@ -152,6 +149,20 @@ impl NyaTermApp {
                 );
             }
         }
+        self.request_settings_panel_refresh(cx);
+    }
+
+    pub(in crate::features) fn set_mcp_config_client(
+        &mut self,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let client = nyaterm_core::ai::mcp_client::McpClient::from(value.to_owned());
+        if !client.supports(&self.ai.settings_config().external_mcp.transport) {
+            return;
+        }
+        self.ai.set_settings_mcp_client(client);
+        self.persist_ai_settings_now(cx);
         self.request_settings_panel_refresh(cx);
     }
 

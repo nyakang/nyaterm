@@ -488,6 +488,56 @@
       "warning": "High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."
     },
     "mcp": {
+      "setup": {
+        "title": "Connect a client",
+        "unsupportedClient": "Unsupported client for this transport; choose another client.",
+        "stdioHint": "Keep NyaTerm running with external MCP enabled. The stdio helper connects to the running application.",
+        "maskedHint": "The preview hides the access token. Copy inserts the current token; keep the configuration private.",
+        "hints": {
+          "codex": "Merge into ~/.codex/config.toml (or config.toml under CODEX_HOME), replacing the nyaterm entry.",
+          "claude": "Merge the nyaterm entry into mcpServers in your private project .mcp.json, preserving other servers.",
+          "cursor": "Merge into ~/.cursor/mcp.json, preserving other servers.",
+          "vscode": "Open the user MCP configuration in VS Code and merge the servers entry.",
+          "windsurf": "Open the MCP configuration from Cascade and merge into mcp_config.json.",
+          "opencode": "Merge the mcp entry into your user opencode.json configuration.",
+          "cherry": "Import this JSON in Cherry Studio Settings → MCP Servers, then enable nyaterm.",
+          "generic": "Use the URL and Authorization header in your HTTP MCP client."
+        }
+      },
+      "permissionHints": {
+        "observer": "Read-only access; sensitive reads still require approval.",
+        "confirm": "Ordinary reads run directly; sensitive reads and writes require approval.",
+        "auto": "Reads and eligible lower-risk writes run automatically; other writes require approval.",
+        "full_access": "Operations within the allowed scope may run without individual approval."
+      },
+      "fullAccessPersistent": "Full Access allows high-risk and destructive operations without individual approval. This setting remains in effect the next time MCP is enabled.",
+      "activity": {
+        "title": "Recent activity",
+        "description": "Retained MCP audit records from this device. Refreshes every 5 seconds while open. Events such as starting or interrupting a job do not prove completion.",
+        "allClients": "All clients",
+        "allTargets": "All connections / sessions",
+        "allResults": "All results",
+        "unavailableTarget": "Unavailable target",
+        "refresh": "Refresh",
+        "loading": "Loading activity…",
+        "loadFailed": "Could not load activity. Existing records are retained; refresh to retry.",
+        "empty": "No retained MCP activity.",
+        "noMatches": "No matching activity.",
+        "deletedConnection": "Deleted connection",
+        "closedSession": "Closed session",
+        "noTarget": "No connection / session",
+        "success": "Succeeded",
+        "failed": "Failed",
+        "denied": "Denied",
+        "event": "Event / unknown",
+        "capability": "Tool call",
+        "jobRegistered": "Job registered",
+        "interruptSent": "Interrupt sent",
+        "exitConfirmed": "Remote exit confirmed",
+        "otherEvent": "Other event",
+        "previous": "Previous",
+        "next": "Next"
+      },
       "httpPortInUse": "HTTP port is in use. Choose another port and retry.",
       "unsupportedTransport": "Unsupported transport; service disabled",
       "httpOtherWindow": "Another window",

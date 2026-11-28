@@ -230,6 +230,18 @@ impl AiFeatureState {
     ) {
         self.settings.config.external_mcp.transport = transport;
     }
+    pub(in crate::features) fn set_settings_mcp_client(
+        &mut self,
+        client: nyaterm_core::ai::mcp_client::McpClient,
+    ) {
+        let settings = &mut self.settings.config.external_mcp;
+        if settings.transport == nyaterm_core::ai::mcp_http::McpTransport::StreamableHttp {
+            settings.http_client = client;
+        } else {
+            settings.stdio_client = client;
+        }
+    }
+
     pub(in crate::features) fn set_settings_mcp_http(&mut self, port: u16, origins: Vec<String>) {
         self.settings.config.external_mcp.http_port = port;
         self.settings.config.external_mcp.http_allowed_origins = origins;

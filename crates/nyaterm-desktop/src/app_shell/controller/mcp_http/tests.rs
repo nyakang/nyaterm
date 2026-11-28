@@ -39,6 +39,38 @@ fn http_owner_is_explicit_and_closing_it_does_not_transfer_access() {
         assert_eq!(controller.http_mcp_view().owner, Some(first));
         assert!(matches!(controller.http_mcp.phase, HttpPhase::Locked));
         let generation = controller.http_mcp.generation;
+        // Exercise the running-state copy boundary without launching a helper.
+        controller.screen_locked = false;
+        controller.http_mcp.phase = HttpPhase::Running;
+        controller.http_mcp.token = Some(nyaterm_core::SecretString::from(
+            "copy-fixture-one".to_string(),
+        ));
+        let mut preferences = settings.clone();
+        preferences.http_client = nyaterm_core::ai::mcp_client::McpClient::VsCode;
+        preferences.stdio_client = nyaterm_core::ai::mcp_client::McpClient::OpenCode;
+        controller.configure_http_mcp(first, app.downgrade(), preferences, false, cx);
+        assert_eq!(controller.http_mcp.generation, generation);
+        assert_eq!(controller.http_mcp_view().owner, Some(first));
+
+        let first_copy = controller.http_mcp_config("generic").unwrap();
+        let first_copy: serde_json::Value = serde_json::from_str(&first_copy).unwrap();
+        assert_eq!(
+            first_copy["headers"]["Authorization"].as_str(),
+            Some("Bearer copy-fixture-one")
+        );
+        controller.http_mcp.token = Some(nyaterm_core::SecretString::from(
+            "copy-fixture-two".to_string(),
+        ));
+        let second_copy: serde_json::Value =
+            serde_json::from_str(&controller.http_mcp_config("vscode").unwrap()).unwrap();
+        assert_eq!(
+            second_copy["servers"]["nyaterm"]["headers"]["Authorization"],
+            "Bearer copy-fixture-two"
+        );
+        assert!(controller.http_mcp_config("future-client").is_err());
+        controller.screen_locked = true;
+        controller.http_mcp.phase = HttpPhase::Locked;
+        assert!(controller.http_mcp_config("codex").is_err());
         controller.configure_http_mcp(second, app.downgrade(), settings.clone(), false, cx);
         assert_eq!(controller.http_mcp.generation, generation);
         assert_eq!(controller.http_mcp_view().owner, Some(first));

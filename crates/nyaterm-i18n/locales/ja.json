@@ -501,6 +501,56 @@
       "warning": "High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."
     },
     "mcp": {
+      "setup": {
+        "title": "クライアントの接続",
+        "unsupportedClient": "この通信方式に対応していないクライアントです。選び直してください。",
+        "stdioHint": "NyaTerm を起動したまま外部 MCP を有効にしてください。stdio ヘルパーは実行中のアプリに接続します。",
+        "maskedHint": "プレビューではトークンを非表示にしています。コピー時に現在のトークンが入るため、設定は非公開で保管してください。",
+        "hints": {
+          "codex": "~/.codex/config.toml（または CODEX_HOME 内の config.toml）の nyaterm 設定を置き換えてください。",
+          "claude": "非公開のプロジェクト .mcp.json の mcpServers に nyaterm を追加し、他のサーバー設定は残してください。",
+          "cursor": "~/.cursor/mcp.json に追加し、他のサーバー設定は残してください。",
+          "vscode": "VS Code のユーザー MCP 設定を開き、servers の設定を追加してください。",
+          "windsurf": "Cascade から MCP 設定を開き、mcp_config.json に追加してください。",
+          "opencode": "ユーザーの opencode.json に mcp の設定を追加してください。",
+          "cherry": "Cherry Studio の設定 → MCP サーバーで JSON をインポートし、nyaterm を有効にしてください。",
+          "generic": "HTTP MCP クライアントに URL と Authorization ヘッダーを設定してください。"
+        }
+      },
+      "permissionHints": {
+        "observer": "読み取り専用です。機密情報の読み取りには承認が必要です。",
+        "confirm": "通常の読み取りは直接実行し、機密情報の読み取りと書き込みは承認を求めます。",
+        "auto": "読み取りと条件を満たす低リスクの書き込みを自動実行し、その他の書き込みは承認を求めます。",
+        "full_access": "許可された範囲の操作を個別の承認なしで実行できます。"
+      },
+      "fullAccessPersistent": "フルアクセスでは高リスクや破壊的な操作も個別の承認なしで実行できます。次回 MCP を有効にした際もこの設定が適用されます。",
+      "activity": {
+        "title": "最近の操作",
+        "description": "この端末に保存された MCP 監査記録です。展開中は 5 秒ごとに更新します。ジョブ開始や割り込み送信は完了を意味しません。",
+        "allClients": "すべてのクライアント",
+        "allTargets": "すべての接続 / セッション",
+        "allResults": "すべての結果",
+        "unavailableTarget": "利用できない対象",
+        "refresh": "更新",
+        "loading": "操作履歴を読み込み中…",
+        "loadFailed": "読み込みに失敗しました。既存の記録は保持されています。更新して再試行してください。",
+        "empty": "保存された MCP 操作履歴はありません。",
+        "noMatches": "一致する操作履歴はありません。",
+        "deletedConnection": "削除された接続",
+        "closedSession": "終了したセッション",
+        "noTarget": "接続 / セッションなし",
+        "success": "成功",
+        "failed": "失敗",
+        "denied": "拒否",
+        "event": "イベント / 不明",
+        "capability": "ツール呼び出し",
+        "jobRegistered": "ジョブ登録",
+        "interruptSent": "割り込み送信",
+        "exitConfirmed": "リモート終了を確認",
+        "otherEvent": "その他のイベント",
+        "previous": "前へ",
+        "next": "次へ"
+      },
       "httpPortInUse": "HTTP ポートは使用中です。別のポートで再試行してください。",
       "unsupportedTransport": "未対応の転送方式：サービスは無効です",
       "httpOtherWindow": "別のウィンドウ",

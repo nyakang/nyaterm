@@ -128,3 +128,47 @@ NYATERM_PLAYWRIGHT_MODULE=/path/to/playwright node scripts/tests/mcp_http/browse
 
 The test runs an isolated mock bridge and temporary local browser origin; it does
 not access a user's NyaTerm instance or print credentials.
+
+## Client setup and activity
+
+The MCP settings card provides a client selector, a configuration preview and
+**Copy client configuration**. Select the transport first; stdio and HTTP each
+remember their own client selection after settings are saved. Choosing a client
+changes only the exported configuration, without restarting the service or
+interrupting jobs. Both transports still require NyaTerm to be running.
+
+| Client | Format and destination |
+| --- | --- |
+| Codex | TOML in `~/.codex/config.toml`, or `config.toml` under `CODEX_HOME`; both stdio and HTTP use TOML. |
+| Claude Code | Merge the `mcpServers.nyaterm` entry into a private project `.mcp.json`. |
+| Cursor | Merge into `~/.cursor/mcp.json`. |
+| VS Code | Merge the `servers` entry into the user MCP configuration. |
+| Windsurf | Open MCP configuration from Cascade and merge into `mcp_config.json`. |
+| OpenCode | Merge the `mcp` entry into the user `opencode.json`. |
+| Cherry Studio | Import the JSON in Settings → MCP Servers, then enable `nyaterm`. |
+| Generic HTTP | Copy the URL and Authorization header to an HTTP MCP client. |
+
+Preserve other servers when merging. HTTP previews show a masked token; only an
+explicit copy action obtains the current credential. Keep exported HTTP configs
+private. Service restarts still rotate the token, so copy again afterwards.
+Unknown saved client names are preserved but cannot be exported until a supported
+client is selected. Missing helpers and unavailable HTTP services disable copying
+and show the reason.
+
+**Recent activity** displays the device's retained MCP audit records, including
+client, connection/session, tool, event, result and duration. Filter by client,
+connection/session or result, with 50 entries per page. Opening the section or
+pressing Refresh loads records in the background; while the section is visible,
+it refreshes every five seconds. Closing it or leaving the page stops refreshes.
+A read failure keeps the last displayed records and permits retrying.
+
+Activity does not expose commands, arguments, terminal output, file contents or
+raw errors, including those present in older audit records. It uses the existing
+audit retention limit, not a new archive. Failures and explicit denials have
+separate labels; registering a job or sending an interrupt is an event, not proof
+of completion. Remote exit confirmation is also shown as a lifecycle event.
+Native AI records are excluded; older MCP records without a source tag remain
+visible when their action starts with `mcp.`.
+
+The permission description stays visible, including a Full Access warning while
+MCP is disabled. Disabling the service does not reset its saved permission mode.

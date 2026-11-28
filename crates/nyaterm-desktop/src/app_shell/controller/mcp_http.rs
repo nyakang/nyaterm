@@ -38,6 +38,7 @@ pub(crate) struct HttpMcpView {
     pub status_key: &'static str,
     pub owner: Option<WorkspaceId>,
     pub running: bool,
+    pub port: Option<u16>,
     pub owned_by_current_window: bool,
 }
 impl Default for HttpMcpView {
@@ -46,6 +47,7 @@ impl Default for HttpMcpView {
             status_key: "ai.mcp.disabled",
             owner: None,
             running: false,
+            port: None,
             owned_by_current_window: false,
         }
     }
@@ -63,6 +65,11 @@ impl DesktopController {
                 HttpPhase::Locked => "ai.mcp.httpLocked",
             },
             owner: self.http_mcp.owner.as_ref().map(|(id, _)| *id),
+            port: self
+                .http_mcp
+                .settings
+                .as_ref()
+                .map(|settings| settings.http_port),
             running: !self.screen_locked
                 && !self.process_quitting
                 && self.http_mcp.phase == HttpPhase::Running,
@@ -122,7 +129,11 @@ impl DesktopController {
                 .owner
                 .as_ref()
                 .is_none_or(|(owner, _)| *owner != id);
-        let changed = self.http_mcp.settings.as_ref() != Some(&settings);
+        let changed = self
+            .http_mcp
+            .settings
+            .as_ref()
+            .is_none_or(|previous| !previous.runtime_eq(&settings));
         if !changed && !claim {
             return;
         }

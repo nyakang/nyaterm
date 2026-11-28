@@ -123,6 +123,10 @@ impl SettingsPanel {
             }
         };
         let helper_ready = status.mcp_helper_path.is_some();
+        let permission_hint_key = format!(
+            "ai.mcp.permissionHints.{}",
+            permission(&settings.external_mcp.permission_mode)
+        );
         let mcp = div()
             .child(self.mcp_background_tasks_content(cx))
             .flex()
@@ -162,6 +166,18 @@ impl SettingsPanel {
                     )),
             ))
             .child(ai_field(palette, t!("ai.mcp.transport"), None, transport))
+            .when(
+                settings.external_mcp.permission_mode == AiPermissionMode::FullAccess,
+                |this| {
+                    this.child(
+                        div()
+                            .id("mcp-full-access-warning")
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.danger))
+                            .child(t!("ai.mcp.fullAccessPersistent")),
+                    )
+                },
+            )
             .when(is_http, |this| {
                 this.child(
                     div()
@@ -220,7 +236,7 @@ impl SettingsPanel {
                     .child(ai_field(
                         palette,
                         t!("ai.permission.title"),
-                        None,
+                        Some(t!(&permission_hint_key).into()),
                         mcp_permission,
                     ))
                     .child(ai_field(palette, t!("ai.mcp.sessionScope"), None, scope))
@@ -248,53 +264,8 @@ impl SettingsPanel {
                         display_mode,
                     )),
             )
-            .child(
-                div().flex().flex_wrap().gap_3().children(
-                    [
-                        ("codex", "Codex"),
-                        ("claude", "Claude Code"),
-                        ("cursor", "Cursor"),
-                        ("generic", "HTTP"),
-                    ]
-                    .into_iter()
-                    .map(|(client, label)| {
-                        div()
-                            .flex_1()
-                            .min_w(px(120.))
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(palette.border))
-                            .p_3()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .child(label)
-                            .child(
-                                NyaButton::new(
-                                    format!("ai-mcp-copy-{client}"),
-                                    t!("ai.externalMcpCopyConfig"),
-                                )
-                                .form_control()
-                                .full_width()
-                                .disabled(if is_http {
-                                    !http_view.running
-                                } else {
-                                    !helper_ready
-                                        || client == "generic"
-                                        || matches!(
-                                            settings.external_mcp.transport,
-                                            nyaterm_core::ai::mcp_http::McpTransport::Unknown(_)
-                                        )
-                                })
-                                .on_click(cx.listener(
-                                    move |panel, _, _, cx| {
-                                        panel.copy_external_mcp_config(client, cx)
-                                    },
-                                )),
-                            )
-                    }),
-                ),
-            );
+            .child(self.mcp_setup_content(cx))
+            .child(self.mcp_activity_content(cx));
         div().flex().flex_col().gap_5().child(local).child(ai_card(
             palette,
             div().child(t!("ai.externalMcp")),

@@ -22,6 +22,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn flush_settings_panel_snapshots(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_mcp_activity_visibility(cx);
         self.settings.clear_panel_refresh_request();
         let main = self.build_settings_snapshot();
         self.settings_panel
@@ -106,6 +107,7 @@ impl NyaTermApp {
                 agent_management: self.ai.agent_management_view().clone(),
                 agent_editor: self.ai.agent_editor_view().clone(),
                 background_tasks: self.background_tasks_view(),
+                mcp_activity: self.mcp.activity.view.clone(),
             },
             cloud_sync: CloudSyncPresentation {
                 v4_preview: self.cloud_sync.v4_summary(),

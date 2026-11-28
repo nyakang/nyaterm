@@ -501,6 +501,56 @@
       "warning": "High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."
     },
     "mcp": {
+      "setup": {
+        "title": "클라이언트 연결",
+        "unsupportedClient": "이 전송 방식에서 지원하지 않는 클라이언트입니다. 다시 선택하세요.",
+        "stdioHint": "NyaTerm을 실행한 상태에서 외부 MCP를 활성화하세요. stdio 도우미는 실행 중인 앱에 연결합니다.",
+        "maskedHint": "미리보기에서는 토큰을 숨깁니다. 복사할 때 현재 토큰이 포함되므로 설정을 비공개로 보관하세요.",
+        "hints": {
+          "codex": "~/.codex/config.toml 또는 CODEX_HOME의 config.toml에서 nyaterm 항목을 교체하세요.",
+          "claude": "비공개 프로젝트 .mcp.json의 mcpServers에 nyaterm을 병합하고 다른 서버는 유지하세요.",
+          "cursor": "~/.cursor/mcp.json에 병합하고 다른 서버 설정은 유지하세요.",
+          "vscode": "VS Code의 사용자 MCP 설정을 열고 servers 항목을 병합하세요.",
+          "windsurf": "Cascade에서 MCP 설정을 열고 mcp_config.json에 병합하세요.",
+          "opencode": "사용자 opencode.json에 mcp 항목을 병합하세요.",
+          "cherry": "Cherry Studio 설정 → MCP 서버에서 JSON을 가져온 후 nyaterm을 활성화하세요.",
+          "generic": "HTTP MCP 클라이언트에 URL과 Authorization 헤더를 입력하세요."
+        }
+      },
+      "permissionHints": {
+        "observer": "읽기 전용입니다. 민감한 읽기는 승인이 필요합니다.",
+        "confirm": "일반 읽기는 바로 실행하며 민감한 읽기와 쓰기는 승인이 필요합니다.",
+        "auto": "읽기와 정책에 맞는 낮은 위험의 쓰기는 자동 실행하며 다른 쓰기는 승인이 필요합니다.",
+        "full_access": "허용 범위 내의 작업을 개별 승인 없이 실행할 수 있습니다."
+      },
+      "fullAccessPersistent": "전체 접근에서는 위험하거나 파괴적인 작업도 개별 승인 없이 실행됩니다. 다음에 MCP를 활성화할 때도 이 설정이 적용됩니다.",
+      "activity": {
+        "title": "최근 활동",
+        "description": "이 기기에 보관된 MCP 감사 기록입니다. 펼쳐 둔 동안 5초마다 새로 고칩니다. 작업 시작이나 중단 신호 전송은 완료를 뜻하지 않습니다.",
+        "allClients": "모든 클라이언트",
+        "allTargets": "모든 연결 / 세션",
+        "allResults": "모든 결과",
+        "unavailableTarget": "사용할 수 없는 대상",
+        "refresh": "새로 고침",
+        "loading": "활동을 불러오는 중…",
+        "loadFailed": "활동을 불러오지 못했습니다. 기존 기록은 유지됩니다. 새로 고쳐 다시 시도하세요.",
+        "empty": "보관된 MCP 활동이 없습니다.",
+        "noMatches": "일치하는 활동이 없습니다.",
+        "deletedConnection": "삭제된 연결",
+        "closedSession": "종료된 세션",
+        "noTarget": "연결 / 세션 없음",
+        "success": "성공",
+        "failed": "실패",
+        "denied": "거부됨",
+        "event": "이벤트 / 알 수 없음",
+        "capability": "도구 호출",
+        "jobRegistered": "작업 등록됨",
+        "interruptSent": "중단 신호 전송됨",
+        "exitConfirmed": "원격 종료 확인됨",
+        "otherEvent": "기타 이벤트",
+        "previous": "이전",
+        "next": "다음"
+      },
       "httpPortInUse": "HTTP 포트가 사용 중입니다. 다른 포트로 다시 시도하세요.",
       "unsupportedTransport": "지원하지 않는 전송 방식: 서비스 비활성화",
       "httpOtherWindow": "다른 창",

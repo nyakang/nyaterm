@@ -501,6 +501,56 @@
       "warning": "High risk: one or more AI/MCP integrations currently use Full Access. Destructive operations remain visible in audit history but may run without a prompt."
     },
     "mcp": {
+      "setup": {
+        "title": "Connecter un client",
+        "unsupportedClient": "Client incompatible avec ce transport. Choisissez un autre client.",
+        "stdioHint": "Gardez NyaTerm ouvert avec le MCP externe activé. Le processus stdio se connecte à l’application en cours.",
+        "maskedHint": "L’aperçu masque le jeton. La copie insère le jeton actuel ; gardez cette configuration privée.",
+        "hints": {
+          "codex": "Fusionnez dans ~/.codex/config.toml (ou config.toml sous CODEX_HOME) en remplaçant l’entrée nyaterm.",
+          "claude": "Fusionnez nyaterm dans mcpServers du fichier privé .mcp.json du projet, en conservant les autres serveurs.",
+          "cursor": "Fusionnez dans ~/.cursor/mcp.json en conservant les autres serveurs.",
+          "vscode": "Ouvrez la configuration MCP utilisateur de VS Code et fusionnez l’entrée servers.",
+          "windsurf": "Ouvrez la configuration MCP depuis Cascade et fusionnez dans mcp_config.json.",
+          "opencode": "Fusionnez l’entrée mcp dans votre configuration utilisateur opencode.json.",
+          "cherry": "Importez ce JSON dans Cherry Studio, Paramètres → Serveurs MCP, puis activez nyaterm.",
+          "generic": "Renseignez l’URL et l’en-tête Authorization dans votre client MCP HTTP."
+        }
+      },
+      "permissionHints": {
+        "observer": "Lecture seule ; les lectures sensibles nécessitent une approbation.",
+        "confirm": "Les lectures ordinaires sont immédiates ; les lectures sensibles et les écritures nécessitent une approbation.",
+        "auto": "Les lectures et écritures admissibles à faible risque sont automatiques ; les autres écritures nécessitent une approbation.",
+        "full_access": "Les opérations autorisées peuvent s’exécuter sans approbation individuelle."
+      },
+      "fullAccessPersistent": "L’accès complet permet les opérations risquées et destructrices sans approbation individuelle. Ce réglage s’appliquera aussi à la prochaine activation de MCP.",
+      "activity": {
+        "title": "Activité récente",
+        "description": "Journaux d’audit MCP conservés sur cet appareil. Actualisation toutes les 5 secondes lorsque la section est ouverte. Le démarrage ou l’interruption d’une tâche ne prouve pas sa fin.",
+        "allClients": "Tous les clients",
+        "allTargets": "Toutes les connexions / sessions",
+        "allResults": "Tous les résultats",
+        "unavailableTarget": "Cible indisponible",
+        "refresh": "Actualiser",
+        "loading": "Chargement de l’activité…",
+        "loadFailed": "Chargement impossible. Les entrées existantes sont conservées ; actualisez pour réessayer.",
+        "empty": "Aucune activité MCP conservée.",
+        "noMatches": "Aucune activité correspondante.",
+        "deletedConnection": "Connexion supprimée",
+        "closedSession": "Session fermée",
+        "noTarget": "Sans connexion / session",
+        "success": "Réussi",
+        "failed": "Échec",
+        "denied": "Refusé",
+        "event": "Événement / inconnu",
+        "capability": "Appel d’outil",
+        "jobRegistered": "Tâche enregistrée",
+        "interruptSent": "Interruption envoyée",
+        "exitConfirmed": "Fin distante confirmée",
+        "otherEvent": "Autre événement",
+        "previous": "Précédent",
+        "next": "Suivant"
+      },
       "httpPortInUse": "Le port HTTP est occupé. Choisissez un autre port et réessayez.",
       "unsupportedTransport": "Transport non pris en charge ; service désactivé",
       "httpOtherWindow": "Une autre fenêtre",

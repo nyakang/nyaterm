@@ -320,6 +320,7 @@ pub(in crate::features) struct AiSettingsPresentation {
         Arc<HashMap<(String, String), nyaterm_core::ai::provider_settings::CustomHeaderError>>,
     pub(in crate::features) agent_management: AgentManagementView,
     pub(in crate::features) agent_editor: crate::features::ai::agent_settings::AgentEditorView,
+    pub(in crate::features) mcp_activity: crate::features::mcp::activity::McpActivityView,
     pub(in crate::features) background_tasks: crate::features::mcp::tasks::BackgroundTasksView,
 }
 
@@ -333,6 +334,7 @@ impl AiSettingsPresentation {
             header_errors: Arc::new(HashMap::new()),
             agent_management: AgentManagementView::default(),
             agent_editor: Default::default(),
+            mcp_activity: Default::default(),
             background_tasks: Default::default(),
         }
     }
@@ -1702,7 +1704,7 @@ impl SettingsPanel {
 
     pub(in crate::features) fn copy_external_mcp_config(
         &mut self,
-        client: &'static str,
+        client: &str,
         cx: &mut Context<Self>,
     ) {
         self.with_app(cx, |app, cx| app.copy_external_mcp_config(client, cx));
@@ -2125,6 +2127,81 @@ mod tests {
                 panel.settings_tab_content(&snapshot, cx)
             });
             div().w(px(self.width)).child(body)
+        }
+    }
+
+    struct McpSetupHost {
+        panel: Entity<SettingsPanel>,
+        width: f32,
+    }
+
+    impl Render for McpSetupHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let body = self.panel.update(cx, |panel, cx| {
+                panel.content_width = self.width;
+                panel.ai.agent_management.mcp_helper_path = Some(std::path::PathBuf::from(
+                    "/a long directory/with Unicode 猫/nyaterm-mcp",
+                ));
+                panel.ai.mcp_activity.open = true;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .min_w_0()
+                    .child(panel.mcp_setup_content(cx))
+                    .child(panel.mcp_activity_content(cx))
+            });
+            div().w(px(self.width)).child(body)
+        }
+    }
+
+    #[test]
+    fn mcp_setup_and_activity_controls_fit_narrow_settings_panes() {
+        let dir = TestConfigDir::new("nyaterm-mcp-setup-layout");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.focus_settings_tab(SettingsTab::AiAgents, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let panel = cx.update_entity(&app, |app, _| app.settings_panel.clone());
+        let (host, vcx) = cx.add_window_view(|_, _| McpSetupHost { panel, width: 280. });
+        vcx.simulate_resize(gpui::size(px(1200.), px(3000.)));
+        for width in [280., 519., 1050.] {
+            host.update(vcx, |host, cx| {
+                host.width = width;
+                cx.notify();
+            });
+            for _ in 0..3 {
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.refresh();
+                    _ = window.draw(cx);
+                });
+            }
+            for id in [
+                "ai-mcp-client",
+                "ai-mcp-config-preview",
+                "ai-mcp-activity-client",
+                "ai-mcp-activity-target",
+                "ai-mcp-activity-outcome",
+            ] {
+                let bounds = vcx
+                    .debug_bounds(id)
+                    .unwrap_or_else(|| panic!("{id} must be laid out at width {width}"));
+                assert!(bounds.size.width > px(0.), "{id} at {width}");
+                assert!(
+                    bounds.left() >= px(0.) && bounds.right() <= px(width),
+                    "{id} at {width}: {bounds:?}"
+                );
+            }
         }
     }
 

@@ -70,28 +70,10 @@ pub fn validate_http_settings(port: u16, origins: &[String]) -> Result<Vec<Strin
 
 /// This result contains a secret and is only for explicit copy/export actions.
 pub fn client_config(client: &str, port: u16, token: &str) -> Result<String, &'static str> {
-    let url = format!("http://127.0.0.1:{port}/mcp");
-    let authorization = format!("Bearer {token}");
-    if client == "codex" {
-        return Ok(format!(
-            "[mcp_servers.nyaterm]\nurl = {url:?}\nhttp_headers = {{ Authorization = {authorization:?} }}\n"
-        ));
-    }
-    let server = match client {
-        "claude" => {
-            serde_json::json!({"type":"http", "url":url,"headers":{"Authorization":authorization}})
-        }
-        "cursor" | "generic" => {
-            serde_json::json!({"url":url,"headers":{"Authorization":authorization}})
-        }
-        _ => return Err("Unsupported MCP client"),
-    };
-    serde_json::to_string_pretty(&if client == "generic" {
-        server
-    } else {
-        serde_json::json!({"mcpServers":{"nyaterm":server}})
-    })
-    .map_err(|_| "Cannot format MCP configuration")
+    super::mcp_client::client_config(
+        &super::mcp_client::McpClient::from(client.to_owned()),
+        super::mcp_client::ConfigTransport::Http { port, token },
+    )
 }
 
 #[cfg(test)]

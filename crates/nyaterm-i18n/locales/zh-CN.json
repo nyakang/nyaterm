@@ -488,6 +488,56 @@
       "warning": "高风险：一个或多个 AI/MCP 集成当前启用了 Full Access。破坏性操作仍会进入审计历史，但可能不再弹出确认。"
     },
     "mcp": {
+      "setup": {
+        "title": "接入客户端",
+        "unsupportedClient": "当前传输方式不支持此客户端，请重新选择。",
+        "stdioHint": "请保持 NyaTerm 运行并启用外部 MCP。stdio 辅助程序连接到正在运行的应用。",
+        "maskedHint": "预览已隐藏访问令牌，复制时会填入当前令牌；请妥善保管配置。",
+        "hints": {
+          "codex": "合并到 ~/.codex/config.toml（或 CODEX_HOME 下的 config.toml），替换 nyaterm 配置项。",
+          "claude": "将 nyaterm 配置合并到私有项目 .mcp.json 的 mcpServers 中，保留其他服务器。",
+          "cursor": "合并到 ~/.cursor/mcp.json，保留其他服务器配置。",
+          "vscode": "在 VS Code 中打开用户级 MCP 配置，合并 servers 配置项。",
+          "windsurf": "在 Cascade 中打开 MCP 配置文件，合并到 mcp_config.json。",
+          "opencode": "将 mcp 配置项合并到用户级 opencode.json。",
+          "cherry": "在 Cherry Studio 设置 → MCP 服务器中导入此 JSON，然后启用 nyaterm。",
+          "generic": "在 HTTP MCP 客户端中填写 URL 和 Authorization 请求头。"
+        }
+      },
+      "permissionHints": {
+        "observer": "仅允许读取；敏感读取仍需审批。",
+        "confirm": "普通读取直接执行；敏感读取及写入需审批。",
+        "auto": "读取及符合策略的较低风险写入自动执行，其他写入需审批。",
+        "full_access": "授权范围内的操作可无需逐次审批直接执行。"
+      },
+      "fullAccessPersistent": "全部允许模式可直接执行高风险和破坏性操作，无需逐次审批。下次启用 MCP 时仍会沿用此设置。",
+      "activity": {
+        "title": "近期活动",
+        "description": "展示本机保留的 MCP 审计记录，展开时每 5 秒刷新。启动任务、发送中断等事件不代表任务已完成。",
+        "allClients": "全部客户端",
+        "allTargets": "全部连接 / 会话",
+        "allResults": "全部结果",
+        "unavailableTarget": "目标已不可用",
+        "refresh": "刷新",
+        "loading": "正在加载活动…",
+        "loadFailed": "活动加载失败，已保留现有记录；可点击刷新重试。",
+        "empty": "暂无保留的 MCP 活动记录。",
+        "noMatches": "没有匹配的活动记录。",
+        "deletedConnection": "已删除连接",
+        "closedSession": "已关闭会话",
+        "noTarget": "无连接 / 会话",
+        "success": "成功",
+        "failed": "失败",
+        "denied": "已拒绝",
+        "event": "事件 / 未知",
+        "capability": "工具调用",
+        "jobRegistered": "任务已登记",
+        "interruptSent": "已发送中断",
+        "exitConfirmed": "已确认远端退出",
+        "otherEvent": "其他事件",
+        "previous": "上一页",
+        "next": "下一页"
+      },
       "httpPortInUse": "HTTP 端口已被占用，请更换端口后重试。",
       "unsupportedTransport": "不支持的传输方式，服务已停用",
       "httpOtherWindow": "其他窗口",
