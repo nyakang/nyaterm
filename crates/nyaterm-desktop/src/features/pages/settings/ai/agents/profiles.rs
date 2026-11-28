@@ -6,7 +6,9 @@ use crate::features::pages::settings::panel::SettingsPanel;
 use crate::features::pages::settings::settings_form_row;
 use gpui::{Context, FontWeight, div, prelude::*, px, rgb};
 use nyaterm_core::AiSettings;
-use nyaterm_core::ai::external_agents::{ExternalAgentProfile, profile_id, profiles};
+use nyaterm_core::ai::external_agents::{
+    AGENT_PRESETS, ExternalAgentProfile, profile_id, profiles,
+};
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaMenuItem, NyaSelectOption, NyaSwitch,
 };
@@ -82,9 +84,15 @@ impl SettingsPanel {
                     })),
             );
         }
-        for (strategy, label) in [("claude", "+ Claude Code"), ("codex", "+ Codex")] {
+        for preset in AGENT_PRESETS {
+            let strategy = preset.strategy;
+            let label = if strategy == "custom_acp" {
+                t!("ai.acp.custom").to_string()
+            } else {
+                preset.name.into()
+            };
             actions = actions.child(
-                NyaButton::new(format!("acp-add-{strategy}"), label)
+                NyaButton::new(format!("acp-add-{strategy}"), format!("+ {label}"))
                     .form_control()
                     .on_click(cx.listener(move |panel, _, _, cx| {
                         panel.with_app(cx, |app, cx| {
@@ -134,11 +142,11 @@ impl SettingsPanel {
         let delete_id = id.clone();
         let copy_panel = cx.entity().downgrade();
         let delete_panel = cx.entity().downgrade();
-        let strategy = match profile.strategy.0.as_str() {
-            "codex" => "Codex",
-            "claude" => "Claude Code",
-            other => other,
-        };
+        let strategy = profile
+            .strategy
+            .preset()
+            .map(|preset| preset.name)
+            .unwrap_or(&profile.strategy.0);
         let more = NyaDropdownMenu::new(format!("acp-more-{id}"))
             .icon("icons/conn/more.svg")
             .tooltip(t!("ai.acp.more"))
@@ -292,6 +300,14 @@ impl SettingsPanel {
                             .child(more),
                     ),
             );
+        if profile.strategy.manages_local_tools() {
+            card = card.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("ai.acp.localToolsHint")),
+            );
+        }
         if !expanded {
             return card;
         }
@@ -399,34 +415,36 @@ impl SettingsPanel {
         card = card.child(actions);
         if help && unavailable.is_none() {
             use nyaterm_agent_client::acp::policy;
-            let (version, engine, url) = if profile.strategy.0 == "codex" {
-                (
-                    policy::CODEX_ADAPTER_VERSION,
-                    policy::CODEX_ENGINE_VERSION,
-                    "https://www.npmjs.com/package/@agentclientprotocol/codex-acp",
-                )
-            } else {
-                (
-                    policy::CLAUDE_ADAPTER_VERSION,
-                    policy::CLAUDE_ENGINE_VERSION,
-                    "https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp",
-                )
-            };
-            let installation = div()
+            let preset = profile.strategy.preset().expect("available strategy");
+            let url = preset.documentation;
+            let mut installation = div()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .p_3()
                 .rounded_md()
                 .bg(rgb(palette.bg))
-                .text_size(px(12.))
-                .child(t!("ai.acp.installExplanation"))
-                .child(t!("ai.acp.adapterVersion", version = version));
-            let installation = installation.child(t!(
-                "ai.acp.engineVersion",
-                agent = strategy,
-                version = engine
-            ));
+                .text_size(px(12.));
+            if profile.strategy.manages_local_tools() {
+                installation = installation.child(t!("ai.acp.genericInstall"));
+            } else {
+                let (version, engine) = if profile.strategy.0 == "codex" {
+                    (policy::CODEX_ADAPTER_VERSION, policy::CODEX_ENGINE_VERSION)
+                } else {
+                    (
+                        policy::CLAUDE_ADAPTER_VERSION,
+                        policy::CLAUDE_ENGINE_VERSION,
+                    )
+                };
+                installation = installation
+                    .child(t!("ai.acp.installExplanation"))
+                    .child(t!("ai.acp.adapterVersion", version = version))
+                    .child(t!(
+                        "ai.acp.engineVersion",
+                        agent = strategy,
+                        version = engine
+                    ));
+            }
             card = card.child(
                 installation.child(
                     NyaButton::new(format!("acp-install-docs-{id}"), t!("ai.acp.installDocs"))
@@ -581,10 +599,19 @@ impl SettingsPanel {
     ) -> gpui::Div {
         let palette = self.theme_palette();
         let id = &profile.id;
-        let mut strategies = vec![
-            NyaSelectOption::new("claude", "Claude Code"),
-            NyaSelectOption::new("codex", "Codex"),
-        ];
+        let mut strategies: Vec<_> = AGENT_PRESETS
+            .iter()
+            .map(|preset| {
+                NyaSelectOption::new(
+                    preset.strategy,
+                    if preset.strategy == "custom_acp" {
+                        t!("ai.acp.custom").to_string()
+                    } else {
+                        preset.name.into()
+                    },
+                )
+            })
+            .collect();
         if !profile.strategy.supported() {
             strategies.push(
                 NyaSelectOption::new(profile.strategy.0.clone(), profile.strategy.0.clone())
@@ -609,6 +636,17 @@ impl SettingsPanel {
             ("config", "ai.acp.config", Some("ai.acp.directoryHint")),
             ("args", "ai.acp.args", Some("ai.acp.argsUnsupported")),
         ] {
+            if field == "config"
+                && profile.strategy.manages_local_tools()
+                && profile.config_directory.is_none()
+            {
+                continue;
+            }
+            let hint = if field == "args" && profile.strategy.manages_local_tools() {
+                Some("ai.acp.argsHint")
+            } else {
+                hint
+            };
             fields = fields.child(self.ai_agent_field(id, field, label, hint));
         }
         let persistent_id = id.clone();

@@ -837,6 +837,54 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
     #[test]
+    fn generic_acp_history_round_trips_without_becoming_codex() {
+        use nyaterm_core::ai::external_agents::ExternalSessionBinding;
+        let dir = unique_temp_dir("generic-acp-history");
+        let store = ConnectionStore::open(&dir).unwrap();
+        let agent = AiAgentKind::Acp("custom".into());
+        store
+            .append_ai_user_message_scoped(
+                "generic",
+                None,
+                "saved history".into(),
+                agent.clone(),
+                AiSessionScope::default(),
+            )
+            .unwrap();
+        let metadata = AiSessionBackendMetadata {
+            backend: nyaterm_core::AiBackendKind::Acp,
+            external_binding: Some(ExternalSessionBinding {
+                profile_id: "custom".into(),
+                protocol: "acp_v1".into(),
+                revision: 3,
+                external_id: "external".into(),
+                working_directory: "cwd".into(),
+                config_directory: None,
+                source_session_id: None,
+                extra: Default::default(),
+            }),
+            ..Default::default()
+        };
+        store
+            .set_ai_session_external_metadata(
+                "generic",
+                agent.clone(),
+                "external".into(),
+                metadata.clone(),
+            )
+            .unwrap();
+        let history = store.load_ai_history().unwrap();
+        let session = history
+            .sessions
+            .iter()
+            .find(|session| session.id == "generic")
+            .unwrap();
+        assert_eq!(session.agent_kind, agent);
+        assert_eq!(session.backend_metadata.as_ref(), Some(&metadata));
+        assert_eq!(history.messages[0].content, "saved history");
+    }
+
+    #[test]
     fn acp_binding_preserves_legacy_history_and_rejects_another_instance() {
         use nyaterm_core::ai::external_agents::ExternalSessionBinding;
         let dir = unique_temp_dir("acp-history-binding");

@@ -116,6 +116,19 @@ pub(super) fn run_external(
                 return Ok(());
             }
             match event {
+                AgentEvent::Permission(approval) => {
+                    if let Some(stream) = stream {
+                        stream
+                            .unbounded_send(AiChatWorkerEvent::AcpPermission {
+                                job_id,
+                                session_id: session_id.to_owned(),
+                                approval,
+                            })
+                            .map_err(|_| "AI event receiver closed".to_owned())?;
+                    } else {
+                        approval.respond(false);
+                    }
+                }
                 AgentEvent::Delta { text, reasoning } => {
                     if let Some(stream) = stream {
                         stream
@@ -137,8 +150,10 @@ pub(super) fn run_external(
                         .unwrap_or_default();
                     metadata.backend = if profile.strategy.0 == "claude" {
                         nyaterm_core::AiBackendKind::ClaudeCode
-                    } else {
+                    } else if profile.strategy.0 == "codex" {
                         nyaterm_core::AiBackendKind::Codex
+                    } else {
+                        nyaterm_core::AiBackendKind::Acp
                     };
                     metadata.external_binding = Some(binding.clone());
                     store

@@ -1,6 +1,8 @@
 //! ACP v1 transport. Desktop owns jobs, terminal authorization, and credential lifetime.
 mod codex_policy;
 pub mod discovery;
+mod generic_policy;
+pub mod permissions;
 pub mod policy;
 mod runtime;
 
@@ -14,9 +16,7 @@ pub enum AgentError {
     Missing,
     #[error("This adapter or engine version has not passed the strict execution policy")]
     UnsupportedVersion,
-    #[error(
-        "This Agent is not enabled on this platform; Codex supports Windows and Linux, Claude supports Windows"
-    )]
+    #[error("This Agent is not enabled on this platform")]
     UnsupportedPlatform,
     #[error("This Agent strategy has not passed the strict execution policy")]
     UnsupportedStrategy,

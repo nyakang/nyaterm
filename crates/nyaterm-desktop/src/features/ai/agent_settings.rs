@@ -138,8 +138,18 @@ impl AgentSettingsEditor {
                         "name" => profile.name = value,
                         "executable" => profile.executable = value,
                         "strategy" => {
-                            profile.strategy.0 = value;
-                            profile.enabled = false;
+                            if profile.strategy.0 != value {
+                                let defaults =
+                                    ExternalAgentProfile::new(profile.id.clone(), &value);
+                                profile.strategy = defaults.strategy;
+                                profile.executable = defaults.executable;
+                                profile.args = defaults.args;
+                                profile.config_directory = None;
+                                profile.default_model = None;
+                                profile.legacy_engine_path = None;
+                                profile.enabled = false;
+                                self.invalid_args.remove(id);
+                            }
                         }
                         "args" => match serde_json::from_str::<Vec<String>>(&value) {
                             Ok(args) => {
@@ -263,7 +273,9 @@ pub(in crate::features) fn execution_unavailable_key(
         Err(AgentError::UnsupportedPlatform) => Some("ai.acp.platformUnavailable"),
         Err(AgentError::UnsupportedStrategy) => Some("ai.acp.strategyUnavailable"),
         Err(_) => Some("ai.acp.detectionOnly"),
-        Ok(()) if !profile.args.is_empty() => Some("ai.acp.argsUnsupported"),
+        Ok(()) if !profile.strategy.manages_local_tools() && !profile.args.is_empty() => {
+            Some("ai.acp.argsUnsupported")
+        }
         Ok(()) => None,
     }
 }
@@ -295,6 +307,42 @@ mod tests {
             external_agents: Some(vec![profile]),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn generic_profiles_are_runnable_with_arguments_and_strategy_changes_reset_launch_defaults() {
+        let original = settings();
+        let mut editor = AgentSettingsEditor::default();
+        editor.edit(&original, "agent", "args", "[".into()).unwrap();
+        editor
+            .edit(&original, "agent", "strategy", "gemini".into())
+            .unwrap();
+        assert!(editor.view().errors.is_empty());
+        editor
+            .edit(&original, "agent", "enabled", String::new())
+            .unwrap();
+        let mut draft = original.clone();
+        editor.project(&mut draft);
+        let profile = &draft.external_agents.as_ref().unwrap()[0];
+        assert_eq!(profile.executable, "gemini");
+        assert_eq!(profile.args, ["--acp"]);
+        assert!(profile.config_directory.is_none());
+        assert_eq!(profile.revision, 1);
+        assert!(default_selectable(profile));
+        assert_eq!(
+            profile.environment,
+            original.external_agents.as_ref().unwrap()[0].environment
+        );
+        editor
+            .edit(&original, "agent", "strategy", "opencode".into())
+            .unwrap();
+        editor.project(&mut draft);
+        assert_eq!(draft.external_agents.as_ref().unwrap()[0].args, ["acp"]);
+        assert!(!draft.external_agents.as_ref().unwrap()[0].enabled);
+        assert_eq!(
+            original.external_agents.as_ref().unwrap()[0].executable,
+            "claude-agent-acp"
+        );
     }
 
     #[test]

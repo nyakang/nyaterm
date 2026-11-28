@@ -5,6 +5,7 @@
 //! agent loop. They were seventy `ai_*` fields on `NyaTermApp`, which made it
 //! impossible to see which ones move together.
 
+mod acp;
 pub(in crate::features) mod harness;
 mod presentation;
 mod providers;
@@ -106,6 +107,7 @@ pub(in crate::features) struct AiSettingsPersistenceCompletion {
 
 /// Composer, in-flight request and the visible transcript.
 struct AiChatState {
+    acp_approvals: Vec<nyaterm_agent_client::acp::permissions::AgentPermissionRequest>,
     native_task: Option<crate::ai_runtime::AiTask>,
     response_metadata: HashMap<String, nyaterm_core::ai::completion::AiResponseMetadata>,
     provider_session: Option<Arc<crate::http::ai::AiProviderSession>>,
@@ -156,6 +158,7 @@ impl AiChatState {
         Self {
             tx,
             rx: None,
+            acp_approvals: Vec::new(),
             native_task: None,
             response_metadata: HashMap::new(),
             provider_session: None,
@@ -390,6 +393,7 @@ impl AiFeatureState {
                 pending_full_access: None,
             },
             chat: AiChatState {
+                acp_approvals: Vec::new(),
                 native_task: None,
                 response_metadata: HashMap::new(),
                 provider_session: None,
@@ -887,6 +891,7 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn begin_chat_job(&mut self) -> AiChatLaunch {
+        self.clear_acp_approvals();
         self.visible_scope_epoch.fetch_add(1, Ordering::AcqRel);
         self.chat.job_id = self.chat.job_id.wrapping_add(1).max(1);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1041,6 +1046,7 @@ impl AiFeatureState {
             cancel.store(true, Ordering::Relaxed);
         }
         self.chat.job_id = self.chat.job_id.wrapping_add(1).max(1);
+        self.clear_acp_approvals();
         self.chat.pending = false;
         self.chat.response_phase = AiResponsePhase::Ended;
         self.chat.cancel = None;
@@ -1214,6 +1220,7 @@ impl AiFeatureState {
         if job_id != self.chat.job_id || session_id != self.chat.session_id || !self.chat.pending {
             return None;
         }
+        self.clear_acp_approvals();
         self.chat.pending = false;
         self.chat.response_phase = AiResponsePhase::Ended;
         self.chat.cancel = None;

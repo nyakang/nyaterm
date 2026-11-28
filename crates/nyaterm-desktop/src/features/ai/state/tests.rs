@@ -2755,3 +2755,37 @@ fn cancelling_agent_configuration_restores_drafts_without_stopping_tasks() {
     state.chat.pending = false;
     state.chat.cancel = None;
 }
+
+#[test]
+fn acp_approvals_are_owned_by_the_current_job_profile_and_conversation() {
+    use nyaterm_agent_client::acp::permissions::AgentPermissionRequest;
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.chat.agent_kind = AiAgentKind::Acp("fixture".into());
+    let job = state.begin_chat_request("hello".into(), AiMode::Agent, None);
+    let (stale, reply) = AgentPermissionRequest::fixture("fixture");
+    assert!(!state.add_acp_approval(job.job_id.wrapping_sub(1), stale));
+    assert!(!futures::executor::block_on(reply).unwrap());
+    let (foreign, reply) = AgentPermissionRequest::fixture("other");
+    assert!(!state.add_acp_approval(job.job_id, foreign));
+    assert!(!futures::executor::block_on(reply).unwrap());
+    let (request, reply) = AgentPermissionRequest::fixture("fixture");
+    let id = request.view().id.clone();
+    assert!(state.add_acp_approval(job.job_id, request));
+    state.switch_scope("terminal:other");
+    assert!(state.acp_approval_views().is_empty());
+    state.respond_to_acp_approval(&id, true);
+    state.switch_scope("unbound:");
+    assert_eq!(state.acp_approval_views().len(), 1);
+    state.respond_to_acp_approval(&id, true);
+    assert!(futures::executor::block_on(reply).unwrap());
+    assert!(state.acp_approval_views().is_empty());
+    let (request, reply) = AgentPermissionRequest::fixture("fixture");
+    let id = request.view().id.clone();
+    assert!(state.add_acp_approval(job.job_id, request));
+    state.cancel_chat_and_agent();
+    state.respond_to_acp_approval(&id, true);
+    assert!(!futures::executor::block_on(reply).unwrap());
+    assert!(state.acp_approval_views().is_empty());
+}

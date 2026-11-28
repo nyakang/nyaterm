@@ -23,6 +23,26 @@ impl NyaTermApp {
         match self.ai.edit_external_profile(id, action, value) {
             Ok(true) => {
                 self.ensure_ai_agent_inputs(cx);
+                if action == "strategy"
+                    && let Some(profile) =
+                        nyaterm_core::ai::external_agents::profiles(&self.ai.pending_settings())
+                            .iter()
+                            .find(|profile| profile.id == id)
+                            .cloned()
+                {
+                    self.reset_text_input(
+                        &format!("ai.agent.{id}.executable"),
+                        &profile.executable,
+                        cx,
+                    );
+                    self.reset_text_input(
+                        &format!("ai.agent.{id}.args"),
+                        &serde_json::to_string(&profile.args).unwrap_or_default(),
+                        cx,
+                    );
+                    self.reset_text_input(&format!("ai.agent.{id}.config"), "", cx);
+                    self.reset_text_input(&format!("ai.agent.{id}.model"), "", cx);
+                }
                 self.defer_settings_persistence(cx);
                 self.defer_ai_panel_snapshot_flush(cx);
             }

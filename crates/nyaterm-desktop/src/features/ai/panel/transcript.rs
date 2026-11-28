@@ -42,6 +42,10 @@ pub(super) enum AiTranscriptRow {
         run_id: String,
         history: bool,
     },
+    AcpApproval {
+        index: usize,
+        request_id: String,
+    },
     NativeApproval {
         index: usize,
         request_id: String,
@@ -223,6 +227,16 @@ impl AiTranscriptRow {
         if matches!(rows.as_slice(), [Self::Empty]) {
             rows.clear();
         }
+        rows.extend(
+            snapshot
+                .acp_approvals
+                .iter()
+                .enumerate()
+                .map(|(index, view)| Self::AcpApproval {
+                    index,
+                    request_id: view.id.clone(),
+                }),
+        );
         rows
     }
 
@@ -261,6 +275,9 @@ impl AiTranscriptRow {
                 Self::NativeApproval { request_id: a, .. },
                 Self::NativeApproval { request_id: b, .. },
             ) => a == b,
+            (Self::AcpApproval { request_id: a, .. }, Self::AcpApproval { request_id: b, .. }) => {
+                a == b
+            }
             (Self::AgentStep { step_index: a, .. }, Self::AgentStep { step_index: b, .. }) => {
                 a == b
             }
@@ -276,6 +293,9 @@ impl AiTranscriptRow {
         next: &AiPanelSnapshot,
     ) -> bool {
         match (self, other) {
+            (Self::AcpApproval { index: a, .. }, Self::AcpApproval { index: b, .. }) => {
+                previous.acp_approvals[*a] != next.acp_approvals[*b]
+            }
             (Self::NativeApproval { index: a, .. }, Self::NativeApproval { index: b, .. }) => {
                 previous.native_approvals[*a] != next.native_approvals[*b]
             }
@@ -482,6 +502,9 @@ impl AiPanel {
                 self.ai_final_message(snapshot, &snapshot.messages[*index], cx)
             }
             AiTranscriptRow::Execution { group } => self.ai_execution_header(snapshot, group, cx),
+            AiTranscriptRow::AcpApproval { index, .. } => self
+                .acp_approval_card(snapshot, &snapshot.acp_approvals[*index], cx)
+                .into_any_element(),
             AiTranscriptRow::NativeApproval { index, .. } => self
                 .native_approval_card(snapshot, &snapshot.native_approvals[*index], cx)
                 .into_any_element(),

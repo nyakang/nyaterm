@@ -117,8 +117,8 @@ impl AiActivitySummary {
                 .is_some_and(|view| view.status == AgentRunStatus::WaitingForUser)
             {
                 summary.status = AiActivityStatus::WaitingUser;
-            } else if !snapshot.native_approvals.is_empty() {
-                // Native approvals belong to the newest request even before a tool card exists.
+            } else if !snapshot.native_approvals.is_empty() || !snapshot.acp_approvals.is_empty() {
+                // Approvals belong to the newest request even before a tool card exists.
                 summary.status = AiActivityStatus::NeedsApproval;
             }
         }

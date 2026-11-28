@@ -260,6 +260,11 @@ pub(in crate::features) struct AiChatJobResult {
 
 #[derive(Debug)]
 pub(in crate::features) enum AiChatWorkerEvent {
+    AcpPermission {
+        job_id: u64,
+        session_id: String,
+        approval: nyaterm_agent_client::acp::permissions::AgentPermissionRequest,
+    },
     Delta {
         job_id: u64,
         session_id: String,
@@ -286,7 +291,8 @@ pub(in crate::features) enum AiChatWorkerEvent {
 impl AiChatWorkerEvent {
     pub(in crate::features) fn session_id(&self) -> &str {
         match self {
-            Self::Delta { session_id, .. }
+            Self::AcpPermission { session_id, .. }
+            | Self::Delta { session_id, .. }
             | Self::AgentToolCallDelta { session_id, .. }
             | Self::AgentProtocolFallback { session_id, .. }
             | Self::AgentProtocolRepair { session_id, .. } => session_id,

@@ -97,6 +97,7 @@ pub enum AiBackendKind {
     Genai,
     Codex,
     ClaudeCode,
+    Acp,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]

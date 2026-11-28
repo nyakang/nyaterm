@@ -14,6 +14,64 @@ pub struct ApprovalView {
     pub has_command: bool,
 }
 pub type ApprovalDecisionHandler = Rc<dyn Fn(AgentApprovalDecision, &mut App)>;
+pub type AcpApprovalDecisionHandler = Rc<dyn Fn(bool, &mut App)>;
+
+pub fn acp_approval_card(
+    palette: ThemePalette,
+    agent: String,
+    request: nyaterm_core::ai::external_agents::AcpPermissionView,
+    on_decision: AcpApprovalDecisionHandler,
+) -> impl IntoElement {
+    let deny = on_decision.clone();
+    let actions = div()
+        .flex()
+        .flex_wrap()
+        .gap_2()
+        .child(
+            div().debug_selector(|| "acp-approval-deny".into()).child(
+                NyaButton::new(format!("acp-deny-{}", request.id), t!("ai.mcp.deny"))
+                    .small()
+                    .on_click(move |_, _, cx| deny(false, cx)),
+            ),
+        )
+        .child(
+            div().debug_selector(|| "acp-approval-once".into()).child(
+                NyaButton::new(format!("acp-allow-{}", request.id), t!("ai.mcp.allowOnce"))
+                    .small()
+                    .variant(NyaButtonVariant::Primary)
+                    .disabled(!request.allow_once)
+                    .on_click(move |_, _, cx| on_decision(true, cx)),
+            ),
+        );
+    div()
+        .id(format!("acp-approval-{}", request.id))
+        .debug_selector(|| "acp-approval".into())
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(palette.warning))
+        .bg(rgb(palette.surface))
+        .text_size(px(12.))
+        .child(
+            div()
+                .text_color(rgb(palette.warning))
+                .child(t!("ai.acp.permissionTitle", agent = agent)),
+        )
+        .child(request.title)
+        .child(div().whitespace_normal().child(request.details))
+        .child(
+            div()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("ai.acp.permissionHint")),
+        )
+        .child(actions)
+}
+
 pub fn native_approval_card(
     palette: ThemePalette,
     request: ApprovalView,

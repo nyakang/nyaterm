@@ -352,6 +352,12 @@
   },
   "ai": {
     "acp": {
+      "permissionHint": "L’autorisation unique concerne uniquement cette demande. Les opérations NyaTerm MCP conservent leurs propres approbations.",
+      "permissionTitle": "%{agent} : autorisation d’un outil local",
+      "argsHint": "Tableau JSON d’arguments, par exemple [\"--acp\"]. Chaque élément est transmis comme un argument distinct.",
+      "genericInstall": "Installez l’Agent, puis indiquez son exécutable et ses arguments de démarrage ACP. Utilisez ses arguments ou variables d’environnement pour choisir le répertoire de configuration.",
+      "localToolsHint": "Cet Agent gère ses propres outils locaux et peut accéder à cet ordinateur. Seules les demandes envoyées via ACP peuvent être examinées ici.",
+      "custom": "Agent ACP personnalisé",
       "name": "Name",
       "strategy": "Strategy (codex / claude)",
       "executable": "ACP adapter executable",
@@ -386,7 +392,7 @@
       "defaultHint": "Seuls les agents activés et pris en charge sont sélectionnables. Vérifiez séparément l’installation et la connexion.",
       "draftHint": "Les modifications prennent effet avec Appliquer en bas de page. Modifier un agent actif arrête ses tâches en cours.",
       "empty": "Ajoutez Claude Code ou Codex pour configurer un agent local.",
-      "executableHint": "Saisissez l’exécutable de l’adaptateur ACP ou son chemin absolu, pas celui du CLI Agent habituel.",
+      "executableHint": "Indiquez l’exécutable qui démarre l’Agent en mode ACP ; saisissez les arguments requis dans les paramètres avancés.",
       "modelHint": "Laissez vide pour utiliser le modèle par défaut de l’agent.",
       "checking": "Vérification…",
       "advanced": "Paramètres avancés",

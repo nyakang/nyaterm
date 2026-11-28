@@ -69,8 +69,27 @@ fn agent_settings_native_probe() {
                 app.settings.set_language("zh-CN");
                 app.open_page(NavItem::Settings, cx);
                 app.focus_settings_tab(SettingsTab::AiAgents, cx);
-                app.edit_acp_profile("builtin-codex", "expanded", String::new(), cx);
-                app.edit_acp_profile("builtin-codex", "installation-help", String::new(), cx);
+                if std::env::var_os("NYATERM_AGENT_PROBE_GENERIC").is_some() {
+                    for strategy in ["gemini", "opencode", "custom_acp"] {
+                        app.edit_acp_profile("", "add", strategy.into(), cx);
+                    }
+                    let ids: Vec<_> =
+                        nyaterm_core::ai::external_agents::profiles(&app.ai.pending_settings())
+                            .iter()
+                            .filter(|profile| profile.strategy.0 != "gemini")
+                            .map(|profile| profile.id.clone())
+                            .collect();
+                    for id in ids {
+                        if app.ai.agent_editor_view().expanded.contains(&id) {
+                            app.edit_acp_profile(&id, "expanded", String::new(), cx);
+                        }
+                    }
+                } else {
+                    app.edit_acp_profile("builtin-codex", "expanded", String::new(), cx);
+                }
+                if std::env::var_os("NYATERM_AGENT_PROBE_GENERIC").is_none() {
+                    app.edit_acp_profile("builtin-codex", "installation-help", String::new(), cx);
+                }
                 app.flush_settings_panel_snapshots(cx);
                 app.sync_component_theme(cx);
                 nyaterm_i18n::apply_locale("zh-CN");

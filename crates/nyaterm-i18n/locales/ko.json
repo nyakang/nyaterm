@@ -352,6 +352,12 @@
   },
   "ai": {
     "acp": {
+      "permissionHint": "한 번 허용은 이 요청에만 적용됩니다. NyaTerm MCP 작업에는 별도의 승인이 적용됩니다.",
+      "permissionTitle": "%{agent}: 로컬 도구 권한",
+      "argsHint": "JSON 인수 배열(예: [\"--acp\"]). 각 항목을 별도의 인수로 전달합니다.",
+      "genericInstall": "Agent를 직접 설치한 뒤 실행 파일과 ACP 시작 인수를 지정하세요. 설정 디렉터리는 Agent의 인수나 환경 변수로 지정할 수 있습니다.",
+      "localToolsHint": "이 Agent는 자체 로컬 도구를 관리하며 컴퓨터에 접근할 수 있습니다. 여기서는 ACP로 전달된 권한 요청만 검토할 수 있습니다.",
+      "custom": "사용자 지정 ACP Agent",
       "name": "Name",
       "strategy": "Strategy (codex / claude)",
       "executable": "ACP adapter executable",
@@ -386,7 +392,7 @@
       "defaultHint": "활성화되고 지원되는 Agent만 선택할 수 있습니다. 설치 및 로그인 상태는 별도로 확인하세요.",
       "draftHint": "페이지 아래의 적용을 눌러야 변경 사항이 반영됩니다. 사용 중인 Agent 설정을 적용하면 현재 작업이 중지됩니다.",
       "empty": "Claude Code 또는 Codex를 추가하여 로컬 Agent를 설정하세요.",
-      "executableHint": "일반 Agent CLI가 아닌 ACP 어댑터의 실행 파일 이름 또는 절대 경로를 입력하세요.",
+      "executableHint": "ACP 모드로 Agent를 시작하는 실행 파일을 입력하세요. 필요한 인수는 고급 설정에 입력합니다.",
       "modelHint": "비워 두면 Agent의 기본 모델을 사용합니다.",
       "checking": "확인 중…",
       "advanced": "고급 설정",

@@ -10,14 +10,88 @@ use crate::ai::{AiAgentKind, AiSettings, CodexThreadMode};
 pub const CODEX_PROFILE_ID: &str = "builtin-codex";
 pub const CLAUDE_PROFILE_ID: &str = "builtin-claude";
 
+/// Ephemeral, untrusted Agent-provided approval text; never persist or log it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AcpPermissionView {
+    pub id: String,
+    pub profile_id: String,
+    pub title: String,
+    pub details: String,
+    pub allow_once: bool,
+}
+
+impl std::fmt::Debug for AcpPermissionView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcpPermissionView").finish_non_exhaustive()
+    }
+}
+
 /// Keep unfamiliar strategy identifiers intact; only the client can admit a strategy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct AgentStrategy(pub String);
 
+/// Launch defaults only; execution policy belongs to agent-client.
+pub struct AgentPreset {
+    pub strategy: &'static str,
+    pub name: &'static str,
+    pub executable: &'static str,
+    pub args: &'static [&'static str],
+    pub documentation: &'static str,
+}
+
+pub const AGENT_PRESETS: &[AgentPreset] = &[
+    AgentPreset {
+        strategy: "claude",
+        name: "Claude Code",
+        executable: "claude-agent-acp",
+        args: &[],
+        documentation: "https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp",
+    },
+    AgentPreset {
+        strategy: "codex",
+        name: "Codex",
+        executable: "codex-acp",
+        args: &[],
+        documentation: "https://www.npmjs.com/package/@agentclientprotocol/codex-acp",
+    },
+    AgentPreset {
+        strategy: "gemini",
+        name: "Gemini CLI",
+        executable: "gemini",
+        args: &["--acp"],
+        documentation: "https://geminicli.com/docs/",
+    },
+    AgentPreset {
+        strategy: "opencode",
+        name: "OpenCode",
+        executable: "opencode",
+        args: &["acp"],
+        documentation: "https://opencode.ai/docs/acp/",
+    },
+    AgentPreset {
+        strategy: "custom_acp",
+        name: "Custom ACP Agent",
+        executable: "",
+        args: &[],
+        documentation: "https://agentclientprotocol.com/",
+    },
+];
+
 impl AgentStrategy {
+    pub fn preset(&self) -> Option<&'static AgentPreset> {
+        AGENT_PRESETS
+            .iter()
+            .find(|preset| preset.strategy == self.0)
+    }
+
+    /// These agents retain their own local tools and configuration.
+    pub fn manages_local_tools(&self) -> bool {
+        matches!(self.0.as_str(), "gemini" | "opencode" | "custom_acp")
+    }
+
     pub fn supported(&self) -> bool {
-        matches!(self.0.as_str(), "codex" | "claude")
+        self.preset().is_some()
     }
 }
 
@@ -73,19 +147,19 @@ fn persistent_default() -> bool {
 
 impl ExternalAgentProfile {
     pub fn new(id: String, strategy: &str) -> Self {
-        let (name, executable) = match strategy {
-            "codex" => ("Codex", "codex-acp"),
-            "claude" => ("Claude Code", "claude-agent-acp"),
-            _ => ("ACP Agent", ""),
-        };
+        let preset = AGENT_PRESETS
+            .iter()
+            .find(|preset| preset.strategy == strategy);
         Self {
             id,
-            name: name.into(),
+            name: preset.map_or("ACP Agent", |preset| preset.name).into(),
             strategy: AgentStrategy(strategy.into()),
             revision: 0,
             enabled: false,
-            executable: executable.into(),
-            args: Vec::new(),
+            executable: preset.map_or("", |preset| preset.executable).into(),
+            args: preset.map_or_else(Vec::new, |preset| {
+                preset.args.iter().map(|arg| (*arg).into()).collect()
+            }),
             environment: Vec::new(),
             working_directory: None,
             config_directory: None,
@@ -263,6 +337,59 @@ impl ExternalSessionBinding {
 mod tests {
     use crate::ai::external_agents::{ExternalAgentProfile, migrate_profiles, same_agent};
     use crate::ai::{AiAgentKind, AiSettings};
+
+    #[test]
+    fn generic_presets_round_trip_with_arguments_secrets_and_future_fields() {
+        for (strategy, executable, args) in [
+            ("gemini", "gemini", vec!["--acp"]),
+            ("opencode", "opencode", vec!["acp"]),
+            ("custom_acp", "", vec![]),
+        ] {
+            let mut profile = ExternalAgentProfile::new("third-party".into(), strategy);
+            assert!(profile.strategy.supported());
+            assert!(profile.strategy.manages_local_tools());
+            assert!(!profile.enabled);
+            assert_eq!(profile.executable, executable);
+            assert_eq!(profile.args, args);
+            profile.environment.push(super::AgentEnvironmentVariable {
+                id: "token".into(),
+                name: "AUTH_TOKEN".into(),
+                value: "fixture-secret".into(),
+            });
+            profile
+                .extra
+                .insert("futureField".into(), serde_json::json!({"a":1}));
+            let settings = AiSettings {
+                external_agents: Some(vec![profile]),
+                ..Default::default()
+            };
+            let json = serde_json::to_value(&settings).unwrap();
+            let mut restored: AiSettings = serde_json::from_value(json).unwrap();
+            migrate_profiles(&mut restored);
+            assert_eq!(restored.external_agents, settings.external_agents);
+            assert!(
+                !serde_json::to_string(&crate::ai::mask_ai_settings(restored))
+                    .unwrap()
+                    .contains("fixture-secret")
+            );
+        }
+    }
+
+    #[test]
+    fn acp_backend_extends_existing_history_identifiers() {
+        for (wire, kind) in [
+            ("genai", crate::AiBackendKind::Genai),
+            ("codex", crate::AiBackendKind::Codex),
+            ("claude_code", crate::AiBackendKind::ClaudeCode),
+            ("acp", crate::AiBackendKind::Acp),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<crate::AiBackendKind>(serde_json::json!(wire)).unwrap(),
+                kind
+            );
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        }
+    }
 
     #[test]
     fn legacy_migration_retains_engine_path_without_launching_it_as_acp() {

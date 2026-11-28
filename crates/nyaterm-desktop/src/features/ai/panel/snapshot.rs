@@ -303,6 +303,7 @@ impl NyaTermApp {
             index: Arc::default(),
             native_run,
             native_approvals,
+            acp_approvals: self.ai.acp_approval_views().into(),
             native_answer_inputs,
             ui_font_family: if self.settings.summary().ui_font_family.trim().is_empty() {
                 crate::features::shell::gpui_ui_font_fallback().into()

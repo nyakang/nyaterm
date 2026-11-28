@@ -23,17 +23,24 @@ pub fn expected_version(profile: &ExternalAgentProfile) -> Result<&'static str, 
 
 /// Admission is separate from discovery: an installed adapter is not a sandbox.
 pub fn admit_execution(profile: &ExternalAgentProfile) -> Result<(), AgentError> {
+    if !profile.strategy.supported() {
+        return Err(AgentError::UnsupportedStrategy);
+    }
     if !platform_supported(profile) {
         return Err(AgentError::UnsupportedPlatform);
     }
     match profile.strategy.0.as_str() {
-        "claude" | "codex" => Ok(()),
+        "claude" | "codex" | "gemini" | "opencode" | "custom_acp" => Ok(()),
         _ => Err(AgentError::UnsupportedStrategy),
     }
 }
 
 pub fn platform_supported(profile: &ExternalAgentProfile) -> bool {
-    cfg!(windows) || (cfg!(target_os = "linux") && profile.strategy.0 == "codex")
+    if profile.strategy.manages_local_tools() {
+        cfg!(any(windows, target_os = "linux", target_os = "macos"))
+    } else {
+        cfg!(windows) || (cfg!(target_os = "linux") && profile.strategy.0 == "codex")
+    }
 }
 
 pub fn matches_version(actual: &str, expected: &str) -> bool {
@@ -66,7 +73,9 @@ pub(crate) fn clear_unsafe_environment(command: &mut Command) {
 
 pub fn configure(command: &mut Command, profile: &ExternalAgentProfile) -> Result<(), AgentError> {
     profile.validate().map_err(AgentError::Configuration)?;
-    expected_version(profile)?;
+    if !profile.strategy.supported() {
+        return Err(AgentError::UnsupportedStrategy);
+    }
     for directory in [&profile.working_directory, &profile.config_directory]
         .into_iter()
         .flatten()
@@ -78,6 +87,9 @@ pub fn configure(command: &mut Command, profile: &ExternalAgentProfile) -> Resul
         }
     }
 
+    if profile.strategy.manages_local_tools() {
+        return super::generic_policy::configure(command, profile);
+    }
     if !profile.args.is_empty() {
         return Err(AgentError::Configuration(
             "Extra adapter arguments are not admitted by the strict policy",

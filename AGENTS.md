@@ -62,11 +62,15 @@ must include explicit conversion logic and tests.
   depend on core and mcp-protocol only among workspace crates. Desktop injects
   discovery permissions and owns approval, capability execution, configuration
   paths, generation registration, and ephemeral credential lifetime.
-* `crates/nyaterm-agent-client`: UI-independent Codex and Claude Code CLI clients,
-  executable discovery, account/version/authentication probes, and owned child
+* `crates/nyaterm-agent-client`: UI-independent ACP clients for Codex, Claude Code,
+  Gemini CLI, OpenCode and custom agents, executable discovery,
+  account/version/authentication probes, and owned child
   process trees and pipe readers. Only core is allowed as a workspace dependency,
   including tests. Desktop injects MCP helper paths/environment and callbacks,
-  retaining task scheduling, UI state, persistence, and credential guards.
+  retaining task scheduling, UI state, persistence, credential guards and single-use
+  ACP approval state. Generic ACP agents retain their own local tools; Codex and
+  Claude retain their strict execution policies. The default-off `test-support`
+  feature exposes only a deterministic test peer and controlled approval fixtures.
 * `crates/nyaterm-ai-client`: UI-independent native AI provider HTTP clients,
   request and streaming-response adapters, model discovery, and proxy handling.
   Runtime/task ownership and AI feature orchestration remain in desktop.

@@ -397,3 +397,56 @@ fn native_approval_shows_complete_scripts_and_preserves_readers_scroll() {
     assert!(!update.reset);
     assert!(update.splice.is_some());
 }
+
+#[test]
+fn acp_approval_card_shows_in_collapsed_history_and_replies_once() {
+    use nyaterm_agent_client::acp::permissions::AgentPermissionRequest;
+    use nyaterm_core::ai::external_agents::ExternalAgentProfile;
+    let root = TestConfigDir::new("nyaterm-acp-inline-approval");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let (app, vcx) = compact_host(&mut cx, root.path());
+    for (selector, allow) in [("acp-approval-once", true), ("acp-approval-deny", false)] {
+        let mut receiver = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.cancel_ai_chat(cx);
+                let mut profile = ExternalAgentProfile::new("fixture".into(), "custom_acp");
+                profile.enabled = true;
+                profile.executable = "fixture".into();
+                let mut settings = app.ai.settings_config_cloned();
+                settings.external_agents = Some(vec![profile.clone()]);
+                app.ai.replace_settings_config(settings, true);
+                assert!(
+                    app.ai
+                        .set_chat_run_mode(AiMode::Agent, profile.agent_kind())
+                );
+                let job = app
+                    .ai
+                    .begin_chat_request("fixture".into(), AiMode::Agent, None);
+                let (request, receiver) = AgentPermissionRequest::fixture("fixture");
+                assert!(app.ai.add_acp_approval(job.job_id, request));
+                app.flush_ai_panel_snapshot(cx);
+                receiver
+            })
+        });
+        compact_draw(&app, vcx);
+        assert!(vcx.debug_bounds("acp-approval").is_some());
+        vcx.update(|_, cx| {
+            let panel = app.read(cx).ai_panel.read(cx);
+            let snapshot = panel.snapshot().unwrap();
+            assert!(snapshot.expanded_execution_groups.is_empty());
+            assert_eq!(
+                AiTranscriptRow::project(snapshot)
+                    .iter()
+                    .filter(|row| matches!(row, AiTranscriptRow::AcpApproval { .. }))
+                    .count(),
+                1
+            );
+        });
+        let button = vcx.debug_bounds(selector).unwrap();
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        assert_eq!(receiver.try_recv().unwrap(), Some(allow));
+        assert!(vcx.debug_bounds("acp-approval").is_none());
+    }
+}

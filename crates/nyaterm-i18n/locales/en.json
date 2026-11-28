@@ -352,6 +352,12 @@
   },
   "ai": {
     "acp": {
+      "permissionHint": "Allow once applies only to this Agent request. NyaTerm MCP operations retain their own approvals.",
+      "permissionTitle": "%{agent}: local tool permission",
+      "argsHint": "JSON array of arguments, for example [\"--acp\"]. Each item is passed as one argument.",
+      "genericInstall": "Install the Agent yourself, then select its executable and ACP startup arguments. Configuration directories can be set through the Agent’s arguments or environment.",
+      "localToolsHint": "This Agent manages its own local tools and has local machine access. Only permission requests it sends through ACP can be reviewed here.",
+      "custom": "Custom ACP Agent",
       "name": "Name",
       "strategy": "Strategy (codex / claude)",
       "executable": "ACP adapter executable",
@@ -386,7 +392,7 @@
       "defaultHint": "Only enabled, supported agents can be selected. Installation and sign-in are checked separately.",
       "draftHint": "Changes take effect after you click Apply below. Applying changes to an active agent stops its current tasks.",
       "empty": "Add Claude Code or Codex to configure a local agent.",
-      "executableHint": "Enter an ACP adapter executable or an absolute path, not the ordinary Agent CLI.",
+      "executableHint": "Enter the executable that starts the Agent in ACP mode; set any required arguments in Advanced settings.",
       "modelHint": "Leave empty to use the agent’s default model.",
       "checking": "Checking…",
       "advanced": "Advanced settings",

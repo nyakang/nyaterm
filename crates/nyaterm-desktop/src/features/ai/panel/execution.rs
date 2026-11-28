@@ -74,6 +74,7 @@ impl AiExecutionGroup {
                 snapshot.agent_steps[*index].step.kind != AiAgentStepKind::FinalAnswer
             }) || (end == snapshot.messages.len()
                 && (!snapshot.native_approvals.is_empty()
+                    || !snapshot.acp_approvals.is_empty()
                     || snapshot.native_run.as_ref().is_some_and(|view| {
                         !view.plan.tasks.is_empty()
                             || !view.questions.is_empty()

@@ -86,6 +86,7 @@ impl AiPanel {
                 AiTranscriptRow::AgentStep { index, .. } => {
                     self.step_text_order(snapshot, &snapshot.agent_steps[*index], false, &mut keys)
                 }
+                AiTranscriptRow::AcpApproval { .. } => {}
                 AiTranscriptRow::NativeApproval { request_id, .. } => {
                     let owner = TextOwner::Approval(request_id.clone());
                     if let Some(view) = snapshot

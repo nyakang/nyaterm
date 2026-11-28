@@ -8,11 +8,26 @@ This change introduces the ACP v1 backend, instance-based Agent configuration an
 | --- | --- | --- | --- |
 | Claude | claude-agent-acp 0.110.0 | Claude Code 2.1.330 (SDK 0.3.330) | Windows strict MCP-only policy; exact adapter and engine checks |
 | Codex | @agentclientprotocol/codex-acp 2.10.0 | Codex 0.171.0 | Windows/Linux; inherited MCP servers disabled, native tools and startup hooks excluded |
-| Unknown/custom | Saved verbatim | Unknown | Disabled |
+| Gemini CLI | `gemini --acp` | Agent-owned | Generic ACP v1; Windows/Linux/macOS |
+| OpenCode | `opencode acp` | Agent-owned | Generic ACP v1; Windows/Linux/macOS |
+| Custom ACP | User-specified executable and argument array | Agent-owned | Generic ACP v1; Windows/Linux/macOS |
+| Unknown strategy ID | Saved verbatim | Unknown | Disabled |
 
-Codex ACP is enabled on Windows and Linux. Unix children now start in an owned process group; cleanup kills that group before joining pipe readers. Claude on Linux and all adapters on macOS remain gated pending platform acceptance.
+Codex ACP is enabled on Windows and Linux. Unix children now start in an owned process group; cleanup kills that group before joining pipe readers. Claude on Linux and both strict strategies on macOS remain gated pending platform acceptance. The generic strategies are enabled on all three desktop platforms; validation evidence is listed separately below.
 
-Users install adapters themselves. Nothing in the product downloads an engine. The acceptance installation under `target/acp-validation` is a local test fixture, not a runtime dependency. Extra startup arguments are retained in configuration but refused by the admitted strategies. Npm and bundled Claude engine layouts are recognized; unrecognized layouts/versions fail closed instead of using an arbitrary CLI from PATH.
+Users install adapters themselves. Nothing in the product downloads an engine. The acceptance installation under `target/acp-validation` is a local test fixture, not a runtime dependency. Extra startup arguments are retained in configuration but refused by the strict Codex/Claude strategies. Generic strategies pass the array directly to the process. Npm and bundled Claude engine layouts are recognized; unrecognized layouts/versions fail closed instead of using an arbitrary CLI from PATH.
+
+## Generic ACP agents
+
+The preset directory is shared by profile creation and settings. New profiles are disabled until enabled and applied. Gemini uses the current `--acp` flag; older Gemini installations may require `--experimental-acp`, which can be set in Advanced settings. OpenCode uses the `acp` subcommand. Custom ACP profiles require an executable and, if needed, arguments. NyaTerm does not download or install an Agent.
+
+Generic agents retain their own local tools, hooks, settings, and other MCP servers. They run with the user's machine permissions, not in a NyaTerm sandbox. NyaTerm can only review permission requests the Agent actually sends over ACP. Each such request gets a single-use Allow once / Deny card; no approval is inferred from tool names, titles, or an Agent claiming to be NyaTerm. There is no Allow always fallback. NyaTerm MCP keeps its independent capability approvals, so an Agent-side confirmation can be followed by an MCP confirmation.
+
+The client advertises neither file nor terminal execution capabilities. Approval replies are asynchronous, bounded to 32 pending requests, session/profile/job-bound, and invalidated on cancellation or task completion. Review payloads are bounded and never logged or persisted; incomplete payloads cannot be approved. Environment overrides cannot inject NyaTerm MCP credentials or process loaders. MCP credentials are delivered only to the injected helper. Generic configuration directories are supplied through the Agent's own arguments or environment, not a guessed cross-provider variable.
+
+Generic startup negotiates ACP v1 without requiring `--version` or pinning an engine version. Authentication status and logout are optional capabilities; a successful handshake with no status API is shown as sign-in status unknown. Models use `configOptions` when available, falling back to legacy `models` and `session/set_model`. An explicit unsupported model fails rather than silently selecting another one. Resume/load requires advertised support and preserves history on failure; use New chat from history when the Agent cannot restore a session.
+
+History uses the additive `acp` backend identifier for new generic strategies, retaining the existing Codex/Claude backend values. Profiles reuse schema 8 with new strategy IDs; unknown strategies and extension fields remain preserved, and existing profiles are not reseeded. Secrets keep their existing encryption and backup contracts.
 
 ## Architecture and ownership
 
@@ -29,7 +44,7 @@ ACP is a communication protocol, not a sandbox. The pinned Claude strategy remov
 
 MCP servers and settings are sent through SDK initialization over stdin (`mcpServersDelivery` / `settingsDelivery`: `initialize`), not command-line JSON. The host chooses the verified engine; inherited engine overrides and Node preload settings are removed. No stderr, prompts, tokens, account identity or raw protocol errors are logged.
 
-ACP permission handling accepts only structured NyaTerm MCP identities for the active session and only `allow_once`. Actual capability/terminal approval remains in the NyaTerm MCP host. File and terminal ACP client capabilities are not advertised. Cancel/timeout revoke the request credential before sending cancellation and reaping the child tree. A periodic timer continues cancellation checks under a stream of notifications.
+The strict Claude policy accepts only structured NyaTerm MCP identities for the active session and only `allow_once`. Actual capability/terminal approval remains in the NyaTerm MCP host. File and terminal ACP client capabilities are not advertised. Cancel/timeout revoke the request credential before sending cancellation and reaping the child tree. A periodic timer continues cancellation checks under a stream of notifications.
 
 Codex admission pins both adapter 2.10.0 and engine 0.171.0. Before each launch, a bounded app-server `config/read` resolves the effective configuration and its layers, including untrusted project layers that ACP will make trusted. Every inherited MCP server is explicitly disabled through Codex's per-server `enabled` setting. The request's helper and credentials use the reserved `nyaterm_embedded` identity; a pre-existing definition of that identity fails admission rather than merging its transport or environment. Settings, authentication files and existing CLI MCP entries are not rewritten.
 
@@ -95,3 +110,21 @@ python scripts/tests/codex_acp_acceptance.py /path/to/codex-acp --native
 ```
 
 The probe uses an isolated configuration, loopback Responses API and synthetic MCP tool. It verifies a real tool call, fresh credentials on a fresh-process resume, rejection of a forced native command, and that inherited public/project MCP servers and a startup hook do not execute. It checks that source configuration files are unchanged. `CARGO_TARGET_DIR` selects examples built outside the workspace target directory. The validated npm adapter resolves its own Codex 0.171.0 dependency; another global Codex version is not substituted. Windows end-to-end UI verification remains required.
+
+### Generic strategy validation
+
+Run the portable Rust fixture (no model calls, credentials, or shell dependencies):
+
+```sh
+cargo test -p nyaterm-agent-client --features test-support
+cargo run -p nyaterm-agent-client --example acp_probe -- opencode /path/to/opencode
+cargo run -p nyaterm-agent-client --example acp_probe -- gemini /path/to/gemini
+```
+
+The default-off `test-support` feature supplies a deterministic peer executable and approval fixtures for desktop tests. Tests cover concurrent permission requests, continued streaming while waiting for approval, foreign sessions, single-use decisions, cancellation, optional authentication, both model interfaces, replay suppression, unsupported resume, timeout, and process exit. Run real-Agent probes with isolated configuration and record the Agent version and OS. A handshake does not validate model calls, interactive login, or tool execution.
+
+Linux handshake checks on 2026-11-28 passed with OpenCode 2.3.0 (`opencode acp`, one authentication method) and Gemini CLI 0.71.1 (`gemini --acp`, four authentication methods), using the Rust `acp_probe` and isolated empty configuration directories. No user credentials or model requests were used. Interactive authentication, real model/tool calls, and Windows/macOS native execution are not established by those checks.
+
+Linux validation used an isolated Cargo target directory because concurrent builds were replacing artifacts in the shared target. `cargo check --workspace`, `cargo clippy --workspace --all-targets`, formatting, and architecture checks passed. Core (1,113 unit tests), store (398 unit tests), i18n, generic protocol fixtures, and Agent settings tests passed. The legacy Codex fixture hit a transient executable-busy error and passed on a separate rerun.
+
+The remaining workspace suites initially reported an ACP approval click failure, an Android startup cancellation failure, and a file-permission failure. The approval callback was corrected to defer its panel snapshot update; the final `cargo test --workspace acp_ -- --test-threads=1` passed, including actual Allow once / Deny clicks and stale approval ownership checks. Android cancellation passed on a separate rerun; the file-permission test passed as a non-root user (the full run was root, which can write to read-only files). These reruns do not represent a second clean full-workspace run.

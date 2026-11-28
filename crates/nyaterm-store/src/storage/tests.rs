@@ -10167,8 +10167,14 @@ fn acp_profiles_encrypt_environment_and_preserve_backup_sync_and_future_fields()
         name: "AUTH_TOKEN".into(),
         value: "acp-secret-fixture".into(),
     });
+    let mut profiles = vec![profile.clone()];
+    for strategy in ["gemini", "opencode", "custom_acp"] {
+        let mut generic = ExternalAgentProfile::new(format!("fixture-{strategy}"), strategy);
+        generic.environment = profile.environment.clone();
+        profiles.push(generic);
+    }
     let settings = AiSettings {
-        external_agents: Some(vec![profile]),
+        external_agents: Some(profiles),
         ..Default::default()
     };
     let saved = store.save_ai_settings(settings).unwrap();

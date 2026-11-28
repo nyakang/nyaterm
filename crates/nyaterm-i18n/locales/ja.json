@@ -352,6 +352,12 @@
   },
   "ai": {
     "acp": {
+      "permissionHint": "今回のみ許可はこの要求にのみ適用されます。NyaTerm MCP 操作には別途承認が必要です。",
+      "permissionTitle": "%{agent}：ローカルツールの権限",
+      "argsHint": "JSON 形式の引数配列（例：[\"--acp\"]）。各要素を個別の引数として渡します。",
+      "genericInstall": "Agent をインストールし、実行ファイルと ACP 起動引数を指定してください。設定ディレクトリは Agent の引数または環境変数で指定できます。",
+      "localToolsHint": "この Agent は独自のローカルツールを管理し、このコンピューターにアクセスできます。ここでは ACP 経由で届く権限要求のみ確認できます。",
+      "custom": "カスタム ACP Agent",
       "name": "Name",
       "strategy": "Strategy (codex / claude)",
       "executable": "ACP adapter executable",
@@ -386,7 +392,7 @@
       "defaultHint": "有効かつ対応済みの Agent のみ選択できます。インストールとログイン状態は別途確認してください。",
       "draftHint": "画面下部の「適用」で変更が反映されます。使用中の Agent の設定を適用すると、現在のタスクが停止します。",
       "empty": "Claude Code または Codex を追加してローカル Agent を設定します。",
-      "executableHint": "通常の Agent CLI ではなく、ACP アダプターの実行名または絶対パスを入力します。",
+      "executableHint": "ACP モードで Agent を起動する実行ファイルを指定してください。必要な引数は詳細設定に入力します。",
       "modelHint": "空欄の場合は Agent の既定モデルを使用します。",
       "checking": "確認中…",
       "advanced": "詳細設定",

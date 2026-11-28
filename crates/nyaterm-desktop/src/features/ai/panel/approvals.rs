@@ -5,6 +5,37 @@ use super::{AiPanel, AiPanelSnapshot};
 use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
 
 impl AiPanel {
+    pub(super) fn acp_approval_card(
+        &self,
+        snapshot: &AiPanelSnapshot,
+        view: &nyaterm_core::ai::external_agents::AcpPermissionView,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let owner = cx.weak_entity();
+        let session_id = snapshot.current_ai_session_id.clone();
+        let request_id = view.id.clone();
+        let handler = std::rc::Rc::new(move |allow, cx: &mut gpui::App| {
+            let _ = owner.update(cx, |panel, cx| {
+                panel.with_app(cx, |app, cx| {
+                    let Some(scope) = app.ai.scope_for_ai_session(&session_id) else {
+                        return;
+                    };
+                    if scope != app.ai.active_scope_key() {
+                        return;
+                    }
+                    app.ai.respond_to_acp_approval(&request_id, allow);
+                    app.defer_ai_panel_snapshot_flush(cx);
+                });
+            });
+        });
+        nyaterm_ai_gpui::approvals::acp_approval_card(
+            snapshot.chrome.palette,
+            snapshot.agent_label.clone(),
+            view.clone(),
+            handler,
+        )
+    }
+
     pub(super) fn native_approval_card(
         &self,
         snapshot: &AiPanelSnapshot,

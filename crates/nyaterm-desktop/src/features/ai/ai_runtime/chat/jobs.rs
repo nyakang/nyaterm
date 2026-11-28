@@ -813,6 +813,11 @@ impl NyaTermApp {
     fn apply_ai_chat_event(&mut self, event: AiChatWorkerEvent, cx: &mut Context<Self>) -> bool {
         let mut dirty = false;
         match event {
+            AiChatWorkerEvent::AcpPermission {
+                job_id, approval, ..
+            } => {
+                dirty = self.ai.add_acp_approval(job_id, approval);
+            }
             AiChatWorkerEvent::Delta {
                 job_id,
                 session_id,

@@ -95,6 +95,7 @@ pub(in crate::features) struct AiPanelSnapshot {
     index: Arc<index::AiSnapshotIndex>,
     pub native_run: Option<super::state::harness::NativeRunView>,
     pub native_approvals: Arc<[NativeCapabilityApproval]>,
+    pub acp_approvals: Arc<[nyaterm_core::ai::external_agents::AcpPermissionView]>,
     pub native_answer_inputs: Vec<Entity<nyaterm_ui::NyaInputState>>,
     pub chrome: AiPanelChrome,
     pub ui_font_family: SharedString,

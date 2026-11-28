@@ -352,6 +352,12 @@
   },
   "ai": {
     "acp": {
+      "permissionHint": "允許一次僅適用於此 Agent 請求。NyaTerm MCP 操作仍需經過自身審批。",
+      "permissionTitle": "%{agent}：本機工具權限",
+      "argsHint": "JSON 參數陣列，例如 [\"--acp\"]。每個元素作為獨立參數傳入。",
+      "genericInstall": "請自行安裝 Agent，選擇執行程式並填寫 ACP 啟動參數。設定目錄可透過該 Agent 支援的參數或環境變數設定。",
+      "localToolsHint": "此 Agent 自主管理本機工具並具有本機存取權限。此處僅能審批它透過 ACP 發出的權限請求。",
+      "custom": "自訂 ACP Agent",
       "name": "Name",
       "strategy": "Strategy (codex / claude)",
       "executable": "ACP adapter executable",
@@ -386,7 +392,7 @@
       "defaultHint": "僅可選擇已啟用且受支援的 Agent；安裝和登入狀態需另外檢查。",
       "draftHint": "修改後點擊頁面底部「套用」才會生效。套用使用中的 Agent 設定會停止其目前工作。",
       "empty": "新增 Claude Code 或 Codex，設定本機 Agent。",
-      "executableHint": "填寫 ACP 配接器的程式名稱或絕對路徑，而非一般 Agent CLI 的路徑。",
+      "executableHint": "填寫以 ACP 模式啟動 Agent 的執行程式；所需參數在進階設定中填寫。",
       "modelHint": "留空則使用 Agent 的預設模型。",
       "checking": "正在檢查…",
       "advanced": "進階設定",

@@ -14,7 +14,7 @@ use agent_client_protocol::v1::schema::{
     ResumeSessionRequest, SelectedPermissionOutcome, SessionNotification,
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
-use agent_client_protocol::{Agent, Lines};
+use agent_client_protocol::{Agent, JsonRpcMessage, Lines, UntypedMessage};
 use futures::{AsyncWriteExt, SinkExt, StreamExt};
 use nyaterm_core::ai::external_agents::{ExternalAgentProfile, ExternalSessionBinding};
 use serde::de::DeserializeOwned;
@@ -42,6 +42,7 @@ pub enum AgentOperation {
 
 #[derive(Clone)]
 pub enum AgentEvent {
+    Permission(super::permissions::AgentPermissionRequest),
     Capabilities {
         auth_methods: Vec<(String, String)>,
         logout: bool,
@@ -101,9 +102,11 @@ pub fn run(
         policy::admit_execution(profile)?;
     }
     let executable = discovery::resolve(&profile.executable)?;
-    let expected = policy::expected_version(profile)?;
-    if !policy::matches_version(&discovery::version(&executable, cancel)?, expected) {
-        return Err(AgentError::UnsupportedVersion);
+    if !profile.strategy.manages_local_tools() {
+        let expected = policy::expected_version(profile)?;
+        if !policy::matches_version(&discovery::version(&executable, cancel)?, expected) {
+            return Err(AgentError::UnsupportedVersion);
+        }
     }
     let engine = if profile.strategy.0 == "claude" {
         Some(discovery::claude_engine(&executable, cancel)?)
@@ -248,6 +251,10 @@ fn run_resolved(
     let codex_permissions = Arc::new(Mutex::new(super::policy::CodexPermissions::default()));
     let notify_permissions = codex_permissions.clone();
     let is_codex = profile.strategy.0 == "codex";
+    let generic = profile.strategy.manages_local_tools();
+    let permission_profile = profile.id.clone();
+    let permission_events = event_tx.clone();
+    let permission_slots = Arc::new(tokio::sync::Semaphore::new(32));
     let mut notify_events = event_tx.clone();
     let stopped = Arc::new(AtomicBool::new(false));
     let permission_stopped = stopped.clone();
@@ -275,34 +282,44 @@ fn run_resolved(
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |request: RequestPermissionRequest, responder, _cx| {
+            async move |request: RequestPermissionRequest, responder, cx| {
                 let belongs = permission_session.lock().unwrap().as_deref()
                     == Some(request.session_id.0.as_ref());
                 let tool = serde_json::to_value(&request.tool_call).unwrap_or(Value::Null);
+                if generic
+                    && belongs
+                    && !permission_stopped.load(Ordering::Acquire)
+                    && let Ok(slot) = permission_slots.clone().try_acquire_owned()
+                {
+                    let (approval, reply) = super::permissions::AgentPermissionRequest::new(
+                        permission_profile.clone(),
+                        &tool,
+                        request
+                            .options
+                            .iter()
+                            .any(|option| option.kind == PermissionOptionKind::AllowOnce),
+                        permission_stopped.clone(),
+                    );
+                    let mut events = permission_events.clone();
+                    let stopped = permission_stopped.clone();
+                    // A handler must return immediately: awaiting UI here would block dispatch.
+                    return cx.spawn(async move {
+                        let _slot = slot;
+                        let allow = events.send(AgentEvent::Permission(approval)).await.is_ok()
+                            && reply.await.unwrap_or(false)
+                            && !stopped.load(Ordering::Acquire);
+                        responder.respond(permission_response(&request, allow))
+                    });
+                }
                 let allow = belongs
                     && !permission_stopped.load(Ordering::Acquire)
                     && if is_codex {
                         let request_value = serde_json::to_value(&request).unwrap_or(Value::Null);
                         codex_permissions.lock().unwrap().authorize(&request_value)
                     } else {
-                        policy::is_nyaterm_permission(&tool)
+                        !generic && policy::is_nyaterm_permission(&tool)
                     };
-                let desired = if allow {
-                    PermissionOptionKind::AllowOnce
-                } else {
-                    PermissionOptionKind::RejectOnce
-                };
-                let outcome = request
-                    .options
-                    .iter()
-                    .find(|option| option.kind == desired)
-                    .map(|option| {
-                        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                            option.option_id.clone(),
-                        ))
-                    })
-                    .unwrap_or(RequestPermissionOutcome::Cancelled);
-                responder.respond(RequestPermissionResponse::new(outcome))
+                responder.respond(permission_response(&request, allow))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -368,6 +385,7 @@ fn run_resolved(
     if result.is_err() && !stopped.swap(true, Ordering::AcqRel) {
         on_cancel();
     }
+    stopped.store(true, Ordering::Release);
     drop(event_rx);
     drop(peer);
     // Readers are joined only after the complete child tree has been terminated.
@@ -423,6 +441,35 @@ fn update_event(update: &Value) -> Option<AgentEvent> {
         }),
         _ => None,
     }
+}
+
+fn permission_response(
+    request: &RequestPermissionRequest,
+    allow: bool,
+) -> RequestPermissionResponse {
+    let desired = if allow {
+        PermissionOptionKind::AllowOnce
+    } else {
+        PermissionOptionKind::RejectOnce
+    };
+    let outcome = request
+        .options
+        .iter()
+        .find(|option| option.kind == desired)
+        .map(|option| {
+            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                option.option_id.clone(),
+            ))
+        })
+        .unwrap_or(RequestPermissionOutcome::Cancelled);
+    RequestPermissionResponse::new(outcome)
+}
+
+// SDK 5 removed the legacy `models` response field. Preserve it for older ACP agents.
+fn preserve_response(request: impl JsonRpcMessage) -> Result<UntypedMessage, AgentError> {
+    request
+        .to_untyped_message()
+        .map_err(|_| AgentError::Protocol("request encoding"))
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, AgentError> {
@@ -546,14 +593,14 @@ async fn exchange(
             .is_some_and(Value::is_object)
         {
             serde_json::to_value(
-                peer.send_request(decode::<ResumeSessionRequest>(setup)?)
+                peer.send_request(preserve_response(decode::<ResumeSessionRequest>(setup)?)?)
                     .block_task()
                     .await
                     .map_err(|_| AgentError::Resume)?,
             )
         } else if init["agentCapabilities"]["loadSession"] == true {
             serde_json::to_value(
-                peer.send_request(decode::<LoadSessionRequest>(setup)?)
+                peer.send_request(preserve_response(decode::<LoadSessionRequest>(setup)?)?)
                     .block_task()
                     .await
                     .map_err(|_| AgentError::Resume)?,
@@ -565,7 +612,7 @@ async fn exchange(
         (id, options)
     } else {
         let created = peer
-            .send_request(decode::<NewSessionRequest>(setup)?)
+            .send_request(preserve_response(decode::<NewSessionRequest>(setup)?)?)
             .block_task()
             .await
             .map_err(|_| AgentError::Protocol("new session"))?;
@@ -621,7 +668,20 @@ async fn exchange(
         .into_iter()
         .flatten()
         .find(|option| option["category"] == "model" || option["id"] == "model");
-    let models = model_config.map(model_choices).unwrap_or_default();
+    let models = model_config.map(model_choices).unwrap_or_else(|| {
+        options
+            .pointer("/models/availableModels")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|model| {
+                Some((
+                    model["modelId"].as_str()?.into(),
+                    model["name"].as_str()?.into(),
+                ))
+            })
+            .collect()
+    });
     events
         .send(AgentEvent::Models(models.clone()))
         .await
@@ -630,18 +690,28 @@ async fn exchange(
         .or_else(|| profile.default_model.clone())
         .filter(|value| !value.is_empty())
     {
-        let config_id = model_config
-            .and_then(|c| c["id"].as_str())
-            .ok_or(AgentError::Protocol("model selection unsupported"))?;
         if !models.iter().any(|(id, _)| id == &model) {
             return Err(AgentError::Protocol("model is not available"));
         }
-        peer.send_request(decode::<SetSessionConfigOptionRequest>(
-            json!({"sessionId":session_id,"configId":config_id,"value":model}),
-        )?)
-        .block_task()
-        .await
-        .map_err(|_| AgentError::Protocol("model selection"))?;
+        if let Some(config_id) = model_config.and_then(|c| c["id"].as_str()) {
+            peer.send_request(decode::<SetSessionConfigOptionRequest>(
+                json!({"sessionId":session_id,"configId":config_id,"value":model}),
+            )?)
+            .block_task()
+            .await
+            .map_err(|_| AgentError::Protocol("model selection"))?;
+        } else {
+            peer.send_request(
+                UntypedMessage::new(
+                    "session/set_model",
+                    json!({"sessionId":session_id,"modelId":model}),
+                )
+                .map_err(|_| AgentError::Protocol("model selection"))?,
+            )
+            .block_task()
+            .await
+            .map_err(|_| AgentError::Protocol("model selection"))?;
+        }
     }
     let response = peer
         .send_request(decode::<PromptRequest>(

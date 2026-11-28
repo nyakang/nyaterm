@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let strategy = args
         .get(1)
-        .ok_or("usage: acp_probe <codex|claude> <adapter>")?;
+        .ok_or("usage: acp_probe <codex|claude|gemini|opencode|custom_acp> <adapter>")?;
     let mut profile = ExternalAgentProfile::new("probe".into(), strategy);
     profile.executable = args.get(2).ok_or("adapter path is required")?.clone();
     let operation = if let Some(config) = args.get(3) {

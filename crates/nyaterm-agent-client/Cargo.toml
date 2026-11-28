@@ -6,6 +6,14 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
+[[bin]]
+name = "nyaterm-acp-test-agent"
+path = "tests/support/agent.rs"
+required-features = ["test-support"]
+
 [dependencies]
 agent-client-protocol.workspace = true
 blocking.workspace = true
