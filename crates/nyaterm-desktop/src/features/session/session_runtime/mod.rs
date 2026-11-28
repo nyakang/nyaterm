@@ -53,6 +53,9 @@ mod start;
 mod x11;
 
 #[cfg(test)]
+mod reconnect_tests;
+
+#[cfg(test)]
 mod serial_prompt_tests;
 
 #[cfg(test)]

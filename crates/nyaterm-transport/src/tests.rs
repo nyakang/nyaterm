@@ -3495,7 +3495,7 @@ fn telnet_writer_without_keepalive_blocks_until_close() {
 }
 
 #[test]
-fn telnet_writer_failure_reports_error_and_stops_lifecycle() {
+fn telnet_writer_failure_reports_error_and_exit_and_stops_lifecycle() {
     struct FailingWriter;
     impl Write for FailingWriter {
         fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
@@ -3522,7 +3522,7 @@ fn telnet_writer_failure_reports_error_and_stops_lifecycle() {
     assert!(writer.telnet_lifecycle.as_ref().unwrap().is_stopped());
     assert!(matches!(
         events.drain(10).events.as_slice(),
-        [SessionEvent::Error { .. }]
+        [SessionEvent::Error { .. }, SessionEvent::Exited { .. }]
     ));
     writer.close();
 }
@@ -3628,6 +3628,75 @@ fn telnet_peer_disconnect_stops_writer_even_before_manager_removes_session() {
             .any(|event| matches!(event, SessionEvent::Exited { .. }))
     );
     manager.close(&info.id).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn telnet_peer_reset_reports_exit_for_telnet_and_raw_tcp() {
+    use std::os::fd::AsRawFd;
+
+    for raw_tcp in [false, true] {
+        let (manager, info, peer) = loopback_telnet_session(raw_tcp, 0);
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        // Closing with zero linger produces RST rather than the EOF path.
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    peer.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_LINGER,
+                    std::ptr::from_ref(&linger).cast(),
+                    std::mem::size_of_val(&linger) as libc::socklen_t,
+                )
+            },
+            0
+        );
+        drop(peer);
+        wait_for_queue_state(
+            || {
+                let sessions = manager.sessions.lock().unwrap();
+                let Some(crate::ManagedSession::Tcp(session)) = sessions.get(&info.id) else {
+                    panic!("TCP session");
+                };
+                session.reader_thread.as_ref().unwrap().is_finished()
+                    && session.writer.worker_thread.as_ref().unwrap().is_finished()
+            },
+            "TCP reader and writer after peer reset",
+        );
+        let events = manager.drain_events(32).unwrap().events;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Error { .. }))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event,
+                    SessionEvent::Exited { session_id, .. } if session_id == &info.id
+                ))
+                .count(),
+            1
+        );
+        manager.close(&info.id).unwrap();
+    }
+}
+
+#[test]
+fn telnet_explicit_close_does_not_publish_a_remote_disconnect() {
+    let (manager, info, _peer) = loopback_telnet_session(false, 0);
+    manager.close(&info.id).unwrap();
+    assert!(
+        !manager
+            .drain_events(32)
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Exited { .. }))
+    );
 }
 
 #[test]

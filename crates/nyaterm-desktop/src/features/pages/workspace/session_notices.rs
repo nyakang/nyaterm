@@ -6,6 +6,74 @@ use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable, NyaSelectableText};
 use rust_i18n::t;
 
 impl NyaTermApp {
+    pub(super) fn with_terminal_reconnect_status(
+        &self,
+        session_id: &str,
+        content: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let pending = self.session.start_reconnect_is_pending(session_id);
+        let error = self.session.start_reconnect_failure(session_id);
+        if !pending && error.is_none() {
+            return content;
+        }
+        let palette = self.theme_palette();
+        let mut status = div()
+            .debug_selector(|| format!("terminal-reconnect-status-{session_id}"))
+            .flex_none()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .py_1()
+            .bg(rgb(palette.surface))
+            .text_size(px(12.))
+            .text_color(rgb(if pending {
+                palette.text
+            } else {
+                palette.danger
+            }))
+            .child(if pending {
+                t!("tabCtx.reconnecting")
+            } else {
+                t!("terminal.reconnectFailed")
+            });
+        if !pending && let Some(error) = error {
+            let id = session_id.to_string();
+            status = status
+                .child(
+                    div()
+                        .max_h(px(120.))
+                        .child(NyaSelectableText::new(
+                            format!("reconnect-error-{session_id}"),
+                            nyaterm_core::ai::sanitize_ai_diagnostic(error, 4096),
+                        ))
+                        .overflow_y_scrollbar(),
+                )
+                .child(
+                    NyaButton::new(
+                        format!("terminal-retry-{session_id}"),
+                        t!("tabCtx.reconnect"),
+                    )
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.reconnect_session(id.clone(), window, cx);
+                    })),
+                );
+        }
+        div()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(status)
+            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .into_any_element()
+    }
+
     pub(super) fn with_session_notice_bar(
         &mut self,
         session_id: &str,

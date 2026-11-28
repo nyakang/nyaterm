@@ -718,6 +718,7 @@ impl NyaTermApp {
         // Menus and terminal chrome inherit the UI typography. Terminal text
         // surfaces set their own font so it cannot leak into popup labels.
         let canvas = div()
+            .debug_selector(|| format!("terminal-canvas-{session_id}"))
             .flex_1()
             .h_full()
             .min_h_0()

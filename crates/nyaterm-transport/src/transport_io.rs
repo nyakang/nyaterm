@@ -166,6 +166,18 @@ impl TelnetWriterLifecycle {
         let _ = self.stream.shutdown(Shutdown::Both);
     }
 
+    // Reader and writer can fail together. Only the first terminal outcome
+    // publishes Exited; an explicit close already owns the UI transition.
+    fn exit(&self, events: &SessionEventQueue, session_id: &str, reason: &str) {
+        if !self.stopped.swap(true, Ordering::AcqRel) {
+            events.push(SessionEvent::Exited {
+                session_id: session_id.to_owned(),
+                reason: reason.to_owned(),
+            });
+        }
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
+
     pub(crate) fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
     }
@@ -277,6 +289,9 @@ impl QueuedTransportWriter {
     }
 
     pub(crate) fn stop(&self) {
+        if let Some(lifecycle) = &self.telnet_lifecycle {
+            lifecycle.stop();
+        }
         self.command_tx.stop();
         if let Some(cancellation) = &self.cancellation {
             cancellation.cancel();
@@ -285,9 +300,6 @@ impl QueuedTransportWriter {
 
     pub(crate) fn close(&mut self) -> bool {
         self.stop();
-        if let Some(lifecycle) = &self.telnet_lifecycle {
-            lifecycle.stop();
-        }
 
         if let Some(worker_thread) = self.worker_thread.take() {
             while !worker_thread.is_finished() && self.cancellation.is_some() {
@@ -417,7 +429,9 @@ pub(crate) fn run_transport_writer<W>(
     }
     command_rx.stop();
     if let Some(policy) = telnet_policy {
-        policy.lifecycle.stop();
+        policy
+            .lifecycle
+            .exit(&event_queue, &session_id, "TCP writer stopped");
     }
 }
 
@@ -542,6 +556,8 @@ impl TerminalTransport for TelnetTransport {
     }
 
     fn close(&mut self) -> anyhow::Result<()> {
+        // Claim local shutdown before waking either worker with a socket error.
+        self.writer.stop();
         let _ = self.reader_stream.shutdown(Shutdown::Both);
         if let Some(route) = self.route.take() {
             route.close();
@@ -789,14 +805,15 @@ pub(crate) fn spawn_tcp_reader_thread(
                     if lifecycle.is_stopped() {
                         break;
                     }
-                    event_queue.push(SessionEvent::Exited {
-                        session_id: session_id.clone(),
-                        reason: if config.raw_tcp {
-                            "raw TCP peer closed connection".to_string()
+                    lifecycle.exit(
+                        &event_queue,
+                        &session_id,
+                        if config.raw_tcp {
+                            "raw TCP peer closed connection"
                         } else {
-                            "telnet peer closed connection".to_string()
+                            "telnet peer closed connection"
                         },
-                    });
+                    );
                     break;
                 }
                 Ok(read) => {
@@ -818,7 +835,7 @@ pub(crate) fn spawn_tcp_reader_thread(
                             };
                             if let Err(error) = queued {
                                 send_session_error(&event_queue, &session_id, error);
-                                lifecycle.stop();
+                                lifecycle.exit(&event_queue, &session_id, "TCP reader stopped");
                             }
                         })
                     };
@@ -833,7 +850,11 @@ pub(crate) fn spawn_tcp_reader_thread(
                                             queue_telnet_control(&command_tx, payload)
                                         {
                                             send_session_error(&event_queue, &session_id, error);
-                                            lifecycle.stop();
+                                            lifecycle.exit(
+                                                &event_queue,
+                                                &session_id,
+                                                "TCP reader stopped",
+                                            );
                                         }
                                     }
                                     TelnetAutoLoginAction::Complete
@@ -867,7 +888,7 @@ pub(crate) fn spawn_tcp_reader_thread(
                 }
             }
         }
-        lifecycle.stop();
+        lifecycle.exit(&event_queue, &session_id, "TCP reader stopped");
         command_tx.stop();
     })
 }

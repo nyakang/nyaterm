@@ -73,28 +73,33 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let reconnect_pending = self.session.start_reconnect_is_pending(&session_id);
-        if reconnect_pending {
-            return self
-                .workspace_reconnect_pending_state(&session_id)
-                .into_any_element();
-        }
-        if let Some(error) = self
-            .session
-            .start_reconnect_failure(&session_id)
-            .map(str::to_string)
-        {
-            return self
-                .workspace_reconnect_failed_state(session_id, error, cx)
-                .into_any_element();
-        }
-        let content = if matches!(
+        let android_view = matches!(
             self.android.kind(&session_id),
             Some(
                 nyaterm_core::models::android::AndroidViewKind::Files
                     | nyaterm_core::models::android::AndroidViewKind::Screen
             )
-        ) {
+        );
+        let terminal_view = !android_view
+            && !self.remote_desktop.is_session(&session_id)
+            && !self.session_is_sftp_only(&session_id);
+        let reconnect_pending = self.session.start_reconnect_is_pending(&session_id);
+        if !terminal_view && reconnect_pending {
+            return self
+                .workspace_reconnect_pending_state(&session_id)
+                .into_any_element();
+        }
+        if !terminal_view
+            && let Some(error) = self
+                .session
+                .start_reconnect_failure(&session_id)
+                .map(str::to_string)
+        {
+            return self
+                .workspace_reconnect_failed_state(session_id, error, cx)
+                .into_any_element();
+        }
+        let content = if android_view {
             self.android_view(session_id.clone(), cx)
         } else if self.remote_desktop.is_session(&session_id) {
             // An IronRDP session in its detached fullscreen window is rendered
@@ -110,8 +115,12 @@ impl NyaTermApp {
         } else if self.session_is_sftp_only(&session_id) {
             self.sftp_session_content(&session_id)
         } else {
-            self.terminal_canvas_for(session_id.clone(), cx)
-                .into_any_element()
+            // Keep the input surface mounted so a failed retry still accepts
+            // Enter and the existing scrollback remains available throughout.
+            let terminal = self
+                .terminal_canvas_for(session_id.clone(), cx)
+                .into_any_element();
+            self.with_terminal_reconnect_status(&session_id, terminal, cx)
         };
         self.with_session_notice_bar(&session_id, content, cx)
     }
