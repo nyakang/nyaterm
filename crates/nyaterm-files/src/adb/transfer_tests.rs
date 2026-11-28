@@ -437,6 +437,53 @@ fn adb_promised_directory_retry_reuses_only_its_own_entries_and_rejects_replaced
 }
 
 #[test]
+fn adb_promised_reuse_requires_the_persisted_fingerprint() {
+    use crate::sftp::SftpFileType;
+    let fixture = AdbFixture::new();
+    fixture.file(b"/device/fingerprint", b"0123456789");
+    let browser = FileBrowserService::Adb(fixture.service.clone());
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("fingerprint");
+    let options = SftpPathTransferOptions::for_promised_download(
+        SftpTransferOptions::default(),
+        SftpFileType::File,
+    );
+
+    // First download commits the file and both stamps (in-task + persisted).
+    browser
+        .download_remote_path_with_progress_and_path_options(
+            &RemoteFilePath::new("/device/fingerprint"),
+            target.clone(),
+            SftpTransferControl::new(),
+            options.with_transfer_options(SftpTransferOptions::default()),
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"0123456789");
+    assert_eq!(fixture.device.lock().unwrap().receives, 1);
+
+    // Drop the on-disk fingerprint while the in-task runtime still considers
+    // the file reusable. The dual gate must reject the zero-byte reuse and
+    // fetch the bytes again rather than trusting the stale memory stamp.
+    crate::download_path::ResumeStampStore::system().clear(&target);
+    browser
+        .download_remote_path_with_progress_and_path_options(
+            &RemoteFilePath::new("/device/fingerprint"),
+            target.clone(),
+            SftpTransferControl::new(),
+            options.with_transfer_options(SftpTransferOptions::default()),
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"0123456789");
+    assert_eq!(
+        fixture.device.lock().unwrap().receives,
+        2,
+        "a missing persisted stamp must force a real download"
+    );
+}
+
+#[test]
 fn changed_local_upload_source_keeps_remote_destination_and_cleans_staging() {
     let fixture = AdbFixture::new();
     fixture.file(b"/device/target", b"original");

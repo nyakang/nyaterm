@@ -6,6 +6,8 @@ use std::io::Write;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
+mod resume_stamp;
+pub(crate) use resume_stamp::ResumeStampStore;
 mod transfer;
 pub(crate) use transfer::TransferDownload;
 
@@ -16,6 +18,10 @@ pub(crate) struct FileIdentity {
 }
 
 impl FileIdentity {
+    pub(crate) fn parts(&self) -> (u64, u64) {
+        (self.volume, self.index)
+    }
+
     pub(crate) fn from_file(file: &fs::File) -> io::Result<Self> {
         #[cfg(unix)]
         {

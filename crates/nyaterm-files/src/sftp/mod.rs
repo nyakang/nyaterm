@@ -3055,31 +3055,6 @@ fn sftp_timestamp_secs(time: SystemTime) -> Option<u32> {
     Some(seconds.min(u64::from(u32::MAX)) as u32)
 }
 
-fn transfer_resume_offset(
-    local_path: &Path,
-    total_bytes: Option<u64>,
-    options: &SftpTransferOptions,
-) -> u64 {
-    if !options.resume_broken_transfer {
-        return 0;
-    }
-    let Some(total_bytes) = total_bytes.filter(|total| *total > 0) else {
-        return 0;
-    };
-    let Ok(metadata) = std::fs::metadata(local_path) else {
-        return 0;
-    };
-    if !metadata.is_file() {
-        return 0;
-    }
-    let local_size = metadata.len();
-    if local_size > 0 && local_size < total_bytes {
-        local_size
-    } else {
-        0
-    }
-}
-
 fn ensure_remote_download_source(file_type: russh_sftp::protocol::FileType) -> anyhow::Result<()> {
     match file_type {
         russh_sftp::protocol::FileType::File | russh_sftp::protocol::FileType::Dir => Ok(()),
@@ -3156,8 +3131,20 @@ where
         source_metadata.file_type() == russh_sftp::protocol::FileType::File,
         "download source is not a regular file"
     );
+    let stamps = crate::download_path::ResumeStampStore::system();
+    // A promised (drag-export) target may be reused only when BOTH the in-task
+    // runtime stamp AND the persisted fingerprint still identify the exact
+    // local bytes as a complete copy of the current remote revision. The
+    // metadata-only `reusable` check alone cannot detect a remote rewrite that
+    // preserved size and second-granularity mtime.
     if promised
         && let Some(path_options) = path_options
+        && stamps.matches(
+            local_path,
+            &raw_path,
+            source_metadata.size,
+            source_metadata.mtime,
+        )
         && path_options.download_runtime()?.reusable(
             local_path,
             &raw_path,
@@ -3192,10 +3179,13 @@ where
             "opened download source is not a regular file"
         );
         let total_bytes = remote_metadata.size;
-        let resume_offset = if promised {
+        // A size-only check cannot prove the local file is a prefix of the
+        // current remote version. Only resume when the persisted fingerprint
+        // still matches both sides' identities and the remote revision.
+        let resume_offset = if promised || !options.resume_broken_transfer {
             0
         } else {
-            transfer_resume_offset(local_path, total_bytes, options)
+            stamps.resume_offset(local_path, &raw_path, total_bytes, remote_metadata.mtime)
         };
         let (temporary, mut local) = crate::download_path::TransferDownload::prepare_with_access(
             download_root,
@@ -3306,18 +3296,48 @@ where
                         .validate_ancestors(local_path)?;
                 }
                 let identity = temporary.commit_async(download_root, local_path).await?;
+                // Persist the fingerprint for every committed download.
+                // Promised targets need it too: their zero-byte reuse path is
+                // now gated on `stamps.matches`, so without writing it the
+                // optimization would silently degrade to full downloads.
+                if let Err(error) = stamps.write(
+                    local_path,
+                    &identity,
+                    &raw_path,
+                    remote_metadata.size,
+                    remote_metadata.mtime,
+                ) {
+                    tracing::debug!(
+                        ?error,
+                        path = %local_path.display(),
+                        "failed to persist download resume stamp"
+                    );
+                }
                 (bytes, identity)
             }
             Err(error) => {
                 if !promised && options.resume_broken_transfer && flushed.is_ok() {
                     let identity = temporary.commit_async(download_root, local_path).await?;
+                    if let Err(error) = stamps.write(
+                        local_path,
+                        &identity,
+                        &raw_path,
+                        remote_metadata.size,
+                        remote_metadata.mtime,
+                    ) {
+                        tracing::debug!(
+                            ?error,
+                            path = %local_path.display(),
+                            "failed to persist partial download resume stamp"
+                        );
+                    }
                     if let Some(path_options) = path_options {
                         path_options.download_runtime()?.completed(
                             local_path,
                             identity,
                             raw_path.clone(),
-                            None,
-                            None,
+                            remote_metadata.size,
+                            remote_metadata.mtime,
                         )?;
                     }
                 }
@@ -4230,7 +4250,6 @@ mod tests {
         resolve_duplicate_decision, resolve_local_download_target, resolve_remote_upload_target,
         sftp_client_config_for_options, sftp_directory_concurrency, sftp_pipeline_config,
         sftp_session_pool_index, sftp_timestamp_secs, sftp_upload_buffer_size,
-        transfer_resume_offset,
     };
     use crate::sftp::{
         RemoteFilePath, SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
@@ -4661,23 +4680,6 @@ mod tests {
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Dir).is_ok());
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Symlink).is_err());
         assert!(ensure_remote_download_source(russh_sftp::protocol::FileType::Other).is_err());
-    }
-
-    #[test]
-    fn transfer_resume_offset_requires_partial_local_file() {
-        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-resume-test");
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let file = dir.join("partial.bin");
-        let enabled = SftpTransferOptions::default().with_resume_broken_transfer(true);
-        let disabled = SftpTransferOptions::default();
-
-        assert_eq!(transfer_resume_offset(&file, Some(10), &enabled), 0);
-        std::fs::write(&file, [1_u8, 2, 3, 4]).expect("partial");
-        assert_eq!(transfer_resume_offset(&file, Some(10), &disabled), 0);
-        assert_eq!(transfer_resume_offset(&file, None, &enabled), 0);
-        assert_eq!(transfer_resume_offset(&file, Some(10), &enabled), 4);
-        assert_eq!(transfer_resume_offset(&file, Some(4), &enabled), 0);
-        assert_eq!(transfer_resume_offset(&file, Some(3), &enabled), 0);
     }
 
     #[test]
