@@ -1196,14 +1196,14 @@ fn sql_session_profile_tracks_entry_and_exit_and_blocks_background(cx: &mut gpui
     use crate::models::SessionLaunchConfig;
     use crate::test_support::TestConfigDir;
     use nyaterm_core::models::connection::AiExecutionProfile;
-    use nyaterm_transport::{LocalSessionConfig, SshSessionConfig, TelnetSessionConfig};
+    use nyaterm_transport::{LocalSessionConfig, TelnetSessionConfig};
 
     let directory = TestConfigDir::new("nyaterm-sql-policy");
     let app = app_with_visible_local_session(cx, directory.path(), "sql");
     cx.update_entity(&app, |app, cx| {
         for launch in [
             SessionLaunchConfig::Local(LocalSessionConfig::default()),
-            SessionLaunchConfig::Ssh(Box::new(SshSessionConfig::default())),
+            SessionLaunchConfig::Ssh(Box::default()),
             SessionLaunchConfig::Telnet(TelnetSessionConfig::default()),
         ] {
             app.session.metadata_mut("sql").unwrap().launch_config = launch;

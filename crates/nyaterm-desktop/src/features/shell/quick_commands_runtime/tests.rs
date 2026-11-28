@@ -579,6 +579,11 @@ fn sidebar_categories_default_to_collapsed_and_persist_expanded_ids_across_resta
     let shared_root = TestTempDir::new("nyaterm-sidebar-shared-config");
     let data_initial = TestTempDir::new("nyaterm-sidebar-data-initial");
     let data_restarted = TestTempDir::new("nyaterm-sidebar-data-restarted");
+    let store_runtime = nyaterm_store::StoreRuntime::spawn(nyaterm_store::StoreConfig {
+        config_dir: shared_root.path().join("config"),
+        portable_key_path: None,
+    })
+    .expect("spawn initial store");
 
     {
         let mut cx = TestAppContext::single();
@@ -595,7 +600,7 @@ fn sidebar_categories_default_to_collapsed_and_persist_expanded_ids_across_resta
             startup_restore: cx.new(|_| StartupRestoreStore::default()),
             overlays: cx.new(|_| OverlayStore::default()),
         };
-        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+        let app = cx.new(|cx| NyaTermApp::new_with_test_store(runtime, stores, &store_runtime, cx));
         app.update(&mut cx, |app, cx| {
             let categories = vec![
                 nyaterm_core::QuickCommandCategory {
@@ -683,6 +688,9 @@ fn sidebar_categories_default_to_collapsed_and_persist_expanded_ids_across_resta
             vec!["docker".to_string()]
         );
     }
+
+    // As in application shutdown, wait for the worker to release redb before reopening it.
+    store_runtime.close_blocking().expect("close initial store");
 
     // Simulate application restart over the same config directory.
     let mut restart_cx = TestAppContext::single();

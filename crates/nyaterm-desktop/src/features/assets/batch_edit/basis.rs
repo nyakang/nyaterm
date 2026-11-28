@@ -204,6 +204,7 @@ pub(in crate::features) fn batch_field_in_kind(
             field,
             BatchFieldKey::Encoding
                 | BatchFieldKey::SshProfile
+                | BatchFieldKey::SshCompatibility
                 | BatchFieldKey::TerminalType
                 | BatchFieldKey::X11
                 | BatchFieldKey::AgentForwarding

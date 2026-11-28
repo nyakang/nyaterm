@@ -571,13 +571,13 @@ mod tests {
         assert!(cx.debug_bounds("connection-type-default-ssh").is_some());
         assert!(cx.debug_bounds("connection-type-default-local").is_none());
 
-        // Hide SSH: the default badge immediately moves to Local.
+        // Hide SSH: the default badge immediately moves to Mosh.
         app.update(cx, |app, cx| {
             app.set_connection_type_visible(ConnectionKindTab::Ssh, false, cx);
         });
         draw_settings(&app, &panel, cx);
         assert!(cx.debug_bounds("connection-type-default-ssh").is_none());
-        assert!(cx.debug_bounds("connection-type-default-local").is_some());
+        assert!(cx.debug_bounds("connection-type-default-mosh").is_some());
 
         // Drag FTP from the bottom up onto the top half of SSH (index 0).
         let ftp_drag = cx
@@ -618,6 +618,7 @@ mod tests {
         });
         // Because FTP is visible and now first, it becomes the default type!
         assert!(cx.debug_bounds("connection-type-default-ftp").is_some());
+        assert!(cx.debug_bounds("connection-type-default-mosh").is_none());
         assert!(cx.debug_bounds("connection-type-default-local").is_none());
 
         // Clicking Restore defaults restores SSH first and all types visible.

@@ -562,16 +562,26 @@ impl NyaTermApp {
         stores: crate::entities::UiStoreHandles,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Tests bypass main(), which preloads the catalog on a dedicated worker
-        // before any view translates on the smaller Windows UI thread stack.
-        crate::preload_i18n().expect("preload translations for test app");
-        let test_config_dir =
-            crate::test_support::TestConfigDir::from_path(runtime.data_dir().to_path_buf());
         let store_runtime = StoreRuntime::spawn(StoreConfig {
             config_dir: runtime.config_dir().to_path_buf(),
             portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
         })
         .expect("spawn test store runtime");
+        Self::new_with_test_store(runtime, stores, &store_runtime, cx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_test_store(
+        runtime: AppRuntime,
+        stores: crate::entities::UiStoreHandles,
+        store_runtime: &StoreRuntime,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Tests bypass main(), which preloads the catalog on a dedicated worker
+        // before any view translates on the smaller Windows UI thread stack.
+        crate::preload_i18n().expect("preload translations for test app");
+        let test_config_dir =
+            crate::test_support::TestConfigDir::from_path(runtime.data_dir().to_path_buf());
         let store_ui = store_runtime.ui_client();
         let store_blocking = store_runtime.blocking_client();
         let bootstrap = store_blocking

@@ -1198,6 +1198,23 @@ const SSH_NETWORK: &[BatchRowSpec] = &[row(
     &[spec(BatchFieldKey::Proxy), spec(BatchFieldKey::ProxyJump)],
 )];
 
+const MOSH_TERMINAL: &[BatchRowSpec] = &[
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Backspace)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::DynamicTabTitle)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RecordingUseGlobal)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RecordingAutoStart)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::RecordingMode)]),
+];
+
 const SSH_TERMINAL: &[BatchRowSpec] = &[
     row(
         BatchRowLayout::Columns,
@@ -1225,6 +1242,26 @@ const SSH_TERMINAL: &[BatchRowSpec] = &[
     ),
     row(BatchRowLayout::Stack, &[spec(BatchFieldKey::RecordingMode)]),
     row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Backspace)]),
+];
+
+const MOSH_SFTP: &[BatchRowSpec] = &[
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::SftpEnabled)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SftpCompatibility)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SftpShellTimeout)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SftpFilenameEncoding)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SftpPipelineDepth)],
+    ),
 ];
 
 const SSH_SFTP: &[BatchRowSpec] = &[
@@ -1806,12 +1843,10 @@ pub(in crate::features) fn batch_rows(
         (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Network) => {
             SSH_NETWORK
         }
-        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Terminal) => {
-            SSH_TERMINAL
-        }
-        (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::Sftp) => {
-            SSH_SFTP
-        }
+        (ConnectionKindTab::Mosh, ConnectionEditorSection::Terminal) => MOSH_TERMINAL,
+        (ConnectionKindTab::Ssh, ConnectionEditorSection::Terminal) => SSH_TERMINAL,
+        (ConnectionKindTab::Mosh, ConnectionEditorSection::Sftp) => MOSH_SFTP,
+        (ConnectionKindTab::Ssh, ConnectionEditorSection::Sftp) => SSH_SFTP,
         (ConnectionKindTab::Ssh, ConnectionEditorSection::Forwarding) => SSH_FORWARDING,
         (ConnectionKindTab::Mosh | ConnectionKindTab::Ssh, ConnectionEditorSection::PostLogin) => {
             SSH_POST_LOGIN

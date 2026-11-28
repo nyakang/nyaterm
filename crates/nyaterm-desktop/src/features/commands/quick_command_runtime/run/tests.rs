@@ -237,6 +237,26 @@ impl WireFixture {
         self.cx.run_until_parked();
     }
 
+    fn wait_for_send_command_progress(&mut self, expected: u32) {
+        // A UI time slice may end between targets. Drive the continuation timer
+        // without advancing far enough to start the next one-second round.
+        for _ in 0..100 {
+            self.cx.run_until_parked();
+            let completed = self.cx.update_entity(&self.app, |app, cx| {
+                app.send_command.presentation(cx).completed
+            });
+            if completed == expected {
+                return;
+            }
+            assert!(
+                completed < expected,
+                "advanced past the expected send progress"
+            );
+            self.cx.executor().advance_clock(Duration::from_millis(1));
+        }
+        panic!("command send did not reach {expected} completed units");
+    }
+
     fn assert_wire(&mut self, index: usize, expected: &[u8]) {
         self.cx.update_entity(&self.app, |app, _| {
             app.write_session_protocol_response(&self.ids[index], b"END")
@@ -1107,21 +1127,25 @@ fn command_send_disconnected_selected_target_does_not_rejoin_later_rounds() {
         app.send_command.apply_draft("round".into());
         app.send_command
             .apply_control_input(SendCommandControlFocus::Count, "3".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Interval, "1".into());
         app.send_bottom_command(false, cx);
     });
-    fixture.cx.run_until_parked();
+    fixture.wait_for_send_command_progress(2);
     fixture.assert_wire(0, b"round\r");
     fixture.assert_wire(1, b"round\r");
     fixture.cx.update_entity(&fixture.app, |app, _| {
         app.session.metadata_mut(&ids[1]).unwrap().disconnected = true;
     });
     fixture.advance();
+    fixture.wait_for_send_command_progress(3);
     fixture.assert_wire(0, b"round\r");
     fixture.assert_wire(1, b"");
     fixture.cx.update_entity(&fixture.app, |app, _| {
         app.session.metadata_mut(&ids[1]).unwrap().disconnected = false;
     });
     fixture.advance();
+    fixture.wait_for_send_command_progress(4);
     fixture.assert_wire(0, b"round\r");
     fixture.assert_wire(1, b"");
 }
