@@ -37,7 +37,7 @@
 </p>
 
 <p align="center">
-  <a href="./docs-site/i18n/README.zh-CN.md">简体中文</a> · <a href="./docs-site/i18n/README.pt-BR.md">Português (Brasil)</a>
+  <strong>English</strong> · <a href="./docs-site/i18n/README.zh-CN.md">简体中文</a> · <a href="./docs-site/i18n/README.zh-TW.md">繁體中文</a> · <a href="./docs-site/i18n/README.ja.md">日本語</a> · <a href="./docs-site/i18n/README.ko.md">한국어</a> · <a href="./docs-site/i18n/README.fr.md">Français</a> · <a href="./docs-site/i18n/README.pt-BR.md">Português (Brasil)</a>
 </p>
 
 ---

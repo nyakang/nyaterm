@@ -41,7 +41,7 @@
     src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-0EA5E9.svg?style=flat-square&logo=linux&labelColor=334155&label=%E6%94%AF%E6%8C%81%E5%B9%B3%E5%8F%B0&v=2"
   >
   &nbsp;
-  <a href="LICENSE">
+  <a href="../../LICENSE">
     <img
       alt="License"
       src="https://img.shields.io/badge/License-Apache%202.0-0EA5E9.svg?style=flat-square&logo=readthedocs&labelColor=334155&label=%E5%8D%8F%E8%AE%AE&v=2"
@@ -49,7 +49,7 @@
   </a>
 </p>
 <p align="center">
-  <a href="../../README.md">English</a> · <a href="./README.pt-BR.md">Português (Brasil)</a>
+  <a href="../../README.md">English</a> · <strong>简体中文</strong> · <a href="./README.zh-TW.md">繁體中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.fr.md">Français</a> · <a href="./README.pt-BR.md">Português (Brasil)</a>
 </p>
 
 ---
@@ -261,7 +261,7 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 | **Linux** | Ubuntu 20.04+、Fedora 36+、Arch Linux 及类似发行版 |
 
 基于 Ubuntu 20.04、使用 **glibc 2.31** 的定制 x86-64 桌面，请使用专门的
-[focal 离线兼容构建](scripts/compat/linux-focal/README.md)。普通 Linux 发布包在
+[focal 离线兼容构建](../../scripts/compat/linux-focal/README.md)。普通 Linux 发布包在
 更新的发行版上编译，可能要求更高版本的 glibc。兼容包包含全部辅助程序及 ABI
 报告，默认优先系统 GPU 驱动，并保留显式的独立 OpenGL CPU 回退入口；目标机需可用的 X11 会话。
 
@@ -390,7 +390,7 @@ cargo run -p nyaterm-app --bin nyaterm
 <a name="赞助"></a>
 # 赞助
 
-如果 NyaTerm 对你的日常开发、运维或远程连接工作有所帮助，欢迎通过 [赞助文档](./docs-site/docs/sponsor.md) 支持项目持续维护。
+如果 NyaTerm 对你的日常开发、运维或远程连接工作有所帮助，欢迎通过 [赞助文档](../docs/sponsor.md) 支持项目持续维护。
 
 ---
 
@@ -418,4 +418,4 @@ cargo run -p nyaterm-app --bin nyaterm
 <a name="许可证"></a>
 # 许可证
 
-本项目基于 [Apache License 2.0](LICENSE) 开源。
+本项目基于 [Apache License 2.0](../../LICENSE) 开源。

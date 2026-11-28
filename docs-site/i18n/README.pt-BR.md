@@ -33,11 +33,11 @@
   &nbsp;
   <a href="#"><img alt="Plataforma" src="https://img.shields.io/badge/Plataforma-Windows%20%7C%20macOS%20%7C%20Linux-0EA5E9?style=flat-square&logo=linux&labelColor=334155"></a>
   &nbsp;
-  <a href="LICENSE"><img alt="Licença" src="https://img.shields.io/badge/Licen%C3%A7a-Apache%202.0-0EA5E9?style=flat-square&logo=readthedocs&labelColor=334155"></a>
+  <a href="../../LICENSE"><img alt="Licença" src="https://img.shields.io/badge/Licen%C3%A7a-Apache%202.0-0EA5E9?style=flat-square&logo=readthedocs&labelColor=334155"></a>
 </p>
 
 <p align="center">
-  <a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a>
+  <a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.zh-TW.md">繁體中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.fr.md">Français</a> · <strong>Português (Brasil)</strong>
 </p>
 
 ---
@@ -254,7 +254,7 @@ Sincronize snapshots de configuração portáteis criptografados e restaure back
 | **Linux** | Ubuntu 20.04+, Fedora 36+, Arch Linux e distribuições semelhantes |
 
 Para desktops Ubuntu 20.04 x86-64 personalizados com **glibc 2.31**, use o
-[build de compatibilidade offline focal](scripts/compat/linux-focal/README.md).
+[build de compatibilidade offline focal](../../scripts/compat/linux-focal/README.md).
 Os pacotes Linux padrão são compilados em distribuições mais recentes e podem exigir
 uma versão mais nova do glibc. O build de compatibilidade inclui todos os auxiliares de
 runtime, um relatório ABI, um inicializador que prioriza sistema/GPU e uma opção explícita
@@ -387,7 +387,7 @@ Obrigado aos seguintes projetos e bibliotecas que tornam o NyaTerm possível:
 <a name="sponsor"></a>
 # Patrocínio
 
-Se o NyaTerm ajuda no seu desenvolvimento, operações ou fluxo de terminal remoto diário, você pode apoiar a manutenção contínua pela [página de patrocínio](./docs-site/i18n/en/docusaurus-plugin-content-docs/current/sponsor.md).
+Se o NyaTerm ajuda no seu desenvolvimento, operações ou fluxo de terminal remoto diário, você pode apoiar a manutenção contínua pela [página de patrocínio](./en/docusaurus-plugin-content-docs/current/sponsor.md).
 
 ---
 
@@ -415,4 +415,4 @@ Se o NyaTerm ajuda no seu desenvolvimento, operações ou fluxo de terminal remo
 <a name="license"></a>
 # Licença
 
-Este projeto é licenciado sob a [Apache License 2.0](LICENSE).
+Este projeto é licenciado sob a [Apache License 2.0](../../LICENSE).
