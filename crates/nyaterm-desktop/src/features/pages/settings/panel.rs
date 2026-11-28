@@ -500,6 +500,8 @@ impl FontSelectOptionCache {
 pub(in crate::features) struct SettingsPanel {
     focus: FocusHandle,
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
+    pub(in crate::features::pages::settings) agent_disclosure_focus:
+        HashMap<(String, &'static str), FocusHandle>,
     pub(in crate::features::pages::settings) pane_width: f32,
     pub(in crate::features::pages::settings) pane_height: f32,
     pub(in crate::features::pages::settings) content_width: f32,
@@ -599,6 +601,7 @@ impl SettingsPanel {
             cloud_sync_conflict_rows_visible: false,
             app,
             focus: cx.focus_handle(),
+            agent_disclosure_focus: HashMap::new(),
             snapshot: None,
             settings: SettingsPresentation::empty(cx),
             ai: AiSettingsPresentation::empty(cx),
@@ -2070,6 +2073,70 @@ mod tests {
         cx.new(|cx| NyaTermApp::new(runtime, stores, cx))
     }
 
+    #[test]
+    fn agent_executable_picker_updates_draft_and_input_and_ignores_cancelled_or_stale_choices() {
+        let dir = TestConfigDir::new("nyaterm-agent-path-picker");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.open_page(NavItem::Settings, cx);
+            app.focus_settings_tab(SettingsTab::AiAgents, cx);
+        });
+        let selected = dir.path().join("adapter with spaces.cmd");
+        for response in [Some(vec![selected.clone()]), None] {
+            cx.update_entity(&app, |app, cx| {
+                app.choose_acp_executable("builtin-codex".into(), cx);
+            });
+            cx.simulate_path_prompt_response(|options| {
+                assert!(options.files);
+                assert!(!options.directories && !options.multiple);
+                response
+            });
+            cx.run_until_parked();
+            cx.update_entity(&app, |app, cx| {
+                let pending = app.ai.pending_settings();
+                let profile = nyaterm_core::ai::external_agents::profiles(&pending)
+                    .iter()
+                    .find(|profile| profile.id == "builtin-codex")
+                    .unwrap();
+                assert_eq!(profile.executable, selected.to_str().unwrap());
+                assert!(app.ai.agent_editor_view().dirty.contains("builtin-codex"));
+                app.flush_settings_panel_snapshots(cx);
+                let panel = app.settings_panel.read(cx);
+                assert_eq!(
+                    panel.text_inputs["ai.agent.builtin-codex.executable"]
+                        .read(cx)
+                        .value(cx),
+                    selected.to_str().unwrap()
+                );
+            });
+        }
+        for action in ["edit", "reset", "delete", "close"] {
+            cx.update_entity(&app, |app, cx| {
+                app.choose_acp_executable("builtin-codex".into(), cx);
+                match action {
+                    "edit" => app.edit_acp_profile(
+                        "builtin-codex",
+                        "executable",
+                        "newer-choice".into(),
+                        cx,
+                    ),
+                    "reset" => app.ai.close_settings_editors(),
+                    "delete" => app.edit_acp_profile("builtin-codex", "delete", String::new(), cx),
+                    "close" => app.cancel_settings(cx),
+                    _ => unreachable!(),
+                }
+            });
+            let expected = app.read_with(&cx, |app, _| app.ai.pending_settings());
+            cx.simulate_path_prompt_response(|_| Some(vec![dir.path().join("late-choice")]));
+            cx.run_until_parked();
+            app.read_with(&cx, |app, _| {
+                assert_eq!(app.ai.pending_settings(), expected)
+            });
+        }
+    }
+
     struct MainHost {
         app: Entity<NyaTermApp>,
         fill: bool,
@@ -2206,6 +2273,93 @@ mod tests {
     }
 
     #[test]
+    fn agent_cards_keep_switches_independent_and_restore_focus_when_collapsing_inputs() {
+        let dir = TestConfigDir::new("nyaterm-agent-card-interactions");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.focus_settings_tab(SettingsTab::AiAgents, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let panel = cx.update_entity(&app, |app, _| app.settings_panel.clone());
+        let (_, vcx) = cx.add_window_view(|_, _| SettingsBodyHost {
+            panel: panel.clone(),
+            width: 640.,
+        });
+        vcx.simulate_resize(gpui::size(px(900.), px(1100.)));
+        for _ in 0..3 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.refresh();
+                _ = window.draw(cx);
+            });
+        }
+        assert!(
+            vcx.debug_bounds("acp-profile-field-builtin-codex-name")
+                .is_none()
+        );
+        let toggle = vcx.debug_bounds("acp-enabled-builtin-codex").unwrap();
+        vcx.simulate_click(toggle.center(), Modifiers::default());
+        vcx.run_until_parked();
+        app.read_with(vcx, |app, _| {
+            assert!(
+                !app.ai
+                    .agent_editor_view()
+                    .expanded
+                    .contains("builtin-codex")
+            )
+        });
+        let expand = vcx.debug_bounds("acp-expand-builtin-codex").unwrap();
+        vcx.simulate_click(expand.center(), Modifiers::default());
+        for _ in 0..3 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.refresh();
+                _ = window.draw(cx);
+            });
+        }
+        assert!(
+            vcx.debug_bounds("acp-profile-field-builtin-codex-name")
+                .is_some()
+        );
+        let input = panel.read_with(vcx, |panel, _| {
+            panel.text_inputs["ai.agent.builtin-codex.name"].clone()
+        });
+        vcx.update(|window, cx| {
+            input.update(cx, |input, cx| input.focus_with_cursor_at_end(window, cx));
+        });
+        vcx.simulate_input(" edited");
+        vcx.run_until_parked();
+        let value = input.read_with(vcx, |input, cx| input.value(cx));
+        let collapse = vcx.debug_bounds("acp-expand-builtin-codex").unwrap();
+        vcx.simulate_click(collapse.center(), Modifiers::default());
+        for _ in 0..3 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.refresh();
+                _ = window.draw(cx);
+            });
+        }
+        assert!(
+            vcx.debug_bounds("acp-profile-field-builtin-codex-name")
+                .is_none()
+        );
+        vcx.update(|window, cx| {
+            let focus =
+                &panel.read(cx).agent_disclosure_focus[&("builtin-codex".into(), "expanded")];
+            assert!(focus.is_focused(window));
+            assert_eq!(input.read(cx).value(cx), value);
+        });
+        let expand = vcx.debug_bounds("acp-expand-builtin-codex").unwrap();
+        vcx.simulate_click(expand.center(), Modifiers::default());
+        vcx.run_until_parked();
+        assert_eq!(input.read_with(vcx, |input, cx| input.value(cx)), value);
+    }
+
+    #[test]
     fn ai_settings_grids_follow_body_width_in_a_large_window() {
         let dir = TestConfigDir::new("nyaterm-settings-grid-width");
         let mut cx = TestAppContext::single();
@@ -2253,25 +2407,30 @@ mod tests {
             assert_eq!(first.top() == third.top(), columns == 3);
             assert!(third.right() <= px(width));
         }
-        for (tab, first, second) in [
+        for (tab, first, second, breakpoint) in [
             (
                 SettingsTab::AiGeneral,
                 "ai-general-context-field",
                 "ai-general-timeout-field",
+                1024.,
             ),
             (
                 SettingsTab::AiAgents,
                 "acp-profile-field-builtin-codex-name",
-                "acp-profile-field-builtin-codex-executable",
+                "acp-profile-field-builtin-codex-model",
+                640.,
             ),
         ] {
             vcx.update(|_, cx| {
                 app.update(cx, |app, cx| {
                     app.focus_settings_tab(tab, cx);
+                    if tab == SettingsTab::AiAgents {
+                        app.edit_acp_profile("builtin-codex", "expanded", String::new(), cx);
+                    }
                     app.flush_settings_panel_snapshots(cx);
                 });
             });
-            for width in [1023., 1024., 519.] {
+            for width in [360., 519., 639., 640., 1023., 1024.] {
                 host.update(vcx, |host, cx| {
                     host.width = width;
                     cx.notify();
@@ -2284,7 +2443,7 @@ mod tests {
                 let second = vcx.debug_bounds(second).unwrap();
                 assert_eq!(
                     first.top() == second.top(),
-                    width >= 1024.,
+                    width >= breakpoint,
                     "{tab:?} at {width}"
                 );
                 assert!(second.right() <= px(width));

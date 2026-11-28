@@ -11,6 +11,7 @@ use crate::acp::AgentError;
 pub const CODEX_ADAPTER_VERSION: &str = "2.10.0";
 pub const CODEX_ENGINE_VERSION: &str = "0.171.0";
 pub const CLAUDE_ADAPTER_VERSION: &str = "0.110.0";
+pub const CLAUDE_ENGINE_VERSION: &str = "2.1.330";
 
 pub fn expected_version(profile: &ExternalAgentProfile) -> Result<&'static str, AgentError> {
     match profile.strategy.0.as_str() {

@@ -159,7 +159,10 @@ pub fn claude_engine(adapter: &Path, cancel: &AtomicBool) -> Result<PathBuf, Age
             .ok_or(AgentError::UnsupportedVersion)?
     };
     let engine = std::fs::canonicalize(engine).map_err(|_| AgentError::UnsupportedVersion)?;
-    if !crate::acp::policy::matches_version(&version(&engine, cancel)?, "2.1.330") {
+    if !crate::acp::policy::matches_version(
+        &version(&engine, cancel)?,
+        crate::acp::policy::CLAUDE_ENGINE_VERSION,
+    ) {
         return Err(AgentError::UnsupportedVersion);
     }
     Ok(engine)

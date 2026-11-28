@@ -1,5 +1,5 @@
 use futures::StreamExt as _;
-use gpui::Context;
+use gpui::{Context, PathPromptOptions};
 
 use crate::features::NyaTermApp;
 use crate::features::ai::agent_management::AgentCommand;
@@ -12,7 +12,10 @@ impl NyaTermApp {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        if matches!(action, "advanced" | "request-delete" | "cancel-delete") {
+        if matches!(
+            action,
+            "advanced" | "expanded" | "installation-help" | "request-delete" | "cancel-delete"
+        ) {
             self.ai.agent_editor_action(id, action);
             self.request_settings_panel_refresh(cx);
             return;
@@ -27,6 +30,44 @@ impl NyaTermApp {
             _ => {}
         }
         self.request_settings_panel_refresh(cx);
+    }
+
+    pub(in crate::features) fn choose_acp_executable(
+        &mut self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.ai.agent_editor_generation();
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(rust_i18n::t!("ai.acp.chooseExecutable").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picker.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |app, cx| {
+                // Applying, cancelling, closing or editing invalidates an outstanding picker.
+                if !app.shell.has_settings_draft() || app.ai.agent_editor_generation() != generation
+                {
+                    return;
+                }
+                let Some(path) = path.to_str() else {
+                    app.ai
+                        .set_agent_management_error(rust_i18n::t!("ai.acp.invalidProfile").into());
+                    app.request_settings_panel_refresh(cx);
+                    return;
+                };
+                app.edit_acp_profile(&id, "executable", path.into(), cx);
+                app.reset_text_input(&format!("ai.agent.{id}.executable"), path, cx);
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn apply_acp_profile_input(

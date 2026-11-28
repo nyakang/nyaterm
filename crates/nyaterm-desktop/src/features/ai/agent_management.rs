@@ -2,7 +2,7 @@
 use super::helper_resolver::resolve_mcp_helper;
 use crate::thread_owner::spawn_joinable;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use nyaterm_agent_client::acp::{AgentEvent, AgentOperation};
+use nyaterm_agent_client::acp::{AgentError, AgentEvent, AgentOperation};
 use nyaterm_core::ai::external_agents::ExternalAgentProfile;
 use nyaterm_store::StoreBlockingClient;
 use std::collections::BTreeMap;
@@ -12,12 +12,62 @@ use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) enum AcpProfileProblem {
+    Missing,
+    Version,
+    Platform,
+    Strategy,
+    Configuration,
+    Preparation,
+    Policy,
+    Timeout,
+    Startup,
+    Protocol,
+    Cancelled,
+}
+
+impl From<AgentError> for AcpProfileProblem {
+    fn from(error: AgentError) -> Self {
+        match error {
+            AgentError::Missing => Self::Missing,
+            AgentError::UnsupportedVersion => Self::Version,
+            AgentError::UnsupportedPlatform => Self::Platform,
+            AgentError::UnsupportedStrategy => Self::Strategy,
+            AgentError::Configuration(_) => Self::Configuration,
+            AgentError::PolicyUnavailable => Self::Policy,
+            AgentError::Timeout => Self::Timeout,
+            AgentError::Transport => Self::Startup,
+            AgentError::Cancelled => Self::Cancelled,
+            AgentError::Protocol(_) | AgentError::Resume | AgentError::Incomplete => Self::Protocol,
+        }
+    }
+}
+
+impl AcpProfileProblem {
+    pub fn message_key(self) -> &'static str {
+        match self {
+            Self::Missing => "ai.acp.missingAdapter",
+            Self::Version => "ai.acp.versionMismatch",
+            Self::Platform => "ai.acp.platformUnavailable",
+            Self::Strategy => "ai.acp.strategyUnavailable",
+            Self::Configuration => "ai.acp.invalidProfile",
+            Self::Preparation => "ai.acp.preparationFailed",
+            Self::Policy => "ai.acp.policyUnavailable",
+            Self::Timeout => "ai.acp.checkTimedOut",
+            Self::Startup => "ai.acp.startupFailed",
+            Self::Protocol => "ai.acp.protocolFailed",
+            Self::Cancelled => "ai.acp.notChecked",
+        }
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct AcpProfileStatus {
     pub authenticated: Option<bool>,
     pub auth_methods: Vec<(String, String)>,
     pub logout: bool,
-    pub error: Option<String>,
+    pub problem: Option<AcpProfileProblem>,
 }
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct AgentManagementView {
@@ -97,7 +147,7 @@ impl AgentManagementState {
                     self.worker = Some(worker);
                 }
                 Err(_) => {
-                    self.set_error("Cannot start Agent settings worker".into());
+                    self.set_error(rust_i18n::t!("ai.acp.startupFailed").into());
                     return false;
                 }
             }
@@ -112,7 +162,7 @@ impl AgentManagementState {
                 .is_ok()
         });
         if !self.view.pending {
-            self.set_error("Agent settings worker stopped".into());
+            self.set_error(rust_i18n::t!("ai.acp.startupFailed").into());
         }
         self.view.pending
     }
@@ -172,8 +222,8 @@ fn inspect(
     let mut status = AcpProfileStatus::default();
     let profile = match super::acp_runtime::prepare_profile(store, profile.clone()) {
         Ok(profile) => profile,
-        Err(error) => {
-            status.error = Some(error);
+        Err(_) => {
+            status.problem = Some(AcpProfileProblem::Preparation);
             return status;
         }
     };
@@ -216,7 +266,7 @@ fn inspect(
     } else {
         result
     };
-    status.error = result.err().map(|error| error.to_string());
+    status.problem = result.err().map(AcpProfileProblem::from);
     status
 }
 fn run_worker(

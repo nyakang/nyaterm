@@ -131,6 +131,14 @@ impl AiFeatureState {
         Ok(changed)
     }
 
+    pub(in crate::features) fn agent_editor_generation(&self) -> u64 {
+        self.settings.agent_editor.generation()
+    }
+
+    pub(in crate::features) fn expand_agent_validation_errors(&mut self) {
+        self.settings.agent_editor.expand_errors();
+    }
+
     pub(in crate::features) fn agent_editor_view(
         &self,
     ) -> &crate::features::ai::agent_settings::AgentEditorView {

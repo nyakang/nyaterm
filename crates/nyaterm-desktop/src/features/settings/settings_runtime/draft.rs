@@ -252,6 +252,7 @@ impl NyaTermApp {
         if self.settings_draft_dirty()
             && let Some(error) = self.pending_settings_validation_error()
         {
+            self.ai.expand_agent_validation_errors();
             self.settings.update_store_status(error.clone(), false);
             self.shell
                 .set_status(t!("settings.applyBlocked", detail = error));

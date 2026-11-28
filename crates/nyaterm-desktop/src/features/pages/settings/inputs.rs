@@ -204,7 +204,12 @@ impl NyaTermApp {
         let values = acp_input_values(&self.ai.pending_settings());
         self.retain_acp_inputs(&values.iter().map(|(id, _, _)| id.clone()).collect());
         for (id, value, secret) in values {
-            self.ensure_text_input(id, &value, secret_input_setup(secret), cx);
+            let setup = if id.ends_with(".model") {
+                TextInputSetup::placeholder(t!("ai.acp.defaultModel"))
+            } else {
+                secret_input_setup(secret)
+            };
+            self.ensure_text_input(id, &value, setup, cx);
         }
     }
 

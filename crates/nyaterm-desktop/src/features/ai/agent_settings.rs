@@ -1,4 +1,6 @@
 //! Agent drafts are separate from the profiles used by running sessions.
+pub(in crate::features) mod status;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use nyaterm_core::AiSettings;
@@ -7,6 +9,8 @@ use nyaterm_core::ai::external_agents::{AgentEnvironmentVariable, ExternalAgentP
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct AgentEditorView {
     pub advanced: BTreeSet<String>,
+    pub expanded: BTreeSet<String>,
+    pub installation_help: BTreeSet<String>,
     pub delete_pending: Option<String>,
     /// Translation keys only; validation must never echo an environment value.
     pub errors: BTreeMap<String, &'static str>,
@@ -15,6 +19,7 @@ pub(in crate::features) struct AgentEditorView {
 
 #[derive(Default)]
 pub(in crate::features) struct AgentSettingsEditor {
+    generation: u64,
     profiles: Option<Vec<ExternalAgentProfile>>,
     invalid_args: BTreeSet<String>,
     deleted: BTreeSet<String>,
@@ -27,17 +32,43 @@ impl AgentSettingsEditor {
     }
 
     pub fn clear(&mut self) {
-        *self = Self::default();
+        let generation = self.generation.wrapping_add(1);
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn expand_errors(&mut self) {
+        self.view.expanded.extend(self.view.errors.keys().cloned());
     }
 
     pub fn present(&mut self, id: &str, action: &str) {
         match action {
+            "expanded" => {
+                if !self.view.expanded.remove(id) {
+                    self.view.expanded.insert(id.into());
+                }
+            }
+            "installation-help" => {
+                self.view.expanded.insert(id.into());
+                if !self.view.installation_help.remove(id) {
+                    self.view.installation_help.insert(id.into());
+                }
+            }
             "advanced" => {
                 if !self.view.advanced.remove(id) {
                     self.view.advanced.insert(id.into());
                 }
             }
-            "request-delete" => self.view.delete_pending = Some(id.into()),
+            "request-delete" => {
+                self.view.expanded.insert(id.into());
+                self.view.delete_pending = Some(id.into());
+            }
             "cancel-delete" => self.view.delete_pending = None,
             _ => {}
         }
@@ -72,7 +103,9 @@ impl AgentSettingsEditor {
             .profiles
             .get_or_insert_with(|| original_profiles.to_vec());
         if action == "add" {
-            profiles.push(ExternalAgentProfile::new(nyaterm_core::uuid(), &value));
+            let profile = ExternalAgentProfile::new(nyaterm_core::uuid(), &value);
+            self.view.expanded.insert(profile.id.clone());
+            profiles.push(profile);
         } else {
             let Some(index) = profiles.iter().position(|profile| profile.id == id) else {
                 return Ok(false);
@@ -83,6 +116,8 @@ impl AgentSettingsEditor {
                     profiles.remove(index);
                     self.invalid_args.remove(id);
                     self.view.advanced.remove(id);
+                    self.view.expanded.remove(id);
+                    self.view.installation_help.remove(id);
                     self.view.delete_pending = None;
                 }
                 "copy" => {
@@ -93,6 +128,7 @@ impl AgentSettingsEditor {
                     for variable in &mut profile.environment {
                         variable.value = Default::default();
                     }
+                    self.view.expanded.insert(profile.id.clone());
                     profiles.push(profile);
                 }
                 _ => {
@@ -178,6 +214,7 @@ impl AgentSettingsEditor {
                 }
             }
         }
+        self.generation = self.generation.wrapping_add(1);
         self.view.errors.clear();
         self.view.dirty.clear();
         for profile in profiles.iter() {
@@ -258,6 +295,58 @@ mod tests {
             external_agents: Some(vec![profile]),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn collapsing_preserves_drafts_and_new_copies_expand_without_copying_secrets() {
+        let original = settings();
+        let mut editor = AgentSettingsEditor::default();
+        assert!(editor.view().expanded.is_empty());
+        editor.present("agent", "expanded");
+        editor
+            .edit(&original, "agent", "name", "Edited".into())
+            .unwrap();
+        let generation = editor.generation();
+        editor.present("agent", "expanded");
+        assert!(editor.view().expanded.is_empty());
+        assert_eq!(editor.generation(), generation);
+        let mut pending = original.clone();
+        editor.project(&mut pending);
+        assert_eq!(pending.external_agents.as_ref().unwrap()[0].name, "Edited");
+        editor
+            .edit(&original, "agent", "copy", String::new())
+            .unwrap();
+        editor.project(&mut pending);
+        let copy = pending.external_agents.as_ref().unwrap().last().unwrap();
+        assert!(editor.view().expanded.contains(&copy.id));
+        assert!(!copy.enabled);
+        assert!(copy.environment[0].value.is_empty());
+        editor.edit(&original, "", "add", "codex".into()).unwrap();
+        editor.project(&mut pending);
+        assert!(
+            editor
+                .view()
+                .expanded
+                .contains(&pending.external_agents.as_ref().unwrap().last().unwrap().id)
+        );
+        editor.clear();
+        assert!(editor.view().expanded.is_empty());
+        assert_ne!(editor.generation(), generation);
+    }
+
+    #[test]
+    fn validation_reveals_invalid_profiles_without_erasing_their_drafts() {
+        let original = settings();
+        let mut editor = AgentSettingsEditor::default();
+        editor
+            .edit(&original, "agent", "name", String::new())
+            .unwrap();
+        assert!(editor.view().expanded.is_empty());
+        editor.expand_errors();
+        assert!(editor.view().expanded.contains("agent"));
+        let mut pending = original.clone();
+        editor.project(&mut pending);
+        assert!(pending.external_agents.unwrap()[0].name.is_empty());
     }
 
     #[test]
