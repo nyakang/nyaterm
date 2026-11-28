@@ -706,7 +706,7 @@ fn live_echo_and_prediction_pipeline_no_double_glyph() {
     assert_eq!(
         screen.matches("hello").count(),
         1,
-        "expected one hello on the final screen (Netcatty #2121); screen={screen:?} host={:?}",
+        "expected one hello on the final screen (NyaTerm #2121); screen={screen:?} host={:?}",
         strip_ansi(&String::from_utf8_lossy(&host_acc))
     );
 
